@@ -203,7 +203,7 @@
                                 <div>
                                     <dt class="text-gray-500 dark:text-gray-400">Jenis</dt>
                                     <dd class="font-medium text-gray-900 dark:text-gray-100">
-                                        {{ match($item->leave_type) { 'annual_leave' => 'Cuti Tahunan', 'permission' => 'Izin', 'sick' => 'Sakit', default => $item->leave_type } }}
+                                        {{ \App\Models\LeaveRequest::typeLabel($item->leave_type) }}
                                         ({{ $item->days_count }} hari)
                                     </dd>
                                 </div>

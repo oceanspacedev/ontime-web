@@ -11,6 +11,7 @@ use App\Services\ApprovalFlowService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class OvertimeRequestApiController extends Controller
 {
@@ -43,7 +44,7 @@ class OvertimeRequestApiController extends Controller
             $query->where('freelancer_id', $freelancer->id);
         }
 
-        $requests = $query->latest()->paginate(15);
+        $requests = $query->withCount('approvalSteps')->latest()->paginate(15);
 
         return response()->json([
             'data' => OvertimeRequestResource::collection($requests),
@@ -77,20 +78,24 @@ class OvertimeRequestApiController extends Controller
 
         $durationMinutes = (int) $startTime->diffInMinutes($endTime);
 
-        $overtimeRequest = OvertimeRequest::create([
-            'employee_id' => $employee?->id,
-            'intern_id' => $intern?->id,
-            'freelancer_id' => $freelancer?->id,
-            'date' => $request->input('date'),
-            'start_time' => $request->input('start_time'),
-            'end_time' => $request->input('end_time'),
-            'duration_minutes' => $durationMinutes,
-            'reason' => $request->input('reason'),
-            'status' => 'pending',
-        ]);
+        // Saved together with its approval steps, so a missing approval flow leaves nothing behind.
+        $overtimeRequest = DB::transaction(function () use ($employee, $intern, $freelancer, $request, $durationMinutes): OvertimeRequest {
+            $overtimeRequest = OvertimeRequest::create([
+                'employee_id' => $employee?->id,
+                'intern_id' => $intern?->id,
+                'freelancer_id' => $freelancer?->id,
+                'date' => $request->input('date'),
+                'start_time' => $request->input('start_time'),
+                'end_time' => $request->input('end_time'),
+                'duration_minutes' => $durationMinutes,
+                'reason' => $request->input('reason'),
+                'status' => 'pending',
+            ]);
 
-        $service = new ApprovalFlowService;
-        $service->generateSteps($overtimeRequest, 'overtime');
+            app(ApprovalFlowService::class)->generateSteps($overtimeRequest, 'overtime');
+
+            return $overtimeRequest;
+        });
 
         return response()->json([
             'message' => 'Pengajuan lembur berhasil dibuat',

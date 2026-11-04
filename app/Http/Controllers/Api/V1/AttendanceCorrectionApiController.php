@@ -11,6 +11,7 @@ use App\Services\ApprovalFlowService;
 use App\Services\FileNamingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AttendanceCorrectionApiController extends Controller
 {
@@ -43,7 +44,7 @@ class AttendanceCorrectionApiController extends Controller
             $query->where('freelancer_id', $freelancer->id);
         }
 
-        $requests = $query->latest()->paginate(15);
+        $requests = $query->withCount('approvalSteps')->latest()->paginate(15);
 
         return response()->json([
             'data' => AttendanceCorrectionResource::collection($requests),
@@ -79,20 +80,24 @@ class AttendanceCorrectionApiController extends Controller
             );
         }
 
-        $correction = AttendanceCorrection::create([
-            'employee_id' => $employee?->id,
-            'intern_id' => $intern?->id,
-            'freelancer_id' => $freelancer?->id,
-            'date' => $request->input('date'),
-            'corrected_check_in' => $request->input('corrected_check_in'),
-            'corrected_check_out' => $request->input('corrected_check_out'),
-            'reason' => $request->input('reason'),
-            'attachment' => $attachmentPath,
-            'status' => 'pending',
-        ]);
+        // Saved together with its approval steps, so a missing approval flow leaves nothing behind.
+        $correction = DB::transaction(function () use ($employee, $intern, $freelancer, $request, $attachmentPath): AttendanceCorrection {
+            $correction = AttendanceCorrection::create([
+                'employee_id' => $employee?->id,
+                'intern_id' => $intern?->id,
+                'freelancer_id' => $freelancer?->id,
+                'date' => $request->input('date'),
+                'corrected_check_in' => $request->input('corrected_check_in'),
+                'corrected_check_out' => $request->input('corrected_check_out'),
+                'reason' => $request->input('reason'),
+                'attachment' => $attachmentPath,
+                'status' => 'pending',
+            ]);
 
-        $service = new ApprovalFlowService;
-        $service->generateSteps($correction, 'correction');
+            app(ApprovalFlowService::class)->generateSteps($correction, 'correction');
+
+            return $correction;
+        });
 
         return response()->json([
             'message' => 'Pengajuan koreksi absensi berhasil dibuat',

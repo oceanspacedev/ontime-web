@@ -8,6 +8,7 @@ use App\Models\Resignation;
 use App\Services\ApprovalFlowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ResignationApiController extends Controller
 {
@@ -50,17 +51,21 @@ class ResignationApiController extends Controller
             'handover_notes' => 'nullable|string',
         ]);
 
-        $resignation = Resignation::create([
-            'employee_id' => $employee->id,
-            'resignation_date' => $validated['resignation_date'],
-            'last_working_day' => $validated['last_working_day'],
-            'reason' => $validated['reason'],
-            'handover_notes' => $validated['handover_notes'] ?? null,
-            'status' => 'pending',
-        ]);
+        // Saved together with its approval steps, so a missing approval flow leaves nothing behind.
+        $resignation = DB::transaction(function () use ($employee, $validated): Resignation {
+            $resignation = Resignation::create([
+                'employee_id' => $employee->id,
+                'resignation_date' => $validated['resignation_date'],
+                'last_working_day' => $validated['last_working_day'],
+                'reason' => $validated['reason'],
+                'handover_notes' => $validated['handover_notes'] ?? null,
+                'status' => 'pending',
+            ]);
 
-        $service = new ApprovalFlowService;
-        $service->generateSteps($resignation, 'resignation');
+            app(ApprovalFlowService::class)->generateSteps($resignation, 'resignation');
+
+            return $resignation;
+        });
 
         return response()->json([
             'message' => 'Pengajuan pengunduran diri berhasil dibuat.',

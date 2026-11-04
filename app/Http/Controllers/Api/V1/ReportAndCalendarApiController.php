@@ -77,11 +77,8 @@ class ReportAndCalendarApiController extends Controller
 
         $user = $request->user();
         $query = Attendance::with([...Attendance::workerEagerLoads(), 'employee.user', 'intern.user', 'freelancer.user'])
-            ->whereBetween('date', [$startDate, $endDate]);
-
-        if (! $user->can('ViewAny:Attendance')) {
-            $query->byWorker($user);
-        }
+            ->whereBetween('date', [$startDate, $endDate])
+            ->visibleTo($user);
 
         if ($companyId) {
             $query->where(function ($q) use ($companyId) {
@@ -112,19 +109,8 @@ class ReportAndCalendarApiController extends Controller
                     ->orWhereBetween('end_date', [$startDate, $endDate]);
             });
 
-        if (! $user->can('ViewAny:Attendance')) {
-            $leaveQuery->where(function ($q) use ($user) {
-                if ($user->employee) {
-                    $q->where('employee_id', $user->employee->id);
-                } elseif ($user->intern) {
-                    $q->where('intern_id', $user->intern->id);
-                } elseif ($user->freelancer) {
-                    $q->where('freelancer_id', $user->freelancer->id);
-                } else {
-                    $q->whereRaw('1 = 0');
-                }
-            });
-        }
+        $leaveQuery->visibleTo($user)
+            ->when($companyId, fn ($q) => $q->whereWorkerInCompanies([(int) $companyId]));
 
         $approvedLeaveDates = [];
         $approvedLeaves = (clone $leaveQuery)->get();

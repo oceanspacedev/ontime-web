@@ -17,7 +17,7 @@ class AttendanceResource extends JsonResource
             'employee_id' => $this->employee_id,
             'intern_id' => $this->intern_id,
             'freelancer_id' => $this->freelancer_id,
-            'date' => $this->date,
+            'date' => $this->date?->format('Y-m-d'),
             'check_in' => $this->check_in,
             'check_out' => $this->check_out,
             'check_in_lat' => $this->check_in_lat,

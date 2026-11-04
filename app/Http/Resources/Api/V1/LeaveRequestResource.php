@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Models\LeaveRequest;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -17,14 +18,17 @@ class LeaveRequestResource extends JsonResource
             'intern_id' => $this->intern_id ?? null,
             'freelancer_id' => $this->freelancer_id ?? null,
             'leave_type' => $this->leave_type,
-            'start_date' => $this->start_date,
-            'end_date' => $this->end_date,
+            'leave_type_label' => LeaveRequest::typeLabel($this->leave_type),
+            'start_date' => $this->start_date?->format('Y-m-d'),
+            'end_date' => $this->end_date?->format('Y-m-d'),
             'days_count' => $this->days_count ?? null,
             'reason' => $this->reason,
             'status' => $this->status,
             'current_step' => $this->current_step,
-            'total_steps' => $this->total_steps ?? null,
-            'rejection_note' => $this->rejection_note,
+            'total_steps' => $this->approval_steps_count ?? ($this->relationLoaded('approvalSteps') ? $this->approvalSteps->count() : $this->approvalSteps()->count()),
+            'rejection_reason' => $this->rejection_reason,
+            // Older app versions read rejection_note.
+            'rejection_note' => $this->rejection_reason,
             'attachment' => $this->attachment ? url('storage/'.$this->attachment) : null,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
