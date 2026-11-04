@@ -248,11 +248,8 @@ class AttendanceApiController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = Attendance::query()->with(Attendance::workerEagerLoads());
-
-        if (! $user->can('ViewAny:Attendance')) {
-            $query->byWorker($user);
-        }
+        // Own records plus workers inside the user's data access, same as the panel.
+        $query = Attendance::query()->with(Attendance::workerEagerLoads())->visibleTo($user);
 
         if ($request->has('start_date') && $request->has('end_date')) {
             $query->whereBetween('date', [$request->input('start_date'), $request->input('end_date')]);
@@ -283,7 +280,7 @@ class AttendanceApiController extends Controller
         $user = $request->user();
         $attendance = Attendance::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
 
-        if (! $user->can('ViewAny:Attendance') && ! $this->belongsToWorker($attendance, $user)) {
+        if (! Attendance::query()->visibleTo($user)->whereKey($attendance->getKey())->exists()) {
             return response()->json(['message' => 'Unauthorized access.'], 403);
         }
 
@@ -384,20 +381,5 @@ class AttendanceApiController extends Controller
         return response()->json([
             'message' => 'Foto Master Wajah berhasil dihapus.',
         ]);
-    }
-
-    private function belongsToWorker(Attendance $attendance, $user): bool
-    {
-        if ($user->employee && $attendance->employee_id === $user->employee->id) {
-            return true;
-        }
-        if ($user->intern && $attendance->intern_id === $user->intern->id) {
-            return true;
-        }
-        if ($user->freelancer && $attendance->freelancer_id === $user->freelancer->id) {
-            return true;
-        }
-
-        return false;
     }
 }

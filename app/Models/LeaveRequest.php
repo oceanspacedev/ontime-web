@@ -14,6 +14,42 @@ class LeaveRequest extends Model
 {
     use HasFactory, ScopesToWorkerVisibility;
 
+    /** The only leave type that uses the yearly quota. */
+    public const TYPE_ANNUAL = 'annual_leave';
+
+    /**
+     * Leave types shared by the panel and the API, with their labels.
+     *
+     * @var array<string, string>
+     */
+    public const TYPES = [
+        self::TYPE_ANNUAL => 'Cuti Tahunan',
+        'permission' => 'Izin',
+        'sick' => 'Sakit',
+        'maternity' => 'Cuti Melahirkan',
+        'unpaid' => 'Cuti Tanpa Gaji',
+    ];
+
+    /**
+     * Codes older versions of the mobile app send.
+     *
+     * @var array<string, string>
+     */
+    public const TYPE_ALIASES = [
+        'annual' => self::TYPE_ANNUAL,
+        'permitted' => 'permission',
+    ];
+
+    public static function normalizeType(mixed $type): mixed
+    {
+        return is_string($type) ? (self::TYPE_ALIASES[$type] ?? $type) : $type;
+    }
+
+    public static function typeLabel(?string $type): string
+    {
+        return self::TYPES[self::normalizeType($type)] ?? (string) $type;
+    }
+
     protected $fillable = [
         'employee_id',
         'intern_id',

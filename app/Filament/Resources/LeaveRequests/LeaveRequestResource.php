@@ -108,20 +108,25 @@ class LeaveRequestResource extends Resource
                         Grid::make(2)->schema([
                             Select::make('leave_type')
                                 ->label('Jenis Pengajuan')
-                                ->options(function () {
+                                ->options(function (?LeaveRequest $record): array {
                                     $user = auth()->user();
-                                    if ($user?->freelancer || $user?->hasRole('Freelancer')) {
-                                        return [
+                                    $options = ($user?->freelancer || $user?->hasRole('Freelancer'))
+                                        ? [
+                                            'permission' => 'Izin Tidak Masuk',
+                                            'sick' => 'Sakit (Dengan/Tanpa Surat Dokter)',
+                                        ]
+                                        : [
+                                            LeaveRequest::TYPE_ANNUAL => 'Cuti Tahunan (Potong Kuota)',
                                             'permission' => 'Izin Tidak Masuk',
                                             'sick' => 'Sakit (Dengan/Tanpa Surat Dokter)',
                                         ];
+
+                                    // Keep a type filed from the mobile app (e.g. maternity) selectable on edit.
+                                    if ($record?->leave_type && ! isset($options[$record->leave_type])) {
+                                        $options[$record->leave_type] = LeaveRequest::typeLabel($record->leave_type);
                                     }
 
-                                    return [
-                                        'annual_leave' => 'Cuti Tahunan (Potong Kuota)',
-                                        'permission' => 'Izin Tidak Masuk',
-                                        'sick' => 'Sakit (Dengan/Tanpa Surat Dokter)',
-                                    ];
+                                    return $options;
                                 })
                                 ->default(function () {
                                     $user = auth()->user();
@@ -210,12 +215,7 @@ class LeaveRequestResource extends Resource
                         'warning' => 'permission',
                         'danger' => 'sick',
                     ])
-                    ->formatStateUsing(fn (string $state) => match ($state) {
-                        'annual_leave' => 'Cuti Tahunan',
-                        'permission' => 'Izin',
-                        'sick' => 'Sakit',
-                        default => $state,
-                    }),
+                    ->formatStateUsing(fn (string $state): string => LeaveRequest::typeLabel($state)),
 
                 TextColumn::make('start_date')
                     ->label('Tgl Mulai')
