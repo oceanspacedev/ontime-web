@@ -2,15 +2,17 @@
 
 namespace App\Filament\Resources\LeaveRequests\Pages;
 
+use App\Filament\Concerns\GeneratesApprovalSteps;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Models\LeaveRequest;
-use App\Services\ApprovalFlowService;
 use Carbon\Carbon;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Validation\ValidationException;
 
 class CreateLeaveRequest extends CreateRecord
 {
+    use GeneratesApprovalSteps;
+
     protected static string $resource = LeaveRequestResource::class;
 
     protected function mutateFormDataBeforeCreate(array $data): array
@@ -23,9 +25,10 @@ class CreateLeaveRequest extends CreateRecord
         // Resolve the active worker profile
         $workerProfile = $employee ?? $intern ?? $freelancer;
 
-        if (! $user?->hasAnyRole(['Employee', 'Intern', 'Freelancer', 'BOD']) || ! $workerProfile) {
+        // Any user with a worker profile may submit, including Approvers who are employees themselves.
+        if (! $workerProfile) {
             throw ValidationException::withMessages([
-                'leave_type' => 'Akun pengguna Anda belum terhubung ke data Karyawan, Magang, atau Freelance.',
+                'data.leave_type' => 'Akun pengguna Anda belum terhubung ke data Karyawan, Magang, atau Freelance.',
             ]);
         }
 
@@ -34,7 +37,7 @@ class CreateLeaveRequest extends CreateRecord
 
         if ($endDate->lessThan($startDate)) {
             throw ValidationException::withMessages([
-                'end_date' => 'Tanggal selesai harus sama atau setelah tanggal mulai.',
+                'data.end_date' => 'Tanggal selesai harus sama atau setelah tanggal mulai.',
             ]);
         }
 
@@ -45,7 +48,7 @@ class CreateLeaveRequest extends CreateRecord
         if ($data['leave_type'] === 'annual_leave') {
             if ($freelancer) {
                 throw ValidationException::withMessages([
-                    'leave_type' => 'Freelancer tidak dapat mengajukan cuti tahunan. Gunakan jenis Izin Tidak Masuk.',
+                    'data.leave_type' => 'Freelancer tidak dapat mengajukan cuti tahunan. Gunakan jenis Izin Tidak Masuk.',
                 ]);
             }
 
@@ -69,7 +72,7 @@ class CreateLeaveRequest extends CreateRecord
 
             if ($daysCount > $remaining) {
                 throw ValidationException::withMessages([
-                    'leave_type' => "Kuota cuti tahunan Anda tidak mencukupi (Sisa: {$remaining} hari, Pengajuan: {$daysCount} hari).",
+                    'data.leave_type' => "Kuota cuti tahunan Anda tidak mencukupi (Sisa: {$remaining} hari, Pengajuan: {$daysCount} hari).",
                 ]);
             }
         }
@@ -86,8 +89,7 @@ class CreateLeaveRequest extends CreateRecord
 
     protected function afterCreate(): void
     {
-        $service = new ApprovalFlowService;
-        $service->generateSteps($this->record, 'leave');
+        $this->generateApprovalStepsOrHalt('leave');
     }
 
     protected function getRedirectUrl(): string

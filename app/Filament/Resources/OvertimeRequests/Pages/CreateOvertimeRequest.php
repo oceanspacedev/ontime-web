@@ -2,13 +2,15 @@
 
 namespace App\Filament\Resources\OvertimeRequests\Pages;
 
+use App\Filament\Concerns\GeneratesApprovalSteps;
 use App\Filament\Resources\OvertimeRequests\OvertimeRequestResource;
-use App\Services\ApprovalFlowService;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Validation\ValidationException;
 
 class CreateOvertimeRequest extends CreateRecord
 {
+    use GeneratesApprovalSteps;
+
     protected static string $resource = OvertimeRequestResource::class;
 
     protected function mutateFormDataBeforeCreate(array $data): array
@@ -20,9 +22,10 @@ class CreateOvertimeRequest extends CreateRecord
 
         $workerProfile = $employee ?? $intern ?? $freelancer;
 
-        if (! $user?->hasAnyRole(['Employee', 'Intern', 'Freelancer', 'BOD']) || ! $workerProfile) {
+        // Any user with a worker profile may submit, including Approvers who are employees themselves.
+        if (! $workerProfile) {
             throw ValidationException::withMessages([
-                'reason' => 'Akun pengguna Anda belum terhubung ke data Karyawan, Magang, atau Freelance.',
+                'data.reason' => 'Akun pengguna Anda belum terhubung ke data Karyawan, Magang, atau Freelance.',
             ]);
         }
 
@@ -36,8 +39,7 @@ class CreateOvertimeRequest extends CreateRecord
 
     protected function afterCreate(): void
     {
-        $service = new ApprovalFlowService;
-        $service->generateSteps($this->record, 'overtime');
+        $this->generateApprovalStepsOrHalt('overtime');
     }
 
     protected function getRedirectUrl(): string

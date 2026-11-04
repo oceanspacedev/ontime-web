@@ -2,10 +2,11 @@
 
 namespace App\Filament\Resources\Users;
 
+use App\Enums\SystemRole;
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\Users\Pages\CreateUser;
 use App\Filament\Resources\Users\Pages\EditUser;
 use App\Filament\Resources\Users\Pages\ListUsers;
-use App\Models\Company;
 use App\Models\Division;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
@@ -19,6 +20,7 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
@@ -29,14 +31,18 @@ use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
+use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class UserResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()
+        $query = parent::getEloquentQuery()
             ->with([
                 'roles',
                 'employee.company',
@@ -46,12 +52,55 @@ class UserResource extends Resource
                 'freelancer.company',
                 'freelancer.division',
             ]);
+
+        $user = auth()->user();
+
+        if (! $user) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        if ($user->hasRole('Superadmin')) {
+            return $query;
+        }
+
+        // Admin Badan Usaha: accounts of workers in their companies, never Superadmin/Admin accounts or their own.
+        $managed = $user->managedCompanyIds() ?? [];
+
+        return $query
+            ->whereKeyNot($user->getKey())
+            ->whereDoesntHave('roles', fn (Builder $roles) => $roles->whereIn('name', [SystemRole::Superadmin->value, SystemRole::Admin->value]))
+            ->where(fn (Builder $scope) => $scope
+                ->whereHas('employee', fn (Builder $worker) => $worker->whereIn('company_id', $managed))
+                ->orWhereHas('intern', fn (Builder $worker) => $worker->whereIn('company_id', $managed))
+                ->orWhereHas('freelancer', fn (Builder $worker) => $worker->whereIn('company_id', $managed)));
     }
 
     /**
      * Deteksi tipe profil yang terhubung ke user ini.
      * Mengembalikan: 'employee' | 'intern' | 'freelancer' | null
      */
+    /**
+     * Interns and freelancers are managed from their own menus, so the employee section is hidden for them.
+     */
+    /**
+     * @param  array<int|string>|null  $roleIds
+     */
+    protected static function selectsAdminRole(?array $roleIds): bool
+    {
+        $adminRoleId = Role::query()->where('name', SystemRole::Admin->value)->value('id');
+
+        return $adminRoleId !== null && in_array((string) $adminRoleId, array_map('strval', $roleIds ?? []), true);
+    }
+
+    protected static function canManageEmployeeProfile(?User $user): bool
+    {
+        if ($user === null) {
+            return true;
+        }
+
+        return ! in_array(static::detectProfileType($user), ['intern', 'freelancer'], true);
+    }
+
     protected static function detectProfileType(User $user): ?string
     {
         if ($user->employee !== null) {
@@ -85,7 +134,17 @@ class UserResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return static::canManageAccount($record);
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return auth()->user()?->hasRole('Superadmin') ?? false;
     }
 
     public static function form(Schema $schema): Schema
@@ -119,10 +178,35 @@ class UserResource extends Resource
 
                             Select::make('roles')
                                 ->label('Role Akses')
-                                ->relationship('roles', 'name')
+                                ->relationship('roles', 'name', fn (Builder $query) => $query->whereIn('name', array_keys(static::assignableRoleOptions())))
                                 ->multiple()
                                 ->preload()
+                                ->live()
                                 ->required(),
+
+                            Select::make('managedCompanies')
+                                ->label('Akses Badan Usaha')
+                                ->helperText('Badan usaha yang dikelola penuh oleh Admin ini: karyawan, absensi, shift, pengajuan, laporan, dan akun user.')
+                                ->relationship('managedCompanies', 'name')
+                                ->multiple()
+                                ->preload()
+                                ->required(fn (Get $get): bool => static::selectsAdminRole($get('roles')))
+                                ->visible(fn (Get $get): bool => (bool) auth()->user()?->hasRole('Superadmin') && static::selectsAdminRole($get('roles')))
+                                ->columnSpanFull(),
+
+                            Toggle::make('has_employee_profile')
+                                ->label('Kelola data karyawan untuk akun ini')
+                                ->helperText('Matikan untuk akun tanpa data karyawan, misalnya Superadmin atau BOD. Data karyawan yang sudah ada tidak akan dihapus.')
+                                ->default(true)
+                                ->live()
+                                ->dehydrated(false)
+                                ->afterStateHydrated(function (Toggle $component, ?User $record): void {
+                                    if ($record) {
+                                        $component->state($record->employee()->exists());
+                                    }
+                                })
+                                ->visible(fn (callable $livewire) => (bool) auth()->user()?->hasRole('Superadmin') && static::canManageEmployeeProfile($livewire->record))
+                                ->columnSpanFull(),
                         ]),
                     ]),
 
@@ -202,12 +286,12 @@ class UserResource extends Resource
                 Section::make('Profil & Relasi Data Karyawan (Employee Profile)')
                     ->description('Tautkan atau buat data Karyawan (Badan Usaha, Divisi, Jabatan, NIP, dll.) untuk user ini.')
                     ->relationship('employee')
-                    ->visible(fn (callable $livewire) => $livewire->record === null || static::detectProfileType($livewire->record) !== 'intern' && static::detectProfileType($livewire->record) !== 'freelancer')
+                    ->visible(fn (callable $livewire, Get $get): bool => static::canManageEmployeeProfile($livewire->record) && (bool) $get('has_employee_profile'))
                     ->schema([
                         Grid::make(2)->schema([
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(Company::query()->where('is_active', true)->pluck('name', 'id'))
+                                ->options(fn (): array => static::managedCompanyOptions())
                                 ->required()
                                 ->live()
                                 ->afterStateUpdated(fn (Set $set) => $set('division_id', null))
@@ -245,6 +329,7 @@ class UserResource extends Resource
                                 ->label('NIP Karyawan')
                                 ->placeholder('Contoh: EMP-001')
                                 ->required()
+                                ->unique('employees', 'nip', ignoreRecord: true)
                                 ->default(fn (callable $livewire) => $livewire->record?->employee?->nip ?? null),
 
                             TextInput::make('full_name')
@@ -260,11 +345,11 @@ class UserResource extends Resource
                             Select::make('status')
                                 ->label('Status Kepegawaian')
                                 ->options([
-                                    'permanent' => 'Karyawan Tetap (Permanent)',
-                                    'contract' => 'Kontrak (Contract)',
-                                    'probation' => 'Probation',
+                                    'active' => 'Aktif',
+                                    'inactive' => 'Non-Aktif',
+                                    'resigned' => 'Resign',
                                 ])
-                                ->default(fn (callable $livewire) => $livewire->record?->employee?->status ?? 'permanent')
+                                ->default(fn (callable $livewire) => $livewire->record?->employee?->status ?? 'active')
                                 ->required(),
                         ]),
                     ]),

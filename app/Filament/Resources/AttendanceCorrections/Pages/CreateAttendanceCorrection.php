@@ -2,13 +2,15 @@
 
 namespace App\Filament\Resources\AttendanceCorrections\Pages;
 
+use App\Filament\Concerns\GeneratesApprovalSteps;
 use App\Filament\Resources\AttendanceCorrections\AttendanceCorrectionResource;
-use App\Services\ApprovalFlowService;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Validation\ValidationException;
 
 class CreateAttendanceCorrection extends CreateRecord
 {
+    use GeneratesApprovalSteps;
+
     protected static string $resource = AttendanceCorrectionResource::class;
 
     protected function mutateFormDataBeforeCreate(array $data): array
@@ -20,7 +22,7 @@ class CreateAttendanceCorrection extends CreateRecord
 
         if (! $employee && ! $intern && ! $freelancer) {
             throw ValidationException::withMessages([
-                'date' => 'Akun pengguna Anda belum terhubung ke data profil Karyawan/Magang.',
+                'data.date' => 'Akun pengguna Anda belum terhubung ke data profil Karyawan/Magang.',
             ]);
         }
 
@@ -39,8 +41,7 @@ class CreateAttendanceCorrection extends CreateRecord
 
     protected function afterCreate(): void
     {
-        $service = new ApprovalFlowService;
-        $service->generateSteps($this->record, 'correction');
+        $this->generateApprovalStepsOrHalt('correction');
     }
 
     protected function getRedirectUrl(): string

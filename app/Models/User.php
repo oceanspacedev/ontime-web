@@ -9,6 +9,7 @@ use Filament\Panel;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -93,6 +94,97 @@ class User extends Authenticatable implements FilamentUser
         return $this->hasMany(Approver::class);
     }
 
+    /**
+     * Companies an Admin Badan Usaha may manage.
+     */
+    public function managedCompanies(): BelongsToMany
+    {
+        return $this->belongsToMany(Company::class)->withTimestamps();
+    }
+
+    /**
+     * Admin Badan Usaha: the Admin role without Superadmin.
+     */
+    public function isCompanyAdmin(): bool
+    {
+        return $this->hasRole('Admin') && ! $this->hasRole('Superadmin');
+    }
+
+    /**
+     * Companies whose data this user manages in full.
+     * Null means every company (Superadmin); an empty list means none.
+     *
+     * @return list<int>|null
+     */
+    public function managedCompanyIds(): ?array
+    {
+        if ($this->hasRole('Superadmin')) {
+            return null;
+        }
+
+        if (! $this->isCompanyAdmin()) {
+            return [];
+        }
+
+        return $this->managedCompanies()->pluck('companies.id')->map(fn ($id): int => (int) $id)->values()->all();
+    }
+
+    /**
+     * Superadmin, or an Admin Badan Usaha with at least one company.
+     */
+    public function canManageCompanies(): bool
+    {
+        return $this->managedCompanyIds() !== [];
+    }
+
+    public function canManageCompany(int|string|null $companyId): bool
+    {
+        $managed = $this->managedCompanyIds();
+
+        return $managed === null || ($companyId !== null && in_array((int) $companyId, $managed, true));
+    }
+
+    /**
+     * Divisions and companies this Approver / BOD is mapped to in the `approvers` table.
+     * A mapping without a division covers the whole company.
+     *
+     * @return array{division_ids: list<int>, company_ids: list<int>}
+     */
+    public function approverScope(): array
+    {
+        $mappings = $this->approvers()->get(['company_id', 'division_id']);
+
+        return [
+            'division_ids' => $mappings->whereNotNull('division_id')->pluck('division_id')->map(fn ($id): int => (int) $id)->unique()->values()->all(),
+            'company_ids' => $mappings->whereNull('division_id')->pluck('company_id')->filter()->map(fn ($id): int => (int) $id)->unique()->values()->all(),
+        ];
+    }
+
+    /**
+     * Companies whose team data (such as the leave calendar) this user may see.
+     * Null means every company.
+     *
+     * @return list<int>|null
+     */
+    public function visibleCompanyIds(): ?array
+    {
+        if ($this->hasRole('Superadmin')) {
+            return null;
+        }
+
+        $profile = $this->employee ?? $this->intern ?? $this->freelancer;
+        $mappedCompanyIds = $this->hasAnyRole(['Approver', 'BOD']) ? $this->approvers()->pluck('company_id') : collect();
+
+        return collect([$profile?->company_id])
+            ->merge($mappedCompanyIds)
+            ->merge($this->managedCompanyIds())
+            ->filter()
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     public function canTrackApprovalProgressFor(?Employee $employee = null): bool
     {
         if (! $employee) {
@@ -109,6 +201,7 @@ class User extends Authenticatable implements FilamentUser
             return false;
         }
 
-        return true; // or implement specific role checks here if needed
+        // Every page decides access by role, so an account without any role has nothing to do here.
+        return $this->roles()->exists();
     }
 }

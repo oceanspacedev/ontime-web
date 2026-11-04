@@ -12,7 +12,7 @@ use App\Services\ApprovalFlowService;
 use App\Services\FaceRecognitionService;
 use App\Services\FileNamingService;
 use App\Services\GeofenceService;
-use Carbon\Carbon;
+use App\Services\WorkScheduleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -75,7 +75,7 @@ class AttendanceApiController extends Controller
                 'attendance/photos',
                 'ATT_IN',
                 $identifier,
-                's3'
+                config('filesystems.default')
             );
         }
 
@@ -106,20 +106,18 @@ class AttendanceApiController extends Controller
             }
         }
 
+        // Late calculation from today's shift (schedule, default shift, then company policy)
         $now = now();
-        $workStartStr = $policy?->work_start_time ?? '08:00:00';
-        $workStart = Carbon::parse($todayAttendance?->date ?? today()->toDateString().' '.$workStartStr);
-        $toleranceMinutes = $policy?->late_tolerance_minutes ?? 15;
-        $lateThreshold = (clone $workStart)->addMinutes($toleranceMinutes);
+        $workSchedule = app(WorkScheduleService::class);
+        $workingHours = $workSchedule->resolve($profile, $now);
 
         $requiresApproval = $isOutOfBounds || $faceFailedAndRequiresApproval;
-        $status = $requiresApproval ? AttendanceStatus::PendingApproval : AttendanceStatus::OnTime;
-        $lateMinutes = 0;
-
-        if (! $requiresApproval && $now->greaterThan($lateThreshold)) {
-            $status = AttendanceStatus::Late;
-            $lateMinutes = (int) $workStart->diffInMinutes($now);
-        }
+        $lateMinutes = $requiresApproval ? 0 : $workSchedule->lateMinutes($workingHours, $now);
+        $status = match (true) {
+            $requiresApproval => AttendanceStatus::PendingApproval,
+            $lateMinutes > 0 => AttendanceStatus::Late,
+            default => AttendanceStatus::OnTime,
+        };
 
         $attendance = Attendance::updateOrCreate(
             [
@@ -129,6 +127,7 @@ class AttendanceApiController extends Controller
                 'date' => today()->toDateString(),
             ],
             [
+                'shift_id' => $workingHours['shift']?->id,
                 'check_in' => $now->toTimeString(),
                 'check_in_lat' => $lat,
                 'check_in_lng' => $lng,
@@ -214,7 +213,7 @@ class AttendanceApiController extends Controller
                 'attendance/photos',
                 'ATT_OUT',
                 $identifier,
-                's3'
+                config('filesystems.default')
             );
         }
 
@@ -249,7 +248,7 @@ class AttendanceApiController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = Attendance::query();
+        $query = Attendance::query()->with(Attendance::workerEagerLoads());
 
         if (! $user->can('ViewAny:Attendance')) {
             $query->byWorker($user);
@@ -323,7 +322,7 @@ class AttendanceApiController extends Controller
             'master-faces',
             'MASTER_FACE',
             $identifier,
-            's3'
+            config('filesystems.default')
         );
 
         $profile->update([

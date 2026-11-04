@@ -183,11 +183,12 @@ class AttendanceReportExport implements FromCollection, WithColumnWidths, WithDr
             if (Storage::disk($disk)->exists($photo)) {
                 return Storage::disk($disk)->get($photo);
             }
-            if (Storage::disk('s3')->exists($photo)) {
-                return Storage::disk('s3')->get($photo);
-            }
             if (Storage::disk('public')->exists($photo)) {
                 return Storage::disk('public')->get($photo);
+            }
+            // Checked last: an unconfigured S3 disk throws and would hide the other disks.
+            if (Storage::disk('s3')->exists($photo)) {
+                return Storage::disk('s3')->get($photo);
             }
         } catch (\Throwable) {
             return null;

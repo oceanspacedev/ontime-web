@@ -32,6 +32,7 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login(SsoLogin::class)
             ->databaseNotifications()
+            ->databaseTransactions()
             ->plugins([
                 MekayaPlugin::make(),
                 FilamentShieldPlugin::make(),

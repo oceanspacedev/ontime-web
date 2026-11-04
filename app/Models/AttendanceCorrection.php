@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Traits\ScopesToWorkerVisibility;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -9,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class AttendanceCorrection extends Model
 {
-    use HasFactory;
+    use HasFactory, ScopesToWorkerVisibility;
 
     protected $fillable = [
         'employee_id',
@@ -25,6 +27,25 @@ class AttendanceCorrection extends Model
         'current_step',
         'rejection_reason',
     ];
+
+    protected static function booted(): void
+    {
+        // The form and API send only a time (e.g. "08:30"), which the datetime cast places on
+        // the submission day. Anchor both times on the attendance date being corrected.
+        static::saving(function (AttendanceCorrection $correction): void {
+            if (! $correction->date) {
+                return;
+            }
+
+            foreach (['corrected_check_in', 'corrected_check_out'] as $column) {
+                $time = $correction->getAttribute($column);
+
+                if ($time) {
+                    $correction->setAttribute($column, Carbon::parse($correction->date)->setTimeFrom($time));
+                }
+            }
+        });
+    }
 
     protected function casts(): array
     {

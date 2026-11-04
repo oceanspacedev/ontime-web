@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Services\Core\CoreUserSynchronizer;
+use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Auth;
 use Laravel\Socialite\Facades\Socialite;
+use Spatie\Permission\Models\Permission;
 
 class CoreSsoController extends Controller
 {
@@ -13,6 +15,12 @@ class CoreSsoController extends Controller
      */
     public function redirect()
     {
+        // SSO is optional: without CORE_CLIENT_ID / CORE_CLIENT_SECRET / CORE_REDIRECT_URI
+        // send people back to the regular email and password login instead of a broken redirect.
+        if (blank(config('services.core.client_id')) || blank(config('services.core.client_secret')) || blank(config('services.core.redirect'))) {
+            return redirect()->to(Filament::getLoginUrl());
+        }
+
         return Socialite::driver('core')->redirect();
     }
 
@@ -23,7 +31,7 @@ class CoreSsoController extends Controller
     {
         try {
             $ssoUser = Socialite::driver('core')->user();
-            
+
             // Sync user details and auto-link employee
             $user = $userSynchronizer->sync($ssoUser->getRaw());
 
@@ -31,7 +39,7 @@ class CoreSsoController extends Controller
             if (isset($ssoUser->user['permissions']) && is_array($ssoUser->user['permissions'])) {
                 $validPermissions = [];
                 foreach ($ssoUser->user['permissions'] as $permissionName) {
-                    \Spatie\Permission\Models\Permission::findOrCreate($permissionName, 'web');
+                    Permission::findOrCreate($permissionName, 'web');
                     $validPermissions[] = $permissionName;
                 }
                 $user->syncPermissions($validPermissions);
@@ -42,10 +50,10 @@ class CoreSsoController extends Controller
 
             // Redirect to intended dashboard
             return redirect()->intended(config('filament.home_url', '/admin'));
-            
+
         } catch (\Exception $e) {
             // Log or handle the exception appropriately
-            return redirect('/')->withErrors(['error' => 'SSO Authentication failed: ' . $e->getMessage()]);
+            return redirect('/')->withErrors(['error' => 'SSO Authentication failed: '.$e->getMessage()]);
         }
     }
 }

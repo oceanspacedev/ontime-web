@@ -20,6 +20,7 @@
             @else
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     @foreach($this->leaveRequests as $leave)
+                        @php($worker = $leave->employee ?? $leave->intern ?? $leave->freelancer)
                         <div class="p-4 rounded-lg border border-gray-200 bg-gray-50 dark:bg-gray-800 dark:border-gray-700 flex flex-col justify-between space-y-3">
                             <div>
                                 <div class="flex items-center justify-between mb-2">
@@ -32,10 +33,10 @@
                                 </div>
 
                                 <h4 class="font-bold text-sm text-gray-900 dark:text-white">
-                                    {{ $leave->employee->full_name }}
+                                    {{ $worker?->full_name ?? '-' }}
                                 </h4>
                                 <p class="text-xs text-gray-600 dark:text-gray-400">
-                                    {{ $leave->employee->company->name ?? '-' }} ({{ $leave->employee->division->name ?? '-' }})
+                                    {{ $worker?->company?->name ?? '-' }} ({{ $worker?->division?->name ?? '-' }})
                                 </p>
                             </div>
 

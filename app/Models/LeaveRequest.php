@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\AttendanceStatus;
+use App\Traits\ScopesToWorkerVisibility;
 use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class LeaveRequest extends Model
 {
-    use HasFactory;
+    use HasFactory, ScopesToWorkerVisibility;
 
     protected $fillable = [
         'employee_id',

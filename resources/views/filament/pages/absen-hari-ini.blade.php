@@ -14,6 +14,7 @@
 
         $attendance = $this->todayAttendance;
         $policy = $this->companyPolicy;
+        $workingHours = $this->todayWorkingHours;
     @endphp
 
     @if(!$profile)
@@ -51,8 +52,16 @@
                         <span class="font-medium text-gray-900 dark:text-white">{{ $profileNip }} ({{ $profileCompany }})</span>
                     </div>
                     <div>
-                        <span class="block text-xs font-medium text-gray-500">Jam Masuk & Toleransi</span>
-                        <span class="font-medium text-gray-900 dark:text-white">{{ $policy?->work_start_time ?? '08:00' }} (Toleransi {{ $policy?->late_tolerance_minutes ?? 15 }} menit)</span>
+                        <span class="block text-xs font-medium text-gray-500">Shift Hari Ini</span>
+                        @if($workingHours['is_day_off'] ?? false)
+                            <span class="font-medium text-gray-900 dark:text-white">Libur sesuai jadwal</span>
+                        @else
+                            <span class="font-medium text-gray-900 dark:text-white">
+                                {{ $workingHours['shift']?->name ?? 'Jam kerja badan usaha' }}:
+                                {{ substr($workingHours['start_time'] ?? '08:00', 0, 5) }} - {{ substr($workingHours['end_time'] ?? '17:00', 0, 5) }}
+                                (Toleransi {{ $workingHours['late_tolerance_minutes'] ?? 15 }} menit)
+                            </span>
+                        @endif
                     </div>
                     <div>
                         <span class="block text-xs font-medium text-gray-500">Aturan Absensi</span>

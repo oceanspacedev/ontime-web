@@ -23,6 +23,9 @@ return [
         'slug' => 'shield/roles',
         'show_model_path' => true,
         'cluster' => null,
+        // The panel itself authorizes by role. Permissions here still matter outside the panel:
+        // they are returned by /api/v1/auth/me for the mobile app, synced to Core, and the
+        // master data API checks "ViewAny:*" (routes/api.php).
         'tabs' => [
             'pages' => true,
             'widgets' => true,
@@ -70,7 +73,8 @@ return [
 
     'super_admin' => [
         'enabled' => true,
-        'name' => 'super_admin',
+        // The application role; Gate::before in AppServiceProvider grants it everything.
+        'name' => 'Superadmin',
         'define_via_gate' => false,
         'intercept_gate' => 'before',
     ],
@@ -87,7 +91,8 @@ return [
     */
 
     'panel_user' => [
-        'enabled' => true,
+        // Panel access is granted by the application roles (User::canAccessPanel).
+        'enabled' => false,
         'name' => 'panel_user',
     ],
 
@@ -124,7 +129,9 @@ return [
     'policies' => [
         'path' => app_path('Policies'),
         'merge' => true,
-        'generate' => true,
+        // Never generate resource policies: the panel authorizes by role, and generated
+        // policies would silently switch every resource to permission checks.
+        'generate' => false,
         'methods' => [
             'viewAny', 'view', 'create', 'update', 'delete', 'deleteAny', 'restore',
             'forceDelete', 'forceDeleteAny', 'restoreAny', 'replicate', 'reorder',

@@ -140,7 +140,6 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
     public function getReportQuery(): Builder
     {
         $user = auth()->user();
-        $isSuperadmin = $user?->hasRole('Superadmin');
 
         $query = Attendance::query()->with([
             'employee.company',
@@ -152,70 +151,14 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
             'freelancer.company',
             'freelancer.division',
             'freelancer.user',
+            'shift',
         ]);
 
-        // Scope Enforcement
-        if ($user && ! $isSuperadmin) {
-            $isApprover = $user->hasAnyRole(['Approver', 'BOD']);
-            $employee = $user->employee;
-            $intern = $user->intern;
-            $freelancer = $user->freelancer;
-
-            if ($isApprover) {
-                $divisionIds = Approver::where('user_id', $user->id)
-                    ->whereNotNull('division_id')
-                    ->pluck('division_id')
-                    ->toArray();
-
-                $companyIds = Approver::where('user_id', $user->id)
-                    ->whereNull('division_id')
-                    ->pluck('company_id')
-                    ->toArray();
-
-                $query->where(function ($q) use ($divisionIds, $companyIds) {
-                    $q->whereHas('employee', function ($sub) use ($divisionIds, $companyIds) {
-                        $sub->where(function ($s) use ($divisionIds, $companyIds) {
-                            if (! empty($divisionIds)) {
-                                $s->whereIn('division_id', $divisionIds);
-                            }
-                            if (! empty($companyIds)) {
-                                $s->orWhereIn('company_id', $companyIds);
-                            }
-                            if (empty($divisionIds) && empty($companyIds)) {
-                                $s->whereRaw('1 = 0');
-                            }
-                        });
-                    })
-                        ->orWhereHas('intern', function ($sub) use ($divisionIds, $companyIds) {
-                            $sub->where(function ($s) use ($divisionIds, $companyIds) {
-                                if (! empty($divisionIds)) {
-                                    $s->whereIn('division_id', $divisionIds);
-                                }
-                                if (! empty($companyIds)) {
-                                    $s->orWhereIn('company_id', $companyIds);
-                                }
-                            });
-                        })
-                        ->orWhereHas('freelancer', function ($sub) use ($divisionIds, $companyIds) {
-                            $sub->where(function ($s) use ($divisionIds, $companyIds) {
-                                if (! empty($divisionIds)) {
-                                    $s->whereIn('division_id', $divisionIds);
-                                }
-                                if (! empty($companyIds)) {
-                                    $s->orWhereIn('company_id', $companyIds);
-                                }
-                            });
-                        });
-                });
-            } elseif ($employee) {
-                $query->where('employee_id', $employee->id);
-            } elseif ($intern) {
-                $query->where('intern_id', $intern->id);
-            } elseif ($freelancer) {
-                $query->where('freelancer_id', $freelancer->id);
-            } else {
-                $query->whereRaw('1 = 0');
-            }
+        // Scope Enforcement: same visibility rules as the request resources.
+        if ($user) {
+            $query->visibleTo($user);
+        } else {
+            $query->whereRaw('1 = 0');
         }
 
         // Apply Form Filters
@@ -294,6 +237,11 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                     ->label('Tanggal')
                     ->date('d M Y')
                     ->sortable(),
+
+                TextColumn::make('shift.name')
+                    ->label('Shift')
+                    ->placeholder('Jam kerja BU')
+                    ->toggleable(),
 
                 TextColumn::make('check_in')
                     ->label('Check In')

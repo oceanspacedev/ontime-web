@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\ResignationResource\Pages;
 use App\Models\Employee;
 use App\Models\Resignation;
@@ -24,10 +25,14 @@ use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
 
 class ResignationResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Resignation::class;
 
     protected static ?string $modelLabel = 'Pengunduran Diri';
@@ -42,24 +47,54 @@ class ResignationResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        $user = auth()->user();
-
-        if ($user?->intern !== null) {
-            return false;
-        }
-
-        return parent::shouldRegisterNavigation();
+        return static::canViewAny();
     }
 
+    /**
+     * Resignations belong to employees: Superadmin manages all of them, employees file their own,
+     * and Approver / BOD review the ones inside their approvers mapping.
+     */
     public static function canViewAny(): bool
     {
         $user = auth()->user();
 
-        if ($user?->intern !== null) {
+        if (! $user) {
             return false;
         }
 
-        return parent::canViewAny();
+        return $user->hasAnyRole(['Superadmin', 'Approver', 'BOD']) || $user->canManageCompanies() || $user->employee !== null;
+    }
+
+    public static function canCreate(): bool
+    {
+        $user = auth()->user();
+
+        return (bool) ($user?->canManageCompanies() || $user?->employee);
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return static::canManageWorkerRecord($record);
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return static::canManageWorkerRecord($record);
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        $user = auth()->user();
+
+        // Eager load the worker so table columns and approve/reject checks do not lazy load per row.
+        $query = parent::getEloquentQuery()->with(['employee']);
+
+        return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
 
     public static function form(Schema $schema): Schema
@@ -72,7 +107,14 @@ class ResignationResource extends Resource
                         Grid::make(2)->schema([
                             Select::make('employee_id')
                                 ->label('Karyawan')
-                                ->relationship('employee', 'full_name', fn ($query) => $query->whereNotIn('status', ['inactive']))
+                                ->relationship('employee', 'full_name', fn (Builder $query) => $query
+                                    ->whereNotIn('status', ['inactive'])
+                                    ->when(
+                                        auth()->user()?->canManageCompanies(),
+                                        fn (Builder $managed) => static::scopeToManagedCompanies($managed),
+                                        fn (Builder $ownOnly) => $ownOnly->whereKey(auth()->user()?->employee?->id),
+                                    ))
+                                ->default(fn (): ?int => auth()->user()?->canManageCompanies() ? null : auth()->user()?->employee?->id)
                                 ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
                                 ->searchable()
                                 ->preload()

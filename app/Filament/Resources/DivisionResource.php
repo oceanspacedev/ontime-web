@@ -2,8 +2,8 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\DivisionResource\Pages;
-use App\Models\Company;
 use App\Models\Division;
 use App\Rules\ValidDivisionParent;
 use BackedEnum;
@@ -24,11 +24,14 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 use UnitEnum;
 
 class DivisionResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Division::class;
 
     protected static ?string $modelLabel = 'Divisi';
@@ -43,7 +46,12 @@ class DivisionResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery());
     }
 
     public static function form(Schema $schema): Schema
@@ -55,7 +63,7 @@ class DivisionResource extends Resource
                         Grid::make(2)->schema([
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(Company::query()->pluck('name', 'id'))
+                                ->options(fn (): array => static::managedCompanyOptions(activeOnly: false))
                                 ->required()
                                 ->live()
                                 ->afterStateUpdated(fn ($set) => $set('parent_id', null)),
@@ -76,10 +84,12 @@ class DivisionResource extends Resource
                                         $query->whereNotIn('id', $excludedIds);
                                     }
 
-                                    $allDivisions = $query->with('children')->get();
-                                    $topDivisions = $allDivisions->whereNull('parent_id');
+                                    $divisionsByParent = $query
+                                        ->orderBy('name')
+                                        ->get(['id', 'name', 'parent_id'])
+                                        ->groupBy(fn (Division $division): int => (int) $division->parent_id);
 
-                                    return static::formatTreeOptions($topDivisions);
+                                    return static::formatTreeOptions($divisionsByParent);
                                 })
                                 ->rule(fn (?Division $record) => new ValidDivisionParent($record?->id)),
 
@@ -147,16 +157,23 @@ class DivisionResource extends Resource
             ]);
     }
 
-    protected static function formatTreeOptions(Collection $divisions, int $depth = 0): array
+    /**
+     * Build indented tree options from divisions grouped by parent id (0 = top level).
+     *
+     * @param  Collection<int, Collection<int, Division>>  $divisionsByParent
+     * @return array<int, string>
+     */
+    protected static function formatTreeOptions(Collection $divisionsByParent, int $parentId = 0, int $depth = 0): array
     {
-        $options = [];
-        foreach ($divisions as $division) {
-            $prefix = str_repeat('— ', $depth);
-            $options[$division->id] = $prefix.$division->name;
+        if ($depth > 50) {
+            return [];
+        }
 
-            if ($division->children->isNotEmpty()) {
-                $options += static::formatTreeOptions($division->children, $depth + 1);
-            }
+        $options = [];
+
+        foreach ($divisionsByParent->get($parentId, collect()) as $division) {
+            $options[$division->id] = str_repeat('— ', $depth).$division->name;
+            $options += static::formatTreeOptions($divisionsByParent, (int) $division->id, $depth + 1);
         }
 
         return $options;

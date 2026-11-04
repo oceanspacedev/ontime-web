@@ -11,10 +11,17 @@ class EmployeeWebhookController extends Controller
 {
     public function handle(Request $request)
     {
-        $secret = config('services.core.webhook_secret');
-        $signature = $request->header('X-Signature');
+        $secret = (string) config('services.core.webhook_secret');
+        $signature = (string) $request->header('X-Signature');
 
-        if (!$signature || hash_hmac('sha256', $request->getContent(), $secret) !== $signature) {
+        // Without a secret every caller could sign with an empty key, so refuse instead.
+        if ($secret === '') {
+            Log::error('Employee webhook rejected: CORE_WEBHOOK_SECRET is not configured.');
+
+            abort(503, 'Webhook is not configured.');
+        }
+
+        if ($signature === '' || ! hash_equals(hash_hmac('sha256', $request->getContent(), $secret), $signature)) {
             abort(401, 'Invalid signature.');
         }
 

@@ -40,6 +40,12 @@ class ReportAndCalendarApiController extends Controller
             });
         }
 
+        $visibleCompanyIds = $request->user()->visibleCompanyIds();
+
+        if ($visibleCompanyIds !== null) {
+            $query->whereWorkerInCompanies($visibleCompanyIds);
+        }
+
         $leaveRequests = $query->orderBy('start_date', 'asc')->get()->map(function ($leave) {
             $person = $leave->employee ?? $leave->intern ?? $leave->freelancer;
 
@@ -74,7 +80,7 @@ class ReportAndCalendarApiController extends Controller
         $companyId = $request->input('company_id');
 
         $user = $request->user();
-        $query = Attendance::with(['employee.user', 'intern.user', 'freelancer.user', 'employee.company', 'intern.company', 'freelancer.company'])
+        $query = Attendance::with([...Attendance::workerEagerLoads(), 'employee.user', 'intern.user', 'freelancer.user'])
             ->whereBetween('date', [$startDate, $endDate]);
 
         if (! $user->can('ViewAny:Attendance')) {

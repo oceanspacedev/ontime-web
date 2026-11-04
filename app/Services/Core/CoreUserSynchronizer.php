@@ -5,6 +5,7 @@ namespace App\Services\Core;
 use App\Models\Employee;
 use App\Models\User;
 use Illuminate\Support\Str;
+use Spatie\Permission\Models\Role;
 
 class CoreUserSynchronizer
 {
@@ -20,19 +21,26 @@ class CoreUserSynchronizer
             ],
         );
 
-        if (!$user->employee_id) {
-            $employeeQuery = Employee::query()->where('email', $coreUserPayload['email']);
-            
-            if (!empty($coreUserPayload['phone'])) {
-                $employeeQuery->orWhere('phone', $coreUserPayload['phone']);
-            }
+        if (! $user->employee()->exists()) {
+            // The link lives on employees.user_id. Only claim an employee that is not linked yet,
+            // and keep the email / phone match grouped so it cannot widen the query.
+            $employee = Employee::query()
+                ->whereNull('user_id')
+                ->where(function ($query) use ($coreUserPayload) {
+                    $query->where('email', $coreUserPayload['email']);
 
-            $employee = $employeeQuery->first();
+                    if (! empty($coreUserPayload['phone'])) {
+                        $query->orWhere('phone', $coreUserPayload['phone']);
+                    }
+                })
+                ->first();
 
-            if ($employee) {
-                $user->employee_id = $employee->id;
-                $user->save();
-            }
+            $employee?->update(['user_id' => $user->id]);
+        }
+
+        // The panel requires a role; a linked employee without one starts as Employee.
+        if ($user->roles()->doesntExist() && $user->employee()->exists() && Role::where('name', 'Employee')->exists()) {
+            $user->assignRole('Employee');
         }
 
         return $user;

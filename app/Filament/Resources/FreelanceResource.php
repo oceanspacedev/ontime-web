@@ -2,8 +2,9 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\FreelanceResource\Pages;
-use App\Models\Company;
+use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\Freelancer;
@@ -30,12 +31,15 @@ use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class FreelanceResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Freelancer::class;
 
     protected static ?string $modelLabel = 'Freelance';
@@ -50,7 +54,12 @@ class FreelanceResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('user.roles'));
     }
 
     public static function form(Schema $schema): Schema
@@ -78,11 +87,14 @@ class FreelanceResource extends Resource
 
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(Company::query()->where('is_active', true)->pluck('name', 'id'))
+                                ->options(fn (): array => static::managedCompanyOptions())
                                 ->helperText('Otomatis terisi jika PIC / Supervisor Karyawan dipilih.')
                                 ->required()
                                 ->live()
-                                ->afterStateUpdated(fn ($set) => $set('division_id', null)),
+                                ->afterStateUpdated(function ($set): void {
+                                    $set('division_id', null);
+                                    $set('shift_id', null);
+                                }),
 
                             Select::make('division_id')
                                 ->label('Divisi')
@@ -100,10 +112,26 @@ class FreelanceResource extends Resource
                                 ->helperText('Otomatis terisi jika PIC / Supervisor Karyawan dipilih.')
                                 ->required(),
 
+                            Select::make('shift_id')
+                                ->label('Shift Default')
+                                ->options(fn (Get $get, ?Freelancer $record): array => ShiftScheduleResource::shiftOptions($get('company_id')) + ($record?->shift ? [$record->shift_id => $record->shift->label()] : []))
+                                ->placeholder('Ikut jam kerja badan usaha')
+                                ->helperText('Dipakai bila tidak ada jadwal shift pada tanggal tersebut.')
+                                ->nullable(),
+
                             Select::make('supervisor_id')
                                 ->label('Penanggung Jawab / PIC (Karyawan)')
-                                ->relationship('supervisor', 'full_name', function ($query, Get $get) {
-                                    $query->whereNotIn('status', ['inactive', 'resigned']);
+                                ->relationship('supervisor', 'full_name', function ($query, Get $get, ?Freelancer $record) {
+                                    // Keep the currently assigned person selectable even after they resign,
+                                    // otherwise existing records fail validation on save.
+                                    $query->where(function ($available) use ($record) {
+                                        $available->whereNotIn('status', ['inactive', 'resigned']);
+
+                                        if ($record?->supervisor_id) {
+                                            $available->orWhere('id', $record->supervisor_id);
+                                        }
+                                    });
+
                                     if ($companyId = $get('company_id')) {
                                         $query->where('company_id', $companyId);
                                     }
@@ -158,7 +186,7 @@ class FreelanceResource extends Resource
                             Select::make('user_id')
                                 ->label('Akun User Sistem (Opsional)')
                                 ->placeholder('Pilih Akun User')
-                                ->options(User::query()->pluck('name', 'id'))
+                                ->options(fn (?Freelancer $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
                                 ->searchable()
                                 ->nullable(),
 
@@ -277,7 +305,7 @@ class FreelanceResource extends Resource
                             ->required(),
                         Select::make('role')
                             ->label('Role Akses')
-                            ->options(fn () => Role::pluck('name', 'name')->toArray())
+                            ->options(fn (): array => static::assignableRoleOptions())
                             ->default('Freelancer')
                             ->required(),
                         TextInput::make('password')
@@ -306,6 +334,8 @@ class FreelanceResource extends Resource
                             'phone' => $record->phone,
                             'password' => Hash::make($password),
                         ]);
+
+                        abort_unless(array_key_exists($roleName, static::assignableRoleOptions()), 403);
 
                         if ($role = Role::firstOrCreate(['name' => $roleName])) {
                             $user->assignRole($role);
@@ -346,7 +376,7 @@ class FreelanceResource extends Resource
                     ->label('Hapus Akun')
                     ->icon('heroicon-o-user-minus')
                     ->color('danger')
-                    ->visible(fn (Freelancer $record): bool => (bool) $record->user_id)
+                    ->visible(fn (Freelancer $record): bool => (bool) $record->user_id && static::canManageAccount($record->user))
                     ->requiresConfirmation()
                     ->modalHeading(fn (Freelancer $record) => "Hapus Akun User {$record->full_name}")
                     ->modalDescription('Apakah Anda yakin ingin menghapus akun user ini? Pengguna ini tidak akan dapat login lagi ke sistem.')

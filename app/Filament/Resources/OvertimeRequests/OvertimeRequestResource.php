@@ -2,10 +2,10 @@
 
 namespace App\Filament\Resources\OvertimeRequests;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\OvertimeRequests\Pages\CreateOvertimeRequest;
 use App\Filament\Resources\OvertimeRequests\Pages\EditOvertimeRequest;
 use App\Filament\Resources\OvertimeRequests\Pages\ListOvertimeRequests;
-use App\Models\Approver;
 use App\Models\OvertimeRequest;
 use App\Services\ApprovalFlowService;
 use BackedEnum;
@@ -35,6 +35,8 @@ use UnitEnum;
 
 class OvertimeRequestResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = OvertimeRequest::class;
 
     protected static ?string $slug = 'overtime-requests';
@@ -63,88 +65,33 @@ class OvertimeRequestResource extends Resource
     {
         $user = auth()->user();
 
-        return (bool) ($user?->employee || $user?->intern || $user?->freelancer || $user?->hasAnyRole(['Employee', 'Intern', 'Freelancer', 'BOD']));
+        // Requests belong to a worker profile; a role alone (e.g. BOD without employee data) cannot submit.
+        return (bool) ($user?->employee || $user?->intern || $user?->freelancer);
     }
 
     public static function canEdit(Model $record): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return static::canManageWorkerRecord($record);
     }
 
     public static function canDelete(Model $record): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return static::canManageWorkerRecord($record);
     }
 
     public static function canDeleteAny(): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return static::canManageCompanyData();
     }
 
     public static function getEloquentQuery(): Builder
     {
-        $query = parent::getEloquentQuery();
         $user = auth()->user();
 
-        if (! $user) {
-            return $query;
-        }
+        // Eager load the worker so table columns and approve/reject checks do not lazy load per row.
+        $query = parent::getEloquentQuery()->with(['employee', 'intern', 'freelancer']);
 
-        if ($user->hasRole('Superadmin')) {
-            return $query;
-        }
-
-        $employee = $user->employee;
-        $intern = $user->intern;
-        $freelancer = $user->freelancer;
-        $isApprover = $user->hasAnyRole(['Approver', 'BOD']);
-
-        if ($isApprover) {
-            $divisionIds = Approver::where('user_id', $user->id)
-                ->whereNotNull('division_id')
-                ->pluck('division_id')
-                ->toArray();
-
-            $companyIds = Approver::where('user_id', $user->id)
-                ->whereNull('division_id')
-                ->pluck('company_id')
-                ->toArray();
-
-            return $query->where(function (Builder $q) use ($divisionIds, $companyIds, $employee) {
-                $q->whereHas('employee', function ($eq) use ($divisionIds, $companyIds, $employee) {
-                    $eq->where(function ($sub) use ($divisionIds, $companyIds, $employee) {
-                        if (! empty($divisionIds)) {
-                            $sub->whereIn('division_id', $divisionIds);
-                        }
-                        if (! empty($companyIds)) {
-                            $sub->orWhereIn('company_id', $companyIds);
-                        }
-                        if ($employee) {
-                            $sub->orWhere('id', $employee->id);
-                        }
-                    });
-                });
-
-                if (! empty($divisionIds)) {
-                    $q->orWhereHas('intern', fn ($iq) => $iq->whereIn('division_id', $divisionIds))
-                        ->orWhereHas('freelancer', fn ($fq) => $fq->whereIn('division_id', $divisionIds));
-                }
-            });
-        }
-
-        if ($employee) {
-            return $query->where('employee_id', $employee->id);
-        }
-
-        if ($intern) {
-            return $query->where('intern_id', $intern->id);
-        }
-
-        if ($freelancer) {
-            return $query->where('freelancer_id', $freelancer->id);
-        }
-
-        return $query->whereRaw('1 = 0');
+        return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
 
     public static function form(Schema $schema): Schema

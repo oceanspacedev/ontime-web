@@ -35,8 +35,7 @@ class ValidDivisionParent implements ValidationRule
 
         $division = Division::find($divisionId);
         if ($division) {
-            $descendants = $division->descendants()->pluck('id')->toArray();
-            if (in_array($parentId, $descendants, true)) {
+            if (in_array($parentId, $division->getAllChildrenIds(), true)) {
                 $fail('Terjadi circular reference! Parent divisi tidak boleh diambil dari sub-divisinya sendiri.');
             }
         }

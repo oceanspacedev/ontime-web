@@ -21,19 +21,55 @@ class ApprovalFlowService
      */
     public function getPendingRequestsForUser(User $user, string $modelClass): Collection
     {
-        $query = $modelClass::query();
+        $eagerLoads = collect(['employee', 'intern', 'freelancer'])
+            ->filter(fn (string $relation): bool => method_exists($modelClass, $relation))
+            ->flatMap(fn (string $relation): array => ["{$relation}.company", "{$relation}.division", "{$relation}.user"])
+            ->push('approvalSteps')
+            ->all();
 
-        $query->with([
-            'employee.company', 'employee.division', 'employee.user',
-            'intern.company', 'intern.division', 'intern.user',
-            'freelancer.company', 'freelancer.division', 'freelancer.user',
-            'approvalSteps',
-        ]);
-
-        return $query
+        return $modelClass::query()
+            ->with($eagerLoads)
             ->whereIn('status', ['pending', 'pending_approval'])
             ->get()
             ->filter(fn (Model $item) => $this->isUserAuthorizedToApprove($item, $user));
+    }
+
+    /**
+     * Give a company without any approval flow the default stages: Approver, BOD, then Superadmin
+     * for leave, overtime, correction and resignation, and a single Approver stage for geofence.
+     */
+    public function createDefaultFlows(Company $company): void
+    {
+        if ($company->approvalFlows()->exists()) {
+            return;
+        }
+
+        $labels = ['leave' => 'Cuti / Izin', 'overtime' => 'Lembur', 'correction' => 'Koreksi Absensi', 'resignation' => 'Pengunduran Diri'];
+        $stages = [['Approver', 'Persetujuan Approver'], ['BOD', 'Persetujuan BOD'], ['Superadmin', 'Persetujuan Akhir Superadmin']];
+
+        foreach ($labels as $requestType => $label) {
+            foreach ($stages as $index => [$role, $stageName]) {
+                ApprovalFlow::create([
+                    'company_id' => $company->id,
+                    'request_type' => $requestType,
+                    'step_number' => $index + 1,
+                    'step_order' => $index + 1,
+                    'name' => "{$stageName} {$label}",
+                    'approver_type' => 'role',
+                    'approver_role' => $role,
+                ]);
+            }
+        }
+
+        ApprovalFlow::create([
+            'company_id' => $company->id,
+            'request_type' => 'geofence',
+            'step_number' => 1,
+            'step_order' => 1,
+            'name' => 'Persetujuan Presensi Luar Geofence',
+            'approver_type' => 'role',
+            'approver_role' => 'Approver',
+        ]);
     }
 
     /**
@@ -150,9 +186,27 @@ class ApprovalFlowService
             return false;
         }
 
-        // Superadmin Override: Superadmin has unlimited authority to approve/reject any pending step
+        // Resolve the worker profile to get the requester and the company/division scope
+        $workerProfile = method_exists($requestModel, 'getWorkerProfile')
+            ? $requestModel->getWorkerProfile()
+            : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
+
+        $isOwnRequest = $workerProfile?->user_id !== null && (int) $workerProfile->user_id === (int) $user->id;
+
+        // A requester may act on an intermediate stage that matches their own role (for example a BOD
+        // at the BOD stage), but never on the final stage: someone else must give the last approval.
+        if ($isOwnRequest && ! $requestModel->approvalSteps()->where('step_order', '>', $currentStepOrder)->exists()) {
+            return false;
+        }
+
+        // Superadmin Override: Superadmin may act on any pending step, except on their own request
         if ($user->hasRole('Superadmin')) {
-            return true;
+            return ! $isOwnRequest;
+        }
+
+        // Admin Badan Usaha Override: same authority, limited to the companies they manage
+        if ($user->isCompanyAdmin() && $workerProfile && $user->canManageCompany($workerProfile->company_id)) {
+            return ! $isOwnRequest;
         }
 
         // 1. Direct User Assignment
@@ -166,11 +220,6 @@ class ApprovalFlowService
             if (! $user->hasRole($requiredRole)) {
                 return false;
             }
-
-            // Resolve the worker profile to get company/division scope
-            $workerProfile = method_exists($requestModel, 'getWorkerProfile')
-                ? $requestModel->getWorkerProfile()
-                : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
 
             if (! $workerProfile) {
                 return false;

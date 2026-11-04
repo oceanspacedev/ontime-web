@@ -16,6 +16,7 @@ class Intern extends Model
         'user_id',
         'company_id',
         'division_id',
+        'shift_id',
         'mentor_id',
         'nis',
         'full_name',
@@ -46,6 +47,14 @@ class Intern extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /**
+     * Default shift; a dated ShiftSchedule overrides it.
+     */
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(Shift::class);
     }
 
     public function division(): BelongsTo
