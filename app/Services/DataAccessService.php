@@ -331,6 +331,15 @@ final class DataAccessService
     }
 
     /**
+     * Superadmin, or an Admin whose data access is "Semua". Used for system-wide tools such as Horizon
+     * and the Log Viewer, which show data of every company.
+     */
+    public static function hasGlobalAccess(User $user): bool
+    {
+        return self::isManager($user) && self::workerFilter($user) === null;
+    }
+
+    /**
      * Superadmin, or an Admin whose data access covers at least one company or division.
      */
     public static function canManageWorkers(User $user): bool

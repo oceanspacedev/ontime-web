@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Widgets\PresensiWidget;
 use App\Filament\Widgets\UserProfileWidget;
+use App\Support\ObservabilityAccess;
 use Apriansyahrs\MekayaTheme\Auth\MekayaLogin;
 use Apriansyahrs\MekayaTheme\MekayaPlugin;
 use BezhanSalleh\FilamentShield\FilamentShieldPlugin;
@@ -52,6 +53,7 @@ class AdminPanelProvider extends PanelProvider
             ->pages([
                 Dashboard::class,
             ])
+            ->navigationItems(ObservabilityAccess::filamentNavigationItems())
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             ->widgets([
                 UserProfileWidget::class,
