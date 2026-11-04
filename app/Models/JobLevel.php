@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\PreventsDeletionWhileInUse;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -16,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class JobLevel extends Model
 {
-    use HasFactory;
+    use HasFactory, PreventsDeletionWhileInUse;
 
     protected $fillable = [
         'name',
@@ -26,5 +27,14 @@ class JobLevel extends Model
     public function employees(): HasMany
     {
         return $this->hasMany(Employee::class);
+    }
+
+    public function deletionBlockedReason(): ?string
+    {
+        if ($this->employees()->exists()) {
+            return "Level jabatan {$this->name} masih dipakai oleh karyawan. Pindahkan karyawan ke level lain sebelum menghapus.";
+        }
+
+        return null;
     }
 }

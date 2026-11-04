@@ -16,12 +16,19 @@ class Employee extends Model
         'user_id',
         'company_id',
         'division_id',
+        'shift_id',
         'job_level_id',
         'job_title_id',
         'nip',
+        'talenta_id',
         'full_name',
         'email',
         'phone',
+        'gender',
+        'birth_date',
+        'marital_status',
+        'tax_status',
+        'avatar_url',
         'join_date',
         'status',
         'master_face_photo',
@@ -32,6 +39,7 @@ class Employee extends Model
     {
         return [
             'join_date' => 'date',
+            'birth_date' => 'date',
             'master_face_verified_at' => 'datetime',
         ];
     }
@@ -44,6 +52,14 @@ class Employee extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /**
+     * Default shift; a dated ShiftSchedule overrides it.
+     */
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(Shift::class);
     }
 
     public function division(): BelongsTo

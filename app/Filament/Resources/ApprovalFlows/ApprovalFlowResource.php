@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\ApprovalFlows;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\ApprovalFlows\Pages\CreateApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\EditApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\ListApprovalFlows;
@@ -22,11 +23,14 @@ use Filament\Schemas\Schema;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class ApprovalFlowResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Company::class;
 
     protected static ?string $slug = 'approval-flows';
@@ -43,7 +47,12 @@ class ApprovalFlowResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery(), 'companies.id');
     }
 
     public static function form(Schema $schema): Schema
@@ -54,7 +63,7 @@ class ApprovalFlowResource extends Resource
                     ->schema([
                         Select::make('company_id')
                             ->label('Badan Usaha (Company)')
-                            ->options(Company::query()->where('is_active', true)->pluck('name', 'id'))
+                            ->options(fn (): array => static::managedCompanyOptions())
                             ->required()
                             ->disabledOn('edit')
                             ->default(fn () => request()->query('company_id')),

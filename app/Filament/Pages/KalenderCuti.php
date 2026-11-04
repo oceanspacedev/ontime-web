@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Models\Company;
 use App\Models\LeaveRequest;
 use BackedEnum;
+use Carbon\Carbon;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -112,17 +113,28 @@ class KalenderCuti extends Page implements HasForms
         $month = $this->selectedMonth ?: now()->month;
         $year = $this->selectedYear ?: now()->year;
 
+        $startOfMonth = Carbon::create($year, $month, 1)->startOfMonth()->toDateString();
+        $endOfMonth = Carbon::create($year, $month, 1)->endOfMonth()->toDateString();
+
+        // A leave is shown in every month it overlaps, not only the month it starts in.
         $query = LeaveRequest::with([
             'employee.company', 'employee.division',
             'intern.company', 'intern.division',
             'freelancer.company', 'freelancer.division',
         ])
             ->whereIn('status', ['approved', 'pending'])
-            ->whereYear('start_date', $year)
-            ->whereMonth('start_date', $month);
+            ->whereDate('start_date', '<=', $endOfMonth)
+            ->whereDate('end_date', '>=', $startOfMonth);
 
         if ($this->selectedCompanyId) {
-            $query->whereHas('employee', fn ($q) => $q->where('company_id', $this->selectedCompanyId));
+            $query->whereWorkerInCompanies([(int) $this->selectedCompanyId]);
+        }
+
+        $user = auth()->user();
+        $visibleCompanyIds = $user ? $user->visibleCompanyIds() : [];
+
+        if ($visibleCompanyIds !== null) {
+            $query->whereWorkerInCompanies($visibleCompanyIds);
         }
 
         return $query->orderBy('start_date')->get();

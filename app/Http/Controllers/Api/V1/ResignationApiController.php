@@ -13,27 +13,10 @@ class ResignationApiController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user();
-        $employee = $user->employee;
-
-        if (! $employee && ! $user->can('ViewAny:Resignation')) {
-            return response()->json([
-                'data' => [],
-                'pagination' => [
-                    'current_page' => 1,
-                    'last_page' => 1,
-                    'total' => 0,
-                ],
-            ]);
-        }
-
-        $query = Resignation::with('employee');
-
-        if (! $user->can('ViewAny:Resignation') && $employee) {
-            $query->where('employee_id', $employee->id);
-        }
-
-        $resignations = $query->latest()->paginate(15);
+        $resignations = Resignation::with(Resignation::workerEagerLoads())
+            ->visibleTo($request->user())
+            ->latest()
+            ->paginate(15);
 
         return response()->json([
             'data' => ResignationResource::collection($resignations),
@@ -87,14 +70,13 @@ class ResignationApiController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
-        $resignation = Resignation::with('employee')->find($id);
+        $resignation = Resignation::with(Resignation::workerEagerLoads())->find($id);
 
         if (! $resignation) {
             return response()->json(['message' => 'Pengajuan pengunduran diri tidak ditemukan.'], 404);
         }
 
-        $employee = $request->user()->employee;
-        if ($request->user()->hasRole('Employee') && $employee && $resignation->employee_id !== $employee->id) {
+        if (! Resignation::query()->visibleTo($request->user())->whereKey($resignation->getKey())->exists()) {
             return response()->json(['message' => 'Anda tidak memiliki akses ke pengajuan ini.'], 403);
         }
 

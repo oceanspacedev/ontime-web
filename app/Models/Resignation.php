@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\ScopesToWorkerVisibility;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -9,7 +10,17 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class Resignation extends Model
 {
-    use HasFactory;
+    use HasFactory, ScopesToWorkerVisibility;
+
+    /**
+     * Resignations are only filed by employees.
+     *
+     * @return list<string>
+     */
+    public static function workerRelations(): array
+    {
+        return ['employee'];
+    }
 
     protected $fillable = [
         'employee_id',

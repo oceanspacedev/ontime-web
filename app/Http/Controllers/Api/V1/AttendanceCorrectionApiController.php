@@ -34,7 +34,7 @@ class AttendanceCorrectionApiController extends Controller
             ]);
         }
 
-        $query = AttendanceCorrection::query();
+        $query = AttendanceCorrection::query()->with(AttendanceCorrection::workerEagerLoads());
         if ($employee) {
             $query->where('employee_id', $employee->id);
         } elseif ($intern) {
@@ -157,7 +157,7 @@ class AttendanceCorrectionApiController extends Controller
         $user = $request->user();
         $correction = AttendanceCorrection::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
 
-        if (! $user->can('ViewAny:AttendanceCorrection') && $correction->employee_id !== $user->employee?->id && $correction->intern_id !== $user->intern?->id && $correction->freelancer_id !== $user->freelancer?->id) {
+        if (! AttendanceCorrection::query()->visibleTo($user)->whereKey($correction->getKey())->exists()) {
             return response()->json(['message' => 'Unauthorized access.'], 403);
         }
 

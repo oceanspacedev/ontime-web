@@ -59,7 +59,7 @@ class DatabaseSeeder extends Seeder
             }
 
             if ($comp->approvalFlows()->count() === 0) {
-                foreach (['leave' => 'Cuti / Izin', 'overtime' => 'Lembur', 'correction' => 'Koreksi Absensi'] as $requestType => $label) {
+                foreach (['leave' => 'Cuti / Izin', 'overtime' => 'Lembur', 'correction' => 'Koreksi Absensi', 'resignation' => 'Pengunduran Diri'] as $requestType => $label) {
                     ApprovalFlow::create([
                         'company_id' => $comp->id,
                         'request_type' => $requestType,
@@ -90,6 +90,16 @@ class DatabaseSeeder extends Seeder
                         'approver_role' => 'Superadmin',
                     ]);
                 }
+
+                ApprovalFlow::create([
+                    'company_id' => $comp->id,
+                    'request_type' => 'geofence',
+                    'step_number' => 1,
+                    'step_order' => 1,
+                    'name' => 'Persetujuan Presensi Luar Geofence',
+                    'approver_type' => 'role',
+                    'approver_role' => 'Approver',
+                ]);
             }
         }
 

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MapPickerField;
 use App\Filament\Resources\CompanyResource\Pages;
 use App\Models\Company;
@@ -27,10 +28,14 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
 
 class CompanyResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Company::class;
 
     protected static ?string $modelLabel = 'Badan Usaha';
@@ -45,7 +50,30 @@ class CompanyResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    /**
+     * Admin Badan Usaha edits their own companies; only Superadmin adds or removes companies.
+     */
+    public static function canCreate(): bool
+    {
+        return auth()->user()?->hasRole('Superadmin') ?? false;
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return auth()->user()?->hasRole('Superadmin') ?? false;
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return auth()->user()?->hasRole('Superadmin') ?? false;
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery(), 'companies.id');
     }
 
     public static function form(Schema $schema): Schema

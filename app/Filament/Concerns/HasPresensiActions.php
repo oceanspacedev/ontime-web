@@ -5,9 +5,11 @@ namespace App\Filament\Concerns;
 use App\Enums\AttendanceStatus;
 use App\Models\Attendance;
 use App\Models\CompanyPolicy;
+use App\Models\Shift;
 use App\Services\ApprovalFlowService;
 use App\Services\FaceRecognitionService;
 use App\Services\GeofenceService;
+use App\Services\WorkScheduleService;
 use Filament\Notifications\Notification;
 
 trait HasPresensiActions
@@ -30,6 +32,18 @@ trait HasPresensiActions
         return $user?->employee ?? $user?->intern ?? $user?->freelancer;
     }
 
+    /**
+     * Working hours that apply today (dated schedule, default shift, or company policy).
+     *
+     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string}|null
+     */
+    public function getTodayWorkingHoursProperty(): ?array
+    {
+        $profile = $this->getLinkedProfile();
+
+        return $profile ? app(WorkScheduleService::class)->resolve($profile, now()) : null;
+    }
+
     public function getCompanyPolicyProperty(): ?CompanyPolicy
     {
         $profile = $this->getLinkedProfile();
@@ -39,6 +53,18 @@ trait HasPresensiActions
 
     public function processCheckIn(?string $photoPath = null, ?float $lat = null, ?float $lng = null): void
     {
+        $existingAttendance = $this->todayAttendance;
+
+        if ($existingAttendance?->check_in) {
+            Notification::make()
+                ->title('Sudah Check In')
+                ->body('Anda sudah melakukan check in hari ini.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
         $policy = $this->companyPolicy;
         $requirePhoto = $policy?->require_photo ?? false;
         $requireGps = $policy?->require_gps ?? false;
@@ -138,27 +164,30 @@ trait HasPresensiActions
             }
         }
 
-        // Late calculation
+        // Late calculation from today's shift (schedule, default shift, then company policy)
         $now = now();
-        $workStartTimeStr = $policy?->work_start_time ?? '08:00:00';
-        $lateToleranceMinutes = $policy?->late_tolerance_minutes ?? 15;
-
-        $shiftStartThreshold = now()->setTimeFromTimeString($workStartTimeStr)->addMinutes($lateToleranceMinutes);
+        $workSchedule = app(WorkScheduleService::class);
+        $workingHours = $workSchedule->resolve($profile, $now);
 
         $requiresApproval = $isOutOfBounds || $faceFailedAndRequiresApproval;
-        $status = $requiresApproval ? AttendanceStatus::PendingApproval : AttendanceStatus::OnTime;
-        $lateMinutes = 0;
+        $lateMinutes = $requiresApproval ? 0 : $workSchedule->lateMinutes($workingHours, $now);
+        $status = match (true) {
+            $requiresApproval => AttendanceStatus::PendingApproval,
+            $lateMinutes > 0 => AttendanceStatus::Late,
+            default => AttendanceStatus::OnTime,
+        };
 
-        if (! $requiresApproval && $now->greaterThan($shiftStartThreshold)) {
-            $status = AttendanceStatus::Late;
-            $lateMinutes = (int) $now->diffInMinutes(now()->setTimeFromTimeString($workStartTimeStr));
-        }
-
-        $attendance = Attendance::create([
+        // Reuse today's row (for example one created by an approved correction) instead of
+        // inserting a second row, which the unique (worker, date) index rejects.
+        $attendance = $existingAttendance ?? new Attendance([
             'employee_id' => $employee?->id,
             'intern_id' => $intern?->id,
             'freelancer_id' => $freelancer?->id,
             'date' => today(),
+        ]);
+
+        $attendance->fill([
+            'shift_id' => $workingHours['shift']?->id,
             'check_in' => $now,
             'check_in_photo' => $photoPath,
             'check_in_lat' => $lat,
@@ -169,7 +198,7 @@ trait HasPresensiActions
             'is_face_verified' => $isFaceVerified,
             'face_match_score' => $faceMatchScore,
             'face_verification_notes' => $faceVerificationNotes,
-        ]);
+        ])->save();
 
         if ($requiresApproval) {
             app(ApprovalFlowService::class)->generateSteps($attendance, 'geofence');
@@ -194,11 +223,21 @@ trait HasPresensiActions
     public function processCheckOut(?string $photoPath = null, ?float $lat = null, ?float $lng = null): void
     {
         $attendance = $this->todayAttendance;
-        if (! $attendance) {
+        if (! $attendance?->check_in) {
             Notification::make()
                 ->title('Check Out Gagal')
                 ->body('Anda belum melakukan Check In hari ini.')
                 ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($attendance->check_out) {
+            Notification::make()
+                ->title('Sudah Check Out')
+                ->body('Anda sudah melakukan check out hari ini.')
+                ->warning()
                 ->send();
 
             return;

@@ -2,16 +2,20 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\EmployeeResource\Pages;
+use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
+use App\Models\Shift;
 use App\Models\User;
 use App\Services\WhatsAppNotificationService;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Actions\BulkAction;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -27,15 +31,20 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class EmployeeResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Employee::class;
 
     protected static ?string $modelLabel = 'Karyawan';
@@ -50,7 +59,17 @@ class EmployeeResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('user.roles'));
+    }
+
+    public static function canImportFromTalenta(): bool
+    {
+        return static::canManageCompanyData();
     }
 
     public static function form(Schema $schema): Schema
@@ -73,10 +92,13 @@ class EmployeeResource extends Resource
 
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(Company::query()->where('is_active', true)->pluck('name', 'id'))
+                                ->options(fn (): array => static::managedCompanyOptions())
                                 ->required()
                                 ->live()
-                                ->afterStateUpdated(fn ($set) => $set('division_id', null)),
+                                ->afterStateUpdated(function ($set): void {
+                                    $set('division_id', null);
+                                    $set('shift_id', null);
+                                }),
 
                             Select::make('division_id')
                                 ->label('Divisi')
@@ -116,6 +138,13 @@ class EmployeeResource extends Resource
                                 ->searchable()
                                 ->required(),
 
+                            Select::make('shift_id')
+                                ->label('Shift Default')
+                                ->options(fn (Get $get, ?Employee $record): array => ShiftScheduleResource::shiftOptions($get('company_id')) + ($record?->shift ? [$record->shift_id => $record->shift->label()] : []))
+                                ->placeholder('Ikut jam kerja badan usaha')
+                                ->helperText('Dipakai bila tidak ada jadwal shift pada tanggal tersebut.')
+                                ->nullable(),
+
                             TextInput::make('email')
                                 ->label('Email')
                                 ->email()
@@ -135,6 +164,7 @@ class EmployeeResource extends Resource
                                 ->options([
                                     'active' => 'Aktif',
                                     'inactive' => 'Non-Aktif',
+                                    'resigned' => 'Resign',
                                 ])
                                 ->default('active')
                                 ->required(),
@@ -142,7 +172,7 @@ class EmployeeResource extends Resource
                             Select::make('user_id')
                                 ->label('Akun User Sistem (Opsional)')
                                 ->placeholder('Pilih Akun User')
-                                ->options(User::query()->pluck('name', 'id'))
+                                ->options(fn (?Employee $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
                                 ->searchable()
                                 ->nullable(),
 
@@ -153,6 +183,36 @@ class EmployeeResource extends Resource
                                 ->helperText('Pilih foto dari penyimpanan atau ambil foto via kamera langsung sebagai referensi Face Recognition.'),
                         ]),
                     ]),
+
+                Section::make('Data Pribadi')
+                    ->description('Ikut terisi dari import Talenta.')
+                    ->collapsible()
+                    ->schema([
+                        Grid::make(2)->schema([
+                            Select::make('gender')
+                                ->label('Jenis Kelamin')
+                                ->options(['Male' => 'Laki-laki', 'Female' => 'Perempuan']),
+
+                            DatePicker::make('birth_date')
+                                ->label('Tanggal Lahir')
+                                ->native(false),
+
+                            TextInput::make('marital_status')
+                                ->label('Status Pernikahan')
+                                ->datalist(['Single', 'Married', 'Widow', 'Widower', 'Divorced'])
+                                ->maxLength(50),
+
+                            TextInput::make('tax_status')
+                                ->label('Status Pajak (PTKP)')
+                                ->datalist(['TK/0', 'TK/1', 'TK/2', 'TK/3', 'K/0', 'K/1', 'K/2', 'K/3'])
+                                ->maxLength(20),
+
+                            TextInput::make('talenta_id')
+                                ->label('ID Talenta')
+                                ->helperText('Diisi otomatis oleh import Talenta.')
+                                ->readOnly(),
+                        ]),
+                    ]),
             ]);
     }
 
@@ -160,6 +220,12 @@ class EmployeeResource extends Resource
     {
         return $table
             ->columns([
+                ImageColumn::make('avatar_url')
+                    ->label('')
+                    ->circular()
+                    ->imageSize(32)
+                    ->toggleable(),
+
                 TextColumn::make('nip')
                     ->label('NIP')
                     ->searchable()
@@ -193,10 +259,12 @@ class EmployeeResource extends Resource
                     ->colors([
                         'success' => 'active',
                         'danger' => 'inactive',
+                        'gray' => 'resigned',
                     ])
                     ->formatStateUsing(fn (string $state) => match ($state) {
                         'active' => 'Aktif',
                         'inactive' => 'Non-Aktif',
+                        'resigned' => 'Resign',
                         default => ucfirst($state),
                     }),
 
@@ -248,6 +316,7 @@ class EmployeeResource extends Resource
                     ->options([
                         'active' => 'Aktif',
                         'inactive' => 'Non-Aktif',
+                        'resigned' => 'Resign',
                     ]),
             ])
             ->actions([
@@ -266,7 +335,7 @@ class EmployeeResource extends Resource
                             ->required(),
                         Select::make('role')
                             ->label('Role Akses')
-                            ->options(fn () => Role::pluck('name', 'name')->toArray())
+                            ->options(fn (): array => static::assignableRoleOptions())
                             ->default('Employee')
                             ->required(),
                         TextInput::make('password')
@@ -295,6 +364,8 @@ class EmployeeResource extends Resource
                             'phone' => $record->phone,
                             'password' => Hash::make($password),
                         ]);
+
+                        abort_unless(array_key_exists($roleName, static::assignableRoleOptions()), 403);
 
                         if ($role = Role::firstOrCreate(['name' => $roleName])) {
                             $user->assignRole($role);
@@ -335,7 +406,7 @@ class EmployeeResource extends Resource
                     ->label('Hapus Akun')
                     ->icon('heroicon-o-user-minus')
                     ->color('danger')
-                    ->visible(fn (Employee $record): bool => (bool) $record->user_id)
+                    ->visible(fn (Employee $record): bool => (bool) $record->user_id && static::canManageAccount($record->user))
                     ->requiresConfirmation()
                     ->modalHeading(fn (Employee $record) => "Hapus Akun User {$record->full_name}")
                     ->modalDescription('Apakah Anda yakin ingin menghapus akun user ini? Pengguna ini tidak akan dapat login lagi ke sistem.')
@@ -355,6 +426,37 @@ class EmployeeResource extends Resource
             ])
             ->bulkActions([
                 BulkActionGroup::make([
+                    BulkAction::make('assignDefaultShift')
+                        ->label('Atur Shift Default')
+                        ->icon('heroicon-o-clock')
+                        ->schema([
+                            Select::make('shift_id')
+                                ->label('Shift')
+                                ->options(fn (): array => static::scopeToManagedCompanies(Shift::query()->active()->with('company'))
+                                    ->get()
+                                    ->mapWithKeys(fn (Shift $shift): array => [$shift->id => "{$shift->company->name} - {$shift->label()}"])
+                                    ->all())
+                                ->placeholder('Kosongkan untuk ikut jam kerja badan usaha')
+                                ->searchable(),
+                        ])
+                        ->action(function (Collection $records, array $data): void {
+                            $shift = filled($data['shift_id'] ?? null) ? Shift::query()->find($data['shift_id']) : null;
+                            abort_if($shift && ! auth()->user()?->canManageCompany($shift->company_id), 403);
+
+                            // A shift belongs to one company, so only employees of that company receive it.
+                            $targets = $records->filter(fn (Employee $employee): bool => $shift ? (int) $employee->company_id === (int) $shift->company_id : true);
+                            Employee::query()->whereKey($targets->modelKeys())->update(['shift_id' => $shift?->id]);
+
+                            $skipped = $records->count() - $targets->count();
+
+                            Notification::make()
+                                ->title('Shift default diperbarui')
+                                ->body("{$targets->count()} karyawan diperbarui".($skipped > 0 ? ", {$skipped} dilewati karena beda badan usaha dengan shift." : '.'))
+                                ->success()
+                                ->send();
+                        })
+                        ->deselectRecordsAfterCompletion(),
+
                     DeleteBulkAction::make(),
                 ]),
             ]);

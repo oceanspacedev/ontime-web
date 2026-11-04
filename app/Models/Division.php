@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\PreventsDeletionWhileInUse;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -11,7 +12,7 @@ use Illuminate\Validation\ValidationException;
 
 class Division extends Model
 {
-    use HasFactory;
+    use HasFactory, PreventsDeletionWhileInUse;
 
     protected $fillable = [
         'company_id',
@@ -47,14 +48,22 @@ class Division extends Model
         });
     }
 
+    /**
+     * Number of ancestors above this division. Uses one cached id map per request instead of
+     * walking the `parent` relation, which would lazy load once per level and per row.
+     */
     public function getDepth(): int
     {
-        $depth = 0;
-        $current = $this->parent;
+        $parentIdsById = once(fn (): array => static::query()->pluck('parent_id', 'id')->all());
 
-        while ($current) {
+        $depth = 0;
+        $visited = [];
+        $current = $parentIdsById[$this->id] ?? null;
+
+        while ($current !== null && ! isset($visited[$current])) {
+            $visited[$current] = true;
             $depth++;
-            $current = $current->parent;
+            $current = $parentIdsById[$current] ?? null;
         }
 
         return $depth;
@@ -62,17 +71,30 @@ class Division extends Model
 
     public function isDescendantOf(int $targetId): bool
     {
-        $childrenIds = $this->getAllChildrenIds();
-
-        return in_array($targetId, $childrenIds, true);
+        return in_array($targetId, $this->getAllChildrenIds(), true);
     }
 
+    /**
+     * Ids of every division below this one, resolved level by level with one query per level.
+     *
+     * @return list<int>
+     */
     public function getAllChildrenIds(): array
     {
         $ids = [];
-        foreach ($this->children as $child) {
-            $ids[] = $child->id;
-            $ids = array_merge($ids, $child->getAllChildrenIds());
+        $frontier = [(int) $this->id];
+
+        while ($frontier !== []) {
+            $children = static::query()
+                ->whereIn('parent_id', $frontier)
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->reject(fn (int $id): bool => $id === (int) $this->id || in_array($id, $ids, true))
+                ->values()
+                ->all();
+
+            $ids = array_merge($ids, $children);
+            $frontier = $children;
         }
 
         return $ids;
@@ -113,5 +135,24 @@ class Division extends Model
     public function jobTitles(): HasMany
     {
         return $this->hasMany(JobTitle::class);
+    }
+
+    public function interns(): HasMany
+    {
+        return $this->hasMany(Intern::class);
+    }
+
+    public function freelancers(): HasMany
+    {
+        return $this->hasMany(Freelancer::class);
+    }
+
+    public function deletionBlockedReason(): ?string
+    {
+        if ($this->employees()->exists() || $this->interns()->exists() || $this->freelancers()->exists()) {
+            return "Divisi {$this->name} masih memiliki karyawan, magang, atau freelancer. Pindahkan mereka ke divisi lain sebelum menghapus.";
+        }
+
+        return null;
     }
 }

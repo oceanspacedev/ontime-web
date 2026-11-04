@@ -3,15 +3,15 @@
 namespace App\Models;
 
 use App\Traits\HasNormalizedPhone;
+use App\Traits\PreventsDeletionWhileInUse;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
-use Illuminate\Validation\ValidationException;
 
 class Company extends Model
 {
-    use HasFactory, HasNormalizedPhone;
+    use HasFactory, HasNormalizedPhone, PreventsDeletionWhileInUse;
 
     protected $fillable = [
         'name',
@@ -47,14 +47,15 @@ class Company extends Model
                 'work_end_time' => '17:00:00',
             ]);
         });
+    }
 
-        static::deleting(function (Company $company) {
-            if ($company->divisions()->exists() || $company->employees()->exists()) {
-                throw ValidationException::withMessages([
-                    'company' => 'Tidak dapat menghapus badan usaha ini karena masih memiliki divisi atau karyawan yang terikat.',
-                ]);
-            }
-        });
+    public function deletionBlockedReason(): ?string
+    {
+        if ($this->divisions()->exists() || $this->employees()->exists()) {
+            return 'Tidak dapat menghapus badan usaha ini karena masih memiliki divisi atau karyawan yang terikat.';
+        }
+
+        return null;
     }
 
     public function divisions(): HasMany

@@ -2,9 +2,9 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MapPickerField;
 use App\Filament\Resources\CompanyLocationResource\Pages;
-use App\Models\Company;
 use App\Models\CompanyLocation;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
@@ -24,10 +24,13 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use UnitEnum;
 
 class CompanyLocationResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = CompanyLocation::class;
 
     protected static ?string $modelLabel = 'Lokasi / Cabang';
@@ -42,7 +45,12 @@ class CompanyLocationResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery());
     }
 
     public static function form(Schema $schema): Schema
@@ -54,7 +62,7 @@ class CompanyLocationResource extends Resource
                         Grid::make(2)->schema([
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(Company::query()->where('is_active', true)->pluck('name', 'id'))
+                                ->options(fn (): array => static::managedCompanyOptions())
                                 ->required()
                                 ->searchable(),
 

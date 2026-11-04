@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Enums\AttendanceStatus;
+use App\Services\WorkScheduleService;
+use App\Traits\ScopesToWorkerVisibility;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -13,12 +15,13 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class Attendance extends Model
 {
-    use HasFactory;
+    use HasFactory, ScopesToWorkerVisibility;
 
     protected $fillable = [
         'employee_id',
         'intern_id',
         'freelancer_id',
+        'shift_id',
         'date',
         'check_in',
         'check_out',
@@ -61,6 +64,14 @@ class Attendance extends Model
 
     // ── Relationships ────────────────────────────────────────────────────────
 
+    /**
+     * Shift that applied when the worker checked in.
+     */
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(Shift::class);
+    }
+
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class);
@@ -94,25 +105,16 @@ class Attendance extends Model
     public function applyGeofenceApproval(): void
     {
         $profile = $this->getWorkerProfile();
-        $policy = $profile?->company?->policy;
-
-        $status = AttendanceStatus::OnTime;
         $lateMinutes = 0;
 
-        if ($this->check_in) {
-            $workStartStr = $policy?->work_start_time ?? '08:00:00';
-            $toleranceMinutes = $policy?->late_tolerance_minutes ?? 15;
+        if ($this->check_in && $profile) {
+            $workSchedule = app(WorkScheduleService::class);
             $checkInTime = Carbon::parse($this->check_in);
-            $shiftStartThreshold = (clone $checkInTime)->setTimeFromTimeString($workStartStr)->addMinutes($toleranceMinutes);
-
-            if ($checkInTime->greaterThan($shiftStartThreshold)) {
-                $status = AttendanceStatus::Late;
-                $lateMinutes = (int) $checkInTime->diffInMinutes((clone $checkInTime)->setTimeFromTimeString($workStartStr));
-            }
+            $lateMinutes = $workSchedule->lateMinutes($workSchedule->resolve($profile, $checkInTime), $checkInTime);
         }
 
         $this->update([
-            'status' => $status,
+            'status' => $lateMinutes > 0 ? AttendanceStatus::Late : AttendanceStatus::OnTime,
             'late_minutes' => $lateMinutes,
         ]);
     }

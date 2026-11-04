@@ -34,7 +34,7 @@ class OvertimeRequestApiController extends Controller
             ]);
         }
 
-        $query = OvertimeRequest::query();
+        $query = OvertimeRequest::query()->with(OvertimeRequest::workerEagerLoads());
         if ($employee) {
             $query->where('employee_id', $employee->id);
         } elseif ($intern) {
@@ -69,6 +69,12 @@ class OvertimeRequestApiController extends Controller
 
         $startTime = Carbon::parse($request->input('start_time'));
         $endTime = Carbon::parse($request->input('end_time'));
+
+        // Overtime that ends after midnight, same rule as the web form.
+        if ($endTime->lessThanOrEqualTo($startTime)) {
+            $endTime->addDay();
+        }
+
         $durationMinutes = (int) $startTime->diffInMinutes($endTime);
 
         $overtimeRequest = OvertimeRequest::create([
@@ -128,6 +134,11 @@ class OvertimeRequestApiController extends Controller
         if (isset($data['start_time']) || isset($data['end_time'])) {
             $start = Carbon::parse($data['start_time'] ?? $overtimeRequest->start_time);
             $end = Carbon::parse($data['end_time'] ?? $overtimeRequest->end_time);
+
+            if ($end->lessThanOrEqualTo($start)) {
+                $end->addDay();
+            }
+
             $data['duration_minutes'] = (int) $start->diffInMinutes($end);
         }
 
@@ -144,7 +155,7 @@ class OvertimeRequestApiController extends Controller
         $user = $request->user();
         $overtimeRequest = OvertimeRequest::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
 
-        if (! $user->can('ViewAny:OvertimeRequest') && $overtimeRequest->employee_id !== $user->employee?->id && $overtimeRequest->intern_id !== $user->intern?->id && $overtimeRequest->freelancer_id !== $user->freelancer?->id) {
+        if (! OvertimeRequest::query()->visibleTo($user)->whereKey($overtimeRequest->getKey())->exists()) {
             return response()->json(['message' => 'Unauthorized access.'], 403);
         }
 

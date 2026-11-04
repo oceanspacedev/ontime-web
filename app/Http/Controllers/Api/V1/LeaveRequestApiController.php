@@ -43,7 +43,7 @@ class LeaveRequestApiController extends Controller
         $policy = $profile->company?->policy;
         $maxQuota = $policy?->annual_leave_quota ?? 12;
 
-        $query = LeaveRequest::query();
+        $query = LeaveRequest::query()->with(LeaveRequest::workerEagerLoads());
         if ($employee) {
             $query->where('employee_id', $employee->id);
         } elseif ($intern) {
@@ -216,7 +216,7 @@ class LeaveRequestApiController extends Controller
         $user = $request->user();
         $leaveRequest = LeaveRequest::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
 
-        if (! $user->can('ViewAny:LeaveRequest') && $leaveRequest->employee_id !== $user->employee?->id && $leaveRequest->intern_id !== $user->intern?->id && $leaveRequest->freelancer_id !== $user->freelancer?->id) {
+        if (! LeaveRequest::query()->visibleTo($user)->whereKey($leaveRequest->getKey())->exists()) {
             return response()->json(['message' => 'Unauthorized access.'], 403);
         }
 

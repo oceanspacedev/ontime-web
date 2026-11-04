@@ -45,4 +45,11 @@ return [
         'maps_key' => env('GOOGLE_MAPS_API_KEY', ''),
     ],
 
+    'core' => [
+        'client_id' => env('CORE_CLIENT_ID'),
+        'client_secret' => env('CORE_CLIENT_SECRET'),
+        'redirect' => env('CORE_REDIRECT_URI'),
+        'webhook_secret' => env('CORE_WEBHOOK_SECRET'),
+    ],
+
 ];

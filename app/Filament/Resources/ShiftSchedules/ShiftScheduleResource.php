@@ -1,0 +1,228 @@
+<?php
+
+namespace App\Filament\Resources\ShiftSchedules;
+
+use App\Filament\Concerns\ScopesToManagedCompanies;
+use App\Filament\Resources\ShiftSchedules\Pages\ManageShiftSchedules;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
+use App\Models\Shift;
+use App\Models\ShiftSchedule;
+use BackedEnum;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
+use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
+use Filament\Resources\Resource;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use UnitEnum;
+
+class ShiftScheduleResource extends Resource
+{
+    use ScopesToManagedCompanies;
+
+    protected static ?string $model = ShiftSchedule::class;
+
+    protected static ?string $modelLabel = 'Jadwal Shift';
+
+    protected static ?string $pluralModelLabel = 'Jadwal Shift';
+
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCalendarDays;
+
+    protected static string|UnitEnum|null $navigationGroup = 'Jadwal & Shift';
+
+    protected static ?int $navigationSort = 2;
+
+    public static function canViewAny(): bool
+    {
+        return static::canManageCompanyData();
+    }
+
+    /**
+     * Schedules are added in bulk with the "Atur Jadwal" action on the list page.
+     */
+    public static function canCreate(): bool
+    {
+        return false;
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return static::canManageWorkerRecord($record);
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return static::canManageWorkerRecord($record);
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        $user = auth()->user();
+        $query = parent::getEloquentQuery()->with([...ShiftSchedule::workerEagerLoads(), 'shift']);
+
+        return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
+    }
+
+    public static function form(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                Toggle::make('is_day_off')
+                    ->label('Libur')
+                    ->live(),
+
+                Select::make('shift_id')
+                    ->label('Shift')
+                    ->options(fn (?ShiftSchedule $record): array => static::shiftOptions($record?->getWorkerProfile()?->company_id))
+                    ->required(fn (Get $get): bool => ! $get('is_day_off'))
+                    ->hidden(fn (Get $get): bool => (bool) $get('is_day_off')),
+
+                TextInput::make('notes')
+                    ->label('Catatan')
+                    ->maxLength(255),
+            ]);
+    }
+
+    public static function table(Table $table): Table
+    {
+        return $table
+            ->defaultSort('date', 'desc')
+            ->columns([
+                TextColumn::make('date')
+                    ->label('Tanggal')
+                    ->date('D, d M Y')
+                    ->sortable(),
+
+                TextColumn::make('worker_name')
+                    ->label('Pekerja')
+                    ->state(fn (ShiftSchedule $record): string => $record->getWorkerProfile()?->full_name ?? '-')
+                    ->description(fn (ShiftSchedule $record): string => match (true) {
+                        $record->employee_id !== null => 'Karyawan',
+                        $record->intern_id !== null => 'Magang',
+                        default => 'Freelancer',
+                    })
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->where(fn (Builder $q) => $q
+                        ->whereHas('employee', fn ($worker) => $worker->where('full_name', 'like', "%{$search}%"))
+                        ->orWhereHas('intern', fn ($worker) => $worker->where('full_name', 'like', "%{$search}%"))
+                        ->orWhereHas('freelancer', fn ($worker) => $worker->where('full_name', 'like', "%{$search}%")))),
+
+                TextColumn::make('company')
+                    ->label('Badan Usaha')
+                    ->state(fn (ShiftSchedule $record): string => $record->getWorkerProfile()?->company?->name ?? '-'),
+
+                TextColumn::make('shift_label')
+                    ->label('Shift')
+                    ->badge()
+                    ->state(fn (ShiftSchedule $record): string => $record->is_day_off ? 'Libur' : ($record->shift?->label() ?? '-'))
+                    ->color(fn (ShiftSchedule $record): string => $record->is_day_off ? 'gray' : 'primary'),
+
+                TextColumn::make('notes')
+                    ->label('Catatan')
+                    ->placeholder('-')
+                    ->limit(40),
+            ])
+            ->filters([
+                SelectFilter::make('company')
+                    ->label('Badan Usaha')
+                    ->options(fn (): array => static::managedCompanyOptions(activeOnly: false))
+                    ->query(fn (Builder $query, array $data): Builder => filled($data['value'] ?? null)
+                        ? $query->whereWorkerInCompanies([(int) $data['value']])
+                        : $query),
+
+                Filter::make('date_range')
+                    ->label('Rentang Tanggal')
+                    ->schema([
+                        DatePicker::make('from')->label('Dari'),
+                        DatePicker::make('until')->label('Sampai'),
+                    ])
+                    ->query(fn (Builder $query, array $data): Builder => $query
+                        ->when($data['from'] ?? null, fn (Builder $q, $date) => $q->whereDate('date', '>=', $date))
+                        ->when($data['until'] ?? null, fn (Builder $q, $date) => $q->whereDate('date', '<=', $date))),
+
+                TernaryFilter::make('is_day_off')
+                    ->label('Libur'),
+            ])
+            ->recordActions([
+                EditAction::make(),
+                DeleteAction::make(),
+            ])
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    DeleteBulkAction::make(),
+                ]),
+            ]);
+    }
+
+    /**
+     * Active shifts of a company the current user manages.
+     *
+     * @return array<int, string>
+     */
+    public static function shiftOptions(int|string|null $companyId): array
+    {
+        if (! $companyId || ! auth()->user()?->canManageCompany($companyId)) {
+            return [];
+        }
+
+        return Shift::query()
+            ->active()
+            ->where('company_id', $companyId)
+            ->orderBy('start_time')
+            ->get()
+            ->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])
+            ->all();
+    }
+
+    /**
+     * Active workers of a company, grouped by type and keyed "employee:ID", "intern:ID" or "freelancer:ID".
+     *
+     * @return array<string, array<string, string>>
+     */
+    public static function workerOptions(int|string|null $companyId): array
+    {
+        if (! $companyId || ! auth()->user()?->canManageCompany($companyId)) {
+            return [];
+        }
+
+        $options = [];
+
+        foreach (['Karyawan' => [Employee::class, 'employee', 'nip'], 'Magang' => [Intern::class, 'intern', 'nis'], 'Freelancer' => [Freelancer::class, 'freelancer', 'freelancer_number']] as $group => [$model, $type, $code]) {
+            $options[$group] = $model::query()
+                ->where('company_id', $companyId)
+                ->where('status', 'active')
+                ->orderBy('full_name')
+                ->get(['id', $code, 'full_name'])
+                ->mapWithKeys(fn (Model $worker): array => ["{$type}:{$worker->id}" => trim("{$worker->{$code}} - {$worker->full_name}", ' -')])
+                ->all();
+        }
+
+        return array_filter($options);
+    }
+
+    public static function getPages(): array
+    {
+        return [
+            'index' => ManageShiftSchedules::route('/'),
+        ];
+    }
+}

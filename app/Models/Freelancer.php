@@ -16,6 +16,7 @@ class Freelancer extends Model
         'user_id',
         'company_id',
         'division_id',
+        'shift_id',
         'supervisor_id',
         'freelancer_number',
         'full_name',
@@ -46,6 +47,14 @@ class Freelancer extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /**
+     * Default shift; a dated ShiftSchedule overrides it.
+     */
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(Shift::class);
     }
 
     public function division(): BelongsTo

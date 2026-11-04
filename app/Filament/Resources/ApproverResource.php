@@ -2,9 +2,9 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\ApproverResource\Pages;
 use App\Models\Approver;
-use App\Models\Company;
 use App\Models\Division;
 use App\Models\User;
 use BackedEnum;
@@ -25,10 +25,13 @@ use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use UnitEnum;
 
 class ApproverResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Approver::class;
 
     protected static ?string $modelLabel = 'Penugasan Approver';
@@ -43,7 +46,12 @@ class ApproverResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return static::scopeToManagedCompanies(parent::getEloquentQuery());
     }
 
     public static function form(Schema $schema): Schema
@@ -62,7 +70,7 @@ class ApproverResource extends Resource
                                         ->whereHas('roles', function ($query) {
                                             $query->whereIn('name', ['Approver', 'BOD']);
                                         })
-                                        ->whereHas('employee')
+                                        ->whereHas('employee', fn (Builder $employee) => static::scopeToManagedCompanies($employee))
                                         ->get()
                                         ->pluck('name', 'id');
                                 })
@@ -91,7 +99,7 @@ class ApproverResource extends Resource
 
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(Company::query()->where('is_active', true)->pluck('name', 'id'))
+                                ->options(fn (): array => static::managedCompanyOptions())
                                 ->required()
                                 ->live()
                                 ->afterStateUpdated(fn (Set $set) => $set('division_id', null)),

@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Models\Employee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class WebhookReceiverTest extends TestCase
@@ -14,11 +14,11 @@ class WebhookReceiverTest extends TestCase
     {
         config(['services.core.webhook_secret' => 'secret123']);
 
-        \Illuminate\Support\Facades\DB::table('companies')->insert(['id' => 1, 'name' => 'Company', 'code' => 'C1']);
-        \Illuminate\Support\Facades\DB::table('job_levels')->insert(['id' => 1, 'name' => 'Level 1']);
-        \Illuminate\Support\Facades\DB::table('divisions')->insert(['id' => 1, 'name' => 'Div 1', 'company_id' => 1]);
-        \Illuminate\Support\Facades\DB::table('job_titles')->insert(['id' => 1, 'name' => 'Title 1', 'division_id' => 1]);
-        \Illuminate\Support\Facades\DB::table('employees')->insert([
+        DB::table('companies')->insert(['id' => 1, 'name' => 'Company', 'code' => 'C1']);
+        DB::table('job_levels')->insert(['id' => 1, 'name' => 'Level 1']);
+        DB::table('divisions')->insert(['id' => 1, 'name' => 'Div 1', 'company_id' => 1]);
+        DB::table('job_titles')->insert(['id' => 1, 'name' => 'Title 1', 'division_id' => 1]);
+        DB::table('employees')->insert([
             'id' => 99,
             'full_name' => 'Old Name',
             'nip' => 'EMP99',
@@ -72,6 +72,52 @@ class WebhookReceiverTest extends TestCase
 
         $response = $this->postJson('/api/webhooks/employees', $payload, [
             'X-Signature' => 'wrong-signature',
+        ]);
+
+        $response->assertStatus(401);
+    }
+
+    public function test_rejects_payload_signed_with_empty_key_when_secret_is_not_configured(): void
+    {
+        config(['services.core.webhook_secret' => null]);
+
+        DB::table('companies')->insert(['id' => 1, 'name' => 'Company', 'code' => 'C1']);
+        DB::table('job_levels')->insert(['id' => 1, 'name' => 'Level 1']);
+        DB::table('divisions')->insert(['id' => 1, 'name' => 'Div 1', 'company_id' => 1]);
+        DB::table('job_titles')->insert(['id' => 1, 'name' => 'Title 1', 'division_id' => 1]);
+        DB::table('employees')->insert([
+            'id' => 99,
+            'full_name' => 'Old Name',
+            'nip' => 'EMP99',
+            'company_id' => 1,
+            'job_level_id' => 1,
+            'job_title_id' => 1,
+            'division_id' => 1,
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $payload = [
+            'action' => 'updated',
+            'employee' => ['id' => 99, 'name' => 'Forged Name', 'status' => 'active'],
+        ];
+
+        $response = $this->postJson('/api/webhooks/employees', $payload, [
+            'X-Signature' => hash_hmac('sha256', json_encode($payload), ''),
+        ]);
+
+        $response->assertStatus(503);
+        $this->assertDatabaseHas('employees', ['id' => 99, 'full_name' => 'Old Name']);
+    }
+
+    public function test_rejects_request_without_signature(): void
+    {
+        config(['services.core.webhook_secret' => 'secret123']);
+
+        $response = $this->postJson('/api/webhooks/employees', [
+            'action' => 'deleted',
+            'employee' => ['id' => 99, 'name' => 'John Doe', 'status' => 'active'],
         ]);
 
         $response->assertStatus(401);

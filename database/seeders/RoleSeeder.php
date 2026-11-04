@@ -22,6 +22,7 @@ class RoleSeeder extends Seeder
         // 2. Ensure Roles Exist
         $roles = [
             'Superadmin',
+            'Admin',
             'BOD',
             'Approver',
             'Employee',

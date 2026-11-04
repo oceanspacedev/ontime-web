@@ -2,10 +2,10 @@
 
 namespace App\Filament\Resources\AttendanceCorrections;
 
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\AttendanceCorrections\Pages\CreateAttendanceCorrection;
 use App\Filament\Resources\AttendanceCorrections\Pages\EditAttendanceCorrection;
 use App\Filament\Resources\AttendanceCorrections\Pages\ListAttendanceCorrections;
-use App\Models\Approver;
 use App\Models\AttendanceCorrection;
 use App\Services\ApprovalFlowService;
 use App\Services\FileNamingService;
@@ -34,6 +34,8 @@ use UnitEnum;
 
 class AttendanceCorrectionResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = AttendanceCorrection::class;
 
     protected static ?string $slug = 'koreksi-absensi';
@@ -57,81 +59,33 @@ class AttendanceCorrectionResource extends Resource
     {
         $user = auth()->user();
 
-        return (bool) ($user?->employee || $user?->intern || $user?->freelancer || $user?->hasRole('BOD'));
+        // Requests belong to a worker profile; a role alone (e.g. BOD without employee data) cannot submit.
+        return (bool) ($user?->employee || $user?->intern || $user?->freelancer);
     }
 
     public static function canEdit(Model $record): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return static::canManageWorkerRecord($record);
     }
 
     public static function canDelete(Model $record): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return static::canManageWorkerRecord($record);
     }
 
     public static function canDeleteAny(): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return static::canManageCompanyData();
     }
 
     public static function getEloquentQuery(): Builder
     {
-        $query = parent::getEloquentQuery();
         $user = auth()->user();
 
-        if (! $user) {
-            return $query;
-        }
+        // Eager load the worker so table columns and approve/reject checks do not lazy load per row.
+        $query = parent::getEloquentQuery()->with(['employee', 'intern', 'freelancer']);
 
-        if ($user->hasRole('Superadmin')) {
-            return $query;
-        }
-
-        $employee = $user->employee;
-        $intern = $user->intern;
-        $freelancer = $user->freelancer;
-        $isApprover = $user->hasAnyRole(['Approver', 'BOD']);
-
-        if ($isApprover) {
-            $divisionIds = Approver::where('user_id', $user->id)
-                ->whereNotNull('division_id')
-                ->pluck('division_id')
-                ->toArray();
-
-            $companyIds = Approver::where('user_id', $user->id)
-                ->whereNull('division_id')
-                ->pluck('company_id')
-                ->toArray();
-
-            return $query->where(function ($q) use ($divisionIds, $companyIds, $employee) {
-                $q->whereHas('employee', function ($sub) use ($divisionIds, $companyIds, $employee) {
-                    if (! empty($divisionIds)) {
-                        $sub->whereIn('division_id', $divisionIds);
-                    }
-                    if (! empty($companyIds)) {
-                        $sub->orWhereIn('company_id', $companyIds);
-                    }
-                    if ($employee) {
-                        $sub->orWhere('id', $employee->id);
-                    }
-                });
-            });
-        }
-
-        if ($employee) {
-            return $query->where('employee_id', $employee->id);
-        }
-
-        if ($intern) {
-            return $query->where('intern_id', $intern->id);
-        }
-
-        if ($freelancer) {
-            return $query->where('freelancer_id', $freelancer->id);
-        }
-
-        return $query->whereRaw('1 = 0');
+        return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
 
     public static function form(Schema $schema): Schema
@@ -188,10 +142,17 @@ class AttendanceCorrectionResource extends Resource
 
         return $table
             ->columns([
-                TextColumn::make('employee.full_name')
-                    ->label('Nama Karyawan')
-                    ->searchable()
-                    ->sortable(),
+                TextColumn::make('worker_name')
+                    ->label('Nama Pemohon')
+                    ->state(fn (AttendanceCorrection $record): string => $record->employee?->full_name
+                        ?? $record->intern?->full_name
+                        ?? $record->freelancer?->full_name
+                        ?? '—')
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->where(function (Builder $q) use ($search) {
+                        $q->whereHas('employee', fn ($e) => $e->where('full_name', 'like', "%{$search}%"))
+                            ->orWhereHas('intern', fn ($i) => $i->where('full_name', 'like', "%{$search}%"))
+                            ->orWhereHas('freelancer', fn ($f) => $f->where('full_name', 'like', "%{$search}%"));
+                    })),
 
                 TextColumn::make('date')
                     ->label('Tanggal Absensi')

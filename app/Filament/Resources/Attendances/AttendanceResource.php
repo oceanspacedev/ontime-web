@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Attendances;
 
 use App\Enums\AttendanceStatus;
+use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Models\Attendance;
 use App\Models\Company;
 use BackedEnum;
@@ -32,6 +33,8 @@ use UnitEnum;
 
 class AttendanceResource extends Resource
 {
+    use ScopesToManagedCompanies;
+
     protected static ?string $model = Attendance::class;
 
     protected static ?string $modelLabel = 'Data Absensi';
@@ -46,7 +49,15 @@ class AttendanceResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        return static::canManageCompanyData();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        $user = auth()->user();
+        $query = parent::getEloquentQuery()->with(['employee', 'intern', 'freelancer']);
+
+        return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
 
     public static function form(Schema $schema): Schema

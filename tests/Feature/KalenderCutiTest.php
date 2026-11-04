@@ -6,10 +6,13 @@ use App\Filament\Pages\KalenderCuti;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\LeaveRequest;
 use App\Models\User;
+use Carbon\CarbonInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
@@ -23,6 +26,10 @@ class KalenderCutiTest extends TestCase
 
     protected Employee $employee;
 
+    protected Company $company;
+
+    protected Division $division;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -32,13 +39,13 @@ class KalenderCutiTest extends TestCase
         $this->superadmin = User::factory()->create();
         $this->superadmin->assignRole('Superadmin');
 
-        $company = Company::create([
+        $company = $this->company = Company::create([
             'code' => 'COMP-CAL',
             'name' => 'PT Kalender Test',
             'is_active' => true,
         ]);
 
-        $division = Division::create([
+        $division = $this->division = Division::create([
             'company_id' => $company->id,
             'name' => 'HRD',
             'code' => 'HRD',
@@ -79,5 +86,58 @@ class KalenderCutiTest extends TestCase
         Livewire::test(KalenderCuti::class)
             ->assertSuccessful()
             ->assertSee('Staff Kalender Cuti');
+    }
+
+    public function test_calendar_shows_intern_and_freelancer_leave_without_crashing(): void
+    {
+        $intern = Intern::create(['company_id' => $this->company->id, 'division_id' => $this->division->id, 'nis' => 'MG-CAL', 'full_name' => 'Magang Kalender', 'institution' => 'SMK', 'status' => 'active']);
+        $freelancer = Freelancer::create(['company_id' => $this->company->id, 'division_id' => $this->division->id, 'freelancer_number' => 'FL-CAL', 'full_name' => 'Freelance Kalender', 'status' => 'active']);
+
+        $this->createLeave(['intern_id' => $intern->id], now()->startOfMonth(), now()->startOfMonth());
+        $this->createLeave(['freelancer_id' => $freelancer->id], now()->startOfMonth()->addDay(), now()->startOfMonth()->addDay());
+
+        $this->actingAs($this->superadmin);
+
+        Livewire::test(KalenderCuti::class)
+            ->assertSuccessful()
+            ->assertSee(['Magang Kalender', 'Freelance Kalender']);
+    }
+
+    public function test_calendar_shows_leave_that_started_in_the_previous_month(): void
+    {
+        $leave = $this->createLeave(['employee_id' => $this->employee->id], now()->startOfMonth()->subDays(2), now()->startOfMonth()->addDay());
+
+        $this->actingAs($this->superadmin);
+
+        $calendar = Livewire::test(KalenderCuti::class)->assertSuccessful();
+
+        $this->assertSame([$leave->id], $calendar->instance()->leaveRequests->pluck('id')->all());
+    }
+
+    public function test_company_filter_includes_interns(): void
+    {
+        $intern = Intern::create(['company_id' => $this->company->id, 'division_id' => $this->division->id, 'nis' => 'MG-CAL-2', 'full_name' => 'Magang Filter', 'institution' => 'SMK', 'status' => 'active']);
+        $leave = $this->createLeave(['intern_id' => $intern->id], now()->startOfMonth(), now()->startOfMonth());
+
+        $this->actingAs($this->superadmin);
+
+        $calendar = Livewire::test(KalenderCuti::class)->set('selectedCompanyId', $this->company->id);
+
+        $this->assertSame([$leave->id], $calendar->instance()->leaveRequests->pluck('id')->all());
+    }
+
+    /**
+     * @param  array<string, int>  $owner
+     */
+    private function createLeave(array $owner, CarbonInterface $start, CarbonInterface $end): LeaveRequest
+    {
+        return LeaveRequest::create($owner + [
+            'leave_type' => 'permission',
+            'start_date' => $start->toDateString(),
+            'end_date' => $end->toDateString(),
+            'days_count' => 1,
+            'reason' => 'Izin keluarga',
+            'status' => 'pending',
+        ]);
     }
 }
