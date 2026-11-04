@@ -32,5 +32,8 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- Never send real WhatsApp messages from tests; tests that need the gateway set a token and fake HTTP. -->
+        <env name="WAG_TOKEN" value="" force="true"/>
+        <env name="WAG_API_KEY" value="" force="true"/>
     </php>
 </phpunit>

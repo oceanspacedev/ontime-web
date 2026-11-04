@@ -22,6 +22,14 @@ Siapkan juga akun uji berikut lewat menu Manajemen User:
 
 Jangan menulis password akun uji di dokumen ini.
 
+## 0. Login
+
+- [ ] **0.1** Halaman login menampilkan form email dan password, lalu tombol WhatsApp dan Email di bawah "Atau masuk dengan".
+- [ ] **0.2** Login WhatsApp: kode OTP masuk ke WhatsApp nomor yang tercatat, dan kode itu membuka panel.
+- [ ] **0.3** Login Email: email berisi kode dan tombol masuk. Kode maupun tombol membuka panel, dan tidak bisa dipakai dua kali.
+- [ ] **0.4** Nomor atau email yang tidak terdaftar tetap sampai ke langkah kode, tetapi tidak bisa masuk.
+- [ ] **0.5** Akun nonaktif tidak bisa masuk lewat password, WhatsApp, maupun email.
+
 ## 1. Akses Data
 
 - [ ] **1.1** Superadmin membuka Manajemen User dan mengubah Akses Data sebuah akun. Kolom Akses Data di daftar user ikut berubah.

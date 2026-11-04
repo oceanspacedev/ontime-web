@@ -76,9 +76,21 @@ Semua kunci di bawah ini boleh dikosongkan di lokal.
 
 | Kunci `.env` | Fungsi |
 |---|---|
-| `WAG_URL`, `WAG_API_KEY` | Pengiriman info akun lewat WhatsApp Gateway. |
+| `WAG_URL`, `WAG_TOKEN` | Login dengan kode OTP WhatsApp dan pengiriman info akun lewat WagHub. Nama variabelnya sama dengan gais-web, dnd-web, dan helpdesk-web. `WAG_URL` berisi URL dasar WagHub dan sudah terisi bawaan, jadi cukup isi `WAG_TOKEN`. Opsional: `WHATSAPP_OTP_TTL_MINUTES` (bawaan 5 menit), `WA_CONNECT_TIMEOUT` (5 detik), `WA_API_TIMEOUT` (15 detik). |
+| `MAIL_MAILER` (misalnya `smtp`), `MAIL_FROM_ADDRESS` | Login dengan email: satu email berisi kode OTP dan magic link. Tidak tampil selama `MAIL_MAILER=log`. |
 | `CORE_WEBHOOK_SECRET` | Sinkronisasi karyawan dari Core HR. Webhook ditolak selama kosong. |
-| `CORE_CLIENT_ID`, `CORE_CLIENT_SECRET`, `CORE_REDIRECT_URI` | Login SSO lewat Core. Tanpa ini, login memakai email dan password. |
+| `CORE_CLIENT_ID`, `CORE_CLIENT_SECRET`, `CORE_REDIRECT_URI` | Tombol login lewat akun Core (SSO). |
+
+## Login
+
+Halaman login sama dengan aplikasi lain di grup (gais-web, dnd-web, helpdesk-web):
+
+- **Email dan password** selalu tersedia.
+- **WhatsApp:** kode OTP dikirim ke nomor HP yang tercatat di akun atau data pekerjanya. Nomor yang dipakai lebih dari satu akun tidak bisa login.
+- **Email:** satu email berisi kode OTP dan tombol magic link. Keduanya hanya bisa dipakai sekali.
+- **Akun Core (SSO):** tampil bila SSO dikonfigurasi.
+
+Tombol WhatsApp, Email, dan SSO hanya muncul bila integrasinya diisi. Akun nonaktif atau tanpa role tidak bisa masuk lewat cara apa pun. Halaman login tidak pernah memberi tahu apakah sebuah nomor atau email terdaftar.
 
 ## Perintah artisan
 
