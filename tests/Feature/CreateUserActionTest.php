@@ -28,6 +28,7 @@ class CreateUserActionTest extends TestCase
 
     public function test_create_user_action_uses_employee_email_phone_and_selected_role(): void
     {
+        config(['services.whatsapp_gateway.token' => 'test-token']);
         Http::fake([
             'waghub.mekayastudio.com/*' => Http::response(['status' => true], 200),
             '*' => Http::response(['status' => true], 200),

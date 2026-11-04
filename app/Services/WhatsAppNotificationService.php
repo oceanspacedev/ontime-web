@@ -43,22 +43,18 @@ class WhatsAppNotificationService
         $normalizedPhone = static::normalizePhoneNumber($phone);
         $waUrl = $normalizedPhone ? 'https://wa.me/'.$normalizedPhone.'?text='.rawurlencode($message) : null;
 
-        Log::info("WhatsApp Message [{$purpose}] for ({$normalizedPhone}):\n{$message}");
+        // The text is not logged: it can hold one-time codes or a new account's password.
+        Log::info("WhatsApp message [{$purpose}] queued for ".($normalizedPhone ? '…'.substr($normalizedPhone, -4) : 'unknown number'));
 
-        $wagConfig = config('services.wag', []);
-        $wagUrl = $wagConfig['url'] ?? env('WAG_URL');
-        $wagApiKey = $wagConfig['api_key'] ?? env('WAG_API_KEY');
+        $gatewayUrl = config('services.whatsapp_gateway.url');
+        $token = config('services.whatsapp_gateway.token');
 
         $apiSuccess = false;
         $apiError = null;
 
-        if ($wagUrl && $wagApiKey && $normalizedPhone) {
+        if (filled($gatewayUrl) && filled($token) && $normalizedPhone) {
             try {
-                $idempotencyKey = (string) Str::uuid();
-
                 $payload = [
-                    'idempotency_key' => $idempotencyKey,
-                    'idempotencyKey' => $idempotencyKey,
                     'recipient' => [
                         'type' => 'phone',
                         'value' => $normalizedPhone,
@@ -69,27 +65,29 @@ class WhatsAppNotificationService
                     ],
                     'purpose' => $purpose,
                     'mode' => 'sync',
+                    'route_key' => 'default',
+                    'client_reference' => 'ontime',
                 ];
 
                 if ($expiresInMinutes !== null && $expiresInMinutes > 0) {
                     $payload['expires_at'] = now()->addMinutes($expiresInMinutes)->toIso8601String();
                 }
 
-                // Synchronous HTTP request to WAG Gateway
                 $response = Http::withHeaders([
-                    'Authorization' => 'Bearer '.$wagApiKey,
-                    'x-api-key' => $wagApiKey,
+                    'Authorization' => 'Bearer '.preg_replace('/^Bearer\s+/i', '', (string) $token),
                     'Accept' => 'application/json',
-                    'X-Idempotency-Key' => $idempotencyKey,
-                    'Idempotency-Key' => $idempotencyKey,
-                ])->timeout(15)->post($wagUrl, $payload);
+                    'Idempotency-Key' => 'ontime-'.Str::uuid(),
+                ])
+                    ->connectTimeout((float) config('services.whatsapp_gateway.connect_timeout', 5))
+                    ->timeout((float) config('services.whatsapp_gateway.timeout', 15))
+                    ->post(static::messagesEndpoint((string) $gatewayUrl), $payload);
 
                 if ($response->successful()) {
                     $apiSuccess = true;
-                    Log::info("WhatsApp Gateway (WAG) message [{$purpose}] sent successfully to {$normalizedPhone}");
+                    Log::info("WhatsApp Gateway (WAG) message [{$purpose}] sent.");
                 } else {
                     $resJson = $response->json();
-                    $errorMessage = $resJson['message'] ?? $response->body();
+                    $errorMessage = $resJson['message'] ?? mb_substr($response->body(), 0, 500);
                     $apiError = "WAG API ({$response->status()}): {$errorMessage}";
                     Log::warning("WhatsApp Gateway (WAG) API error [{$purpose}]: {$apiError}");
                 }
@@ -107,6 +105,18 @@ class WhatsAppNotificationService
             'phone' => $normalizedPhone,
             'wa_url' => $waUrl,
         ];
+    }
+
+    /**
+     * WAG_URL is the WagHub base URL, as in gais-web and helpdesk-web; the messages path is added here.
+     * A URL that already has a path (older OnTime configs held the full endpoint) is used as it is.
+     */
+    public static function messagesEndpoint(string $gatewayUrl): string
+    {
+        $gatewayUrl = rtrim(trim($gatewayUrl), '/');
+        $path = (string) parse_url($gatewayUrl, PHP_URL_PATH);
+
+        return $path === '' ? $gatewayUrl.'/api/v1/messages' : $gatewayUrl;
     }
 
     /**
@@ -149,8 +159,9 @@ class WhatsAppNotificationService
      */
     public static function sendOtpCode(?string $phone, string $otpCode, int $expiresInMinutes = 5): array
     {
-        $message = "Kode OTP verifikasi login OnTime Anda adalah: {$otpCode}\n\n"
-            ."Kode ini berlaku selama {$expiresInMinutes} menit. Jangan bagikan kode OTP ini kepada siapapun demi keamanan akun Anda.";
+        $message = "Kode verifikasi OnTime Anda: *{$otpCode}*\n"
+            ."Berlaku {$expiresInMinutes} menit dan hanya untuk satu proses login. "
+            .'Jangan bagikan kode ini kepada siapa pun.';
 
         return static::sendMessage($phone, $message, 'otp', $expiresInMinutes);
     }

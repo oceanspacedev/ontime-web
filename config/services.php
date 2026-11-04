@@ -35,10 +35,22 @@ return [
         ],
     ],
 
-    'wag' => [
-        'enabled' => ! empty(env('WAG_URL')),
-        'url' => env('WAG_URL'),
-        'api_key' => env('WAG_API_KEY'),
+    // WagHub WhatsApp Gateway, the same keys as gais-web, dnd-web and helpdesk-web.
+    'whatsapp_gateway' => [
+        // An empty WAG_URL= line still falls back to WagHub.
+        'url' => env('WAG_URL') ?: 'https://waghub.mekayastudio.com',
+        // WAG_API_KEY is the name older OnTime servers still use.
+        'token' => env('WAG_TOKEN') ?: env('WAG_API_KEY'),
+        'connect_timeout' => (float) env('WA_CONNECT_TIMEOUT', 5),
+        'timeout' => (float) env('WA_API_TIMEOUT', 15),
+    ],
+
+    'whatsapp_otp' => [
+        'ttl_minutes' => (int) env('WHATSAPP_OTP_TTL_MINUTES', 5),
+    ],
+
+    'email_login' => [
+        'expires_in' => (int) env('EMAIL_LOGIN_EXPIRES_IN', 600),
     ],
 
     'google' => [

@@ -27,6 +27,10 @@ class User extends Authenticatable implements FilamentUser
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, HasNormalizedPhone, HasRoles, Notifiable;
 
+    /**
+     * The one account that owns this phone number, on the account itself or on its linked employee,
+     * intern or freelancer record. A number shared by several accounts matches nobody.
+     */
     public static function findByPhone(string $phone): ?self
     {
         $digits = preg_replace('/\D/', '', $phone);
@@ -34,33 +38,20 @@ class User extends Authenticatable implements FilamentUser
             return null;
         }
 
-        $variants = array_unique(array_filter([
+        $variants = array_values(array_unique(array_filter([
             $digits,
             str_starts_with($digits, '0') ? '62'.substr($digits, 1) : null,
             str_starts_with($digits, '62') ? '0'.substr($digits, 2) : null,
-        ]));
+        ])));
 
-        $user = static::whereIn('phone', $variants)->first();
-        if ($user) {
-            return $user;
-        }
+        $userIds = static::query()->whereIn('phone', $variants)->pluck('id')
+            ->merge(Employee::query()->whereIn('phone', $variants)->whereNotNull('user_id')->pluck('user_id'))
+            ->merge(Intern::query()->whereIn('phone', $variants)->whereNotNull('user_id')->pluck('user_id'))
+            ->merge(Freelancer::query()->whereIn('phone', $variants)->whereNotNull('user_id')->pluck('user_id'))
+            ->map(fn ($id): int => (int) $id)
+            ->unique();
 
-        $employee = Employee::whereIn('phone', $variants)->whereNotNull('user_id')->first();
-        if ($employee?->user) {
-            return $employee->user;
-        }
-
-        $intern = Intern::whereIn('phone', $variants)->whereNotNull('user_id')->first();
-        if ($intern?->user) {
-            return $intern->user;
-        }
-
-        $freelancer = Freelancer::whereIn('phone', $variants)->whereNotNull('user_id')->first();
-        if ($freelancer?->user) {
-            return $freelancer->user;
-        }
-
-        return null;
+        return $userIds->count() === 1 ? static::query()->find($userIds->first()) : null;
     }
 
     /**
