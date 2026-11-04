@@ -24,6 +24,8 @@ Aplikasi presensi dan pengajuan karyawan untuk banyak badan usaha. Panel admin d
 | Livewire | 4 |
 | Role dan permission | Spatie Permission dan Filament Shield |
 | API | Laravel Sanctum |
+| Antrean | Redis dengan Laravel Horizon |
+| Log | Log Viewer (opcodesio/log-viewer) |
 | Test | PHPUnit 12 |
 
 ## Menjalankan di lokal
@@ -38,7 +40,7 @@ Aplikasi presensi dan pengajuan karyawan untuk banyak badan usaha. Panel admin d
    npm install
    ```
 
-2. Siapkan environment, lalu isi koneksi database di `.env`.
+2. Siapkan environment, lalu isi koneksi database di `.env`. Antrean memakai Redis, jadi Redis harus berjalan dan ekstensi `phpredis` terpasang.
 
    ```bash
    cp .env.example .env
@@ -60,13 +62,13 @@ Aplikasi presensi dan pengajuan karyawan untuk banyak badan usaha. Panel admin d
    npm run build
    ```
 
-5. Jalankan server, queue worker, log, dan Vite sekaligus.
+5. Jalankan server, Horizon, log, dan Vite sekaligus.
 
    ```bash
    composer run dev
    ```
 
-Panel admin ada di `/admin`. Import dan ekspor CSV atau Excel berjalan di queue, jadi queue worker harus hidup. Perintah `composer run dev` sudah menjalankannya.
+Panel admin ada di `/admin`. Import dan ekspor CSV atau Excel berjalan di antrean Redis yang diproses Horizon. Perintah `composer run dev` sudah menjalankan Horizon.
 
 Data demo dibuat oleh `database/seeders/DatabaseSeeder.php`. Akun dan password demo bisa dilihat di file itu dan hanya untuk lokal.
 
@@ -91,6 +93,19 @@ Halaman login sama dengan aplikasi lain di grup (gais-web, dnd-web, helpdesk-web
 - **Akun Core (SSO):** tampil bila SSO dikonfigurasi.
 
 Tombol WhatsApp, Email, dan SSO hanya muncul bila integrasinya diisi. Akun nonaktif atau tanpa role tidak bisa masuk lewat cara apa pun. Halaman login tidak pernah memberi tahu apakah sebuah nomor atau email terdaftar.
+
+## Horizon dan Log Viewer
+
+Pemasangannya sama dengan dnd-web, gais-web, dan helpdesk-web.
+
+| Halaman | Isi |
+|---|---|
+| `/horizon` | Antrean `notifications`, `default`, dan `exports`: job yang berjalan, gagal, dan metriknya. |
+| `/log-viewer` | Isi file log di `storage/logs`. |
+
+- **Akses:** keduanya hanya bisa dibuka Superadmin dan Admin dengan Akses Data "Semua", karena isinya mencakup seluruh badan usaha. Tautannya ada di menu Observability di panel.
+- **Path:** bisa diubah lewat `HORIZON_PATH` dan `LOG_VIEWER_PATH`. Log Viewer bisa dimatikan dengan `LOG_VIEWER_ENABLED=false`.
+- **Server:** jalankan `php artisan horizon` lewat Supervisor supaya tetap hidup, dan jalankan `php artisan horizon:terminate` setiap deploy supaya Horizon memuat kode baru. Scheduler (`php artisan schedule:run` tiap menit) menyimpan snapshot metrik Horizon setiap lima menit.
 
 ## Perintah artisan
 

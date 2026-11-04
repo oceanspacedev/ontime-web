@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Enums\SystemRole;
 use App\Services\Core\CoreSsoProvider;
+use App\Support\ObservabilityAccess;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Illuminate\Database\Eloquent\Model;
@@ -25,6 +26,8 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Model::preventLazyLoading(! app()->isProduction());
+
+        ObservabilityAccess::register();
 
         Gate::before(function ($user, string $ability) {
             return $user->hasRole('Superadmin') ? true : null;
