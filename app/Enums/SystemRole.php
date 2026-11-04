@@ -9,7 +9,7 @@ namespace App\Enums;
 enum SystemRole: string
 {
     case Superadmin = 'Superadmin';
-    /** Admin Badan Usaha: full control, limited to the companies in users' company access. */
+    /** Admin: manages workers and settings inside their own data access (see DataAccessService). */
     case Admin = 'Admin';
     case Bod = 'BOD';
     case Approver = 'Approver';

@@ -1,0 +1,582 @@
+# OnTime REST API v1
+
+Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini menggabungkan `apiDocs.md`, `DOKUMENTASI_PENGGUNA_DAN_API.md` (bagian 2), dan `REKAP_LENGKAP_API_DAN_HALAMAN_MOBILE.txt`, lalu dicocokkan ulang dengan kode. Jika ada perbedaan, yang berlaku adalah `routes/api.php`, `app/Http/Controllers/Api/V1/`, `app/Http/Requests/Api/V1/`, dan `app/Http/Resources/Api/V1/`.
+
+---
+
+## 1. Ringkasan
+
+### 1.1 Base URL dan header
+
+| Lingkungan | Base URL |
+| :--- | :--- |
+| Server | `{APP_URL}/api/v1` |
+| Lokal (web / iOS Simulator) | `http://127.0.0.1:8000/api/v1` |
+| Lokal (Android Emulator) | `http://10.0.2.2:8000/api/v1` |
+| HP fisik di Wi-Fi yang sama | `http://<IP-laptop>:8000/api/v1` |
+
+| Header | Nilai |
+| :--- | :--- |
+| `Accept` | `application/json` |
+| `Authorization` | `Bearer <token>` (semua endpoint kecuali login) |
+| `Content-Type` | `application/json`, atau `multipart/form-data` untuk unggah foto/lampiran |
+
+- Autentikasi memakai Laravel Sanctum (personal access token). Token didapat dari `POST /auth/login` dan dihapus lewat `POST /auth/logout`. Token tidak kedaluwarsa otomatis.
+- Semua path di bawah `api/*` selalu membalas JSON, termasuk error.
+- PHP tidak membaca `multipart/form-data` pada request `PUT`. Untuk mengubah pengajuan sambil mengunggah file, kirim `POST` ke URL yang sama dengan field `_method=PUT`.
+
+### 1.2 Format tanggal dan waktu
+
+| Sumber | Format di respons |
+| :--- | :--- |
+| Tanggal presensi, cuti, lembur, koreksi (`date`, `start_date`, `end_date`) | `YYYY-MM-DD`, contoh `2026-08-01` |
+| Waktu (`check_in`, `check_out`, `corrected_check_in/out`, `created_at`, `updated_at`) | ISO-8601 UTC, contoh `2026-08-03T01:05:00.000000Z` (= 08.05 WIB). Konversi ke `Asia/Jakarta` sebelum ditampilkan. |
+| Lembur `start_time`, `end_time` | String jam apa adanya (`17:00` saat baru dibuat, `17:00:00` saat dibaca ulang) |
+| Resign `resignation_date`, `last_working_day`; kalender cuti `start_date`, `end_date` | `YYYY-MM-DD` |
+| Koordinat presensi (`check_in_lat`, dll.) | String desimal 7 digit, contoh `"-6.1753924"` |
+
+### 1.3 Format error
+
+| Status | Kapan | Bentuk body |
+| :--- | :--- | :--- |
+| 400 | Hapus foto master wajah yang belum pernah didaftarkan | `{"message": "..."}` |
+| 401 | Token tidak ada/tidak valid; login gagal | `{"message": "Unauthenticated."}` / `{"message": "Credentials do not match our records."}` |
+| 403 | Izin `can:` tidak dimiliki; detail data di luar akses | `{"message": "This action is unauthorized."}` / `{"message": "Unauthorized access."}` |
+| 404 | Data tidak ditemukan | `{"message": "..."}` |
+| 409 | Check-in/check-out kedua di hari yang sama | `{"message": "Sudah melakukan check in hari ini."}` |
+| 422 | Validasi input | `{"message": "...", "errors": {"field": ["..."]}}` |
+| 422 | Aturan bisnis (kuota habis, status bukan pending, profil tidak ada) | `{"message": "..."}` |
+
+### 1.4 Format paginasi
+
+Ada tiga bentuk, tergantung endpoint:
+
+| Bentuk | Dipakai di | Struktur |
+| :--- | :--- | :--- |
+| A | `/attendances` (20/hal), `/laporan-absensi` (30/hal) | `{"data": [...], "pagination": {"current_page", "last_page", "per_page", "total"}}` |
+| B | `/leave-requests`, `/overtime-requests`, `/attendance-corrections`, `/resignations` (15/hal) | `{"data": [...], "pagination": {"current_page", "last_page", "total"}}` |
+| C | `/master/employees`, `/master/interns`, `/master/freelancers`, `/master/users` (20/hal) | Paginator Laravel di dalam `data`: `{"data": {"current_page", "data": [...], "per_page", "total", "last_page", "next_page_url", ...}}` |
+
+Halaman dipilih dengan query `?page=2`. Endpoint lain tidak berpaginasi.
+
+---
+
+## 2. Akses data dan otorisasi
+
+### 2.1 Role
+
+| Role | Fungsi |
+| :--- | :--- |
+| Superadmin | Akses penuh. Data akses selalu `all`. Lolos semua cek izin. |
+| Admin | Admin Badan Usaha: mengelola pekerja dan memproses persetujuan di dalam data aksesnya. Izinnya diatur lewat Shield. |
+| BOD, Approver | Memproses tahap persetujuan sesuai role-nya, terbatas pada data aksesnya. |
+| Employee | Karyawan: presensi, cuti/izin, lembur, koreksi, resign. |
+| Intern | Peserta magang: presensi, cuti/izin, lembur, koreksi. |
+| Freelancer | Pekerja lepas: presensi, izin/sakit, lembur, koreksi. |
+
+Fitur pekerja (presensi dan pengajuan) butuh akun yang terhubung ke profil `employee`, `intern`, atau `freelancer`. Tanpa profil, endpoint tersebut membalas 422 `Profil pengguna tidak ditemukan.` dan daftar pengajuan kosong.
+
+### 2.2 Data akses (`users.data_scope`)
+
+| Nilai | Label | Pekerja yang tercakup |
+| :--- | :--- | :--- |
+| `all` | Semua | Seluruh badan usaha |
+| `companies` | Badan Usaha | Badan usaha yang dipilih (`company_user`) beserta semua divisinya |
+| `divisions` | Divisi | Divisi yang dipilih (`division_user`) termasuk semua sub-divisinya |
+| `own` | Pribadi | Hanya data milik sendiri (nilai bawaan akun baru) |
+
+Superadmin selalu `all`. Setiap pengguna selalu bisa melihat data miliknya sendiri. Logika ada di `app/Services/DataAccessService.php`.
+
+### 2.3 Penerapan di endpoint
+
+| Endpoint | Data yang dikembalikan |
+| :--- | :--- |
+| `GET /leave-requests`, `/overtime-requests`, `/attendance-corrections` | Hanya milik sendiri. Ini daftar pribadi beserta ringkasan kuota; pengajuan tim ada di `GET /approvals/pending` |
+| `GET /leave-requests/{id}`, `/overtime-requests/{id}`, `/attendance-corrections/{id}`, `GET /resignations`, `/resignations/{id}` | Milik sendiri + pekerja dalam data akses. Detail di luar itu: 403 |
+| `PUT`/`DELETE` pengajuan | Hanya milik sendiri yang masih `pending` |
+| `GET /attendances`, `/attendances/{id}`, `/laporan-absensi` | Milik sendiri + pekerja dalam data akses, sama dengan panel. Detail di luar itu: 403 |
+| `GET /approvals/pending` | Pengajuan yang boleh diproses pemanggil (lihat 2.4) |
+| `GET /kalender-cuti` | Pekerja dalam data akses + rekan di badan usaha sendiri. `all`: semua |
+| `/master/companies`, `company-locations`, `company-policies`, `divisions`, `approval-flows` | Badan usaha yang terlihat: `all` semua; selain itu badan usaha profil sendiri + badan usaha terpilih (atau badan usaha dari divisi terpilih) |
+| `/master/employees`, `interns`, `freelancers` | Pekerja dalam data akses + profil sendiri |
+| `/master/users` | Akun sendiri + akun pekerja dalam data akses |
+| `/master/approvers` | Akun Approver/BOD yang lolos aturan `/master/users`, lalu disaring `company_id`/`division_id` |
+| `/master/job-titles`, `job-levels`, `holidays` | Tidak difilter |
+
+Middleware izin: route `/master/*` dan `/shield/*` memakai `can:ViewAny:<Model>` (izin Spatie/Shield). Endpoint lain hanya butuh token; izin seperti `Create:LeaveRequest` tidak diperiksa oleh API, jadi aplikasi mobile perlu memakai daftar `permissions` dari `/auth/me` untuk menampilkan menu.
+
+### 2.4 Hak memproses persetujuan
+
+Aturan di `ApprovalFlowService::isUserAuthorizedToApprove`, dicek berurutan:
+
+1. Pengajuan harus berstatus `pending` (atau `pending_approval` untuk presensi) dan hanya tahap aktif (`current_step`) yang bisa diproses.
+2. Pengaju tidak pernah memberi persetujuan tahap terakhir atas pengajuannya sendiri. Tahap tengah yang cocok dengan role-nya masih boleh.
+3. Superadmin: tahap apa pun, kecuali pengajuan sendiri.
+4. Admin: tahap apa pun untuk pekerja dalam data aksesnya, kecuali pengajuan sendiri.
+5. Tahap bertipe `user`: hanya user yang ditunjuk.
+6. Tahap bertipe `role`: pemanggil punya role tahap tersebut **dan** penempatan pengaju (badan usaha atau divisi) ada dalam data aksesnya. Approver/BOD dengan akses `own` tidak menerima antrean bertipe role.
+
+Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur bawaan badan usaha baru: Approver, lalu BOD, lalu Superadmin untuk `leave`, `overtime`, `correction`, `resignation`; satu tahap Approver untuk `geofence`. Jika alur untuk jenis pengajuan belum dikonfigurasi, pembuatan pengajuan membalas 422 dengan `errors.approval_flow`.
+
+---
+
+## 3. Endpoint
+
+### 3.1 Autentikasi
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| POST | `/auth/login` | Publik | Login, mengembalikan token |
+| GET | `/auth/me` | Token | Profil akun saat ini |
+| POST | `/auth/logout` | Token | Menghapus token yang sedang dipakai |
+
+**POST /auth/login** (JSON): `email` (wajib, email), `password` (wajib).
+
+```json
+{
+  "message": "Login successful",
+  "token_type": "Bearer",
+  "token": "<token>",
+  "user": {
+    "id": 12,
+    "name": "Karyawan Contoh",
+    "email": "karyawan@contoh.id",
+    "master_face_photo": null,
+    "master_face_verified_at": null,
+    "roles": ["Employee"],
+    "permissions": ["View:AbsenHariIni", "Create:LeaveRequest", "View:KalenderCuti"],
+    "employee": {
+      "id": 7,
+      "nip": "2026.01.001",
+      "full_name": "Karyawan Contoh",
+      "master_face_photo": null,
+      "master_face_verified_at": null,
+      "company": {
+        "id": 1, "name": "PT Contoh Sejahtera", "latitude": -6.2, "longitude": 106.8,
+        "locations": [{"id": 1, "name": "Kantor Pusat", "latitude": -6.2, "longitude": 106.8, "radius_meters": 100}],
+        "policy": {"require_gps": true, "require_photo": true, "require_face_recognition": false,
+                   "late_tolerance_minutes": 15, "work_start_time": "08:00:00", "work_end_time": "17:00:00"}
+      },
+      "division": {"id": 3, "name": "Operasional"},
+      "job_title": {"id": 5, "name": "Staf Administrasi"},
+      "job_level": {"id": 2, "name": "Staff"}
+    },
+    "intern": null,
+    "freelancer": null
+  }
+}
+```
+
+- `intern` berisi `id, full_name, institution, master_face_photo, master_face_verified_at, company, division, mentor {id, full_name}`.
+- `freelancer` berisi `id, full_name, institution, master_face_photo, master_face_verified_at, company, division, supervisor {id, full_name}`.
+- `GET /auth/me` membalas `{"user": {...}}` dengan isi yang sama. `data_scope` tidak ikut dikirim.
+- Logout membalas `{"message": "Logged out successfully"}`.
+- Akun nonaktif (`is_active = false`, misalnya setelah resign disetujui) ditolak saat login dengan 403 `Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.` Token yang sudah ada langsung tidak berlaku dan membalas 401.
+
+### 3.2 Presensi
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/attendance/today` | Token + profil | Status presensi hari ini |
+| POST | `/attendance/check-in` | Token + profil | Presensi masuk |
+| POST | `/attendance/check-out` | Token + profil | Presensi keluar |
+| POST | `/attendance/master-face` | Token + profil | Unggah/ganti foto master wajah |
+| DELETE | `/attendance/master-face` | Token + profil | Hapus foto master wajah |
+| GET | `/attendances` | Token | Riwayat presensi (bentuk A) |
+| GET | `/attendances/{id}` | Token | Detail presensi |
+
+**GET /attendance/today**
+
+```json
+{"date": "2026-08-03", "has_checked_in": true, "has_checked_out": false, "attendance": { "...": "objek presensi" }}
+```
+
+**POST /attendance/check-in** dan **POST /attendance/check-out** (`multipart/form-data`)
+
+| Field | Aturan | Keterangan |
+| :--- | :--- | :--- |
+| `latitude` | opsional, numerik -90..90 | Wajib bila kebijakan `require_gps` aktif (422 `Lokasi GPS wajib diisi.`) |
+| `longitude` | opsional, numerik -180..180 | Sama seperti `latitude` |
+| `photo` | opsional, gambar jpeg/png/jpg/webp, maks 5 MB | Wajib bila `require_photo` aktif |
+
+Perilaku check-in:
+- Geofence hanya dicek bila `require_gps` aktif. Di luar radius kantor pusat dan semua lokasi aktif: presensi tetap tercatat dengan status `pending_approval` dan masuk alur persetujuan `geofence`.
+- Bila `require_face_recognition` aktif, foto dibandingkan dengan foto master. Gagal + `face_fail_action = reject`: 422. Gagal dengan aksi lain: `pending_approval`.
+- `late_minutes` dihitung dari jadwal shift hari itu, lalu shift bawaan, lalu jam kerja kebijakan perusahaan.
+- Check-in kedua di hari yang sama: 409.
+
+Perilaku check-out: 422 bila belum check-in, 409 bila sudah check-out. Di luar geofence mengubah status menjadi `pending_approval`. Verifikasi wajah tidak dijalankan saat check-out.
+
+```json
+{
+  "message": "Check in berhasil",
+  "attendance": {
+    "id": 102, "employee_id": 7, "intern_id": null, "freelancer_id": null,
+    "date": "2026-08-03",
+    "check_in": "2026-08-03T01:05:00.000000Z", "check_out": null,
+    "check_in_lat": "-6.1753924", "check_in_lng": "106.8271528",
+    "check_out_lat": null, "check_out_lng": null,
+    "check_in_photo": "<url>", "check_out_photo": null,
+    "status": "on_time", "is_corrected": false, "is_out_of_bounds": false, "late_minutes": 0,
+    "employee": {"id": 7, "full_name": "Karyawan Contoh", "nip": "2026.01.001",
+                 "company": {"id": 1, "name": "PT Contoh Sejahtera"}, "division": {"id": 3, "name": "Operasional"},
+                 "master_face_photo": null},
+    "intern": null, "freelancer": null,
+    "user": {"name": "Karyawan Contoh", "department": "Operasional"}
+  }
+}
+```
+
+Pesan bila perlu persetujuan: `Check in berhasil dicatat dan sedang menunggu persetujuan atasan.`
+
+Nilai `status` presensi: `on_time` (Tepat Waktu), `late` (Terlambat), `absent` (Tidak Hadir), `leave` (Cuti / Izin), `holiday` (Hari Libur), `off` (Libur), `pending_approval` (Menunggu Persetujuan), `rejected` (Ditolak).
+
+**POST /attendance/master-face** (`multipart/form-data`): `photo` wajib, gambar jpeg/png/jpg/webp, maks 5 MB.
+
+```json
+{"message": "Foto Master Wajah berhasil diperbarui",
+ "data": {"master_face_photo": "<url>", "master_face_verified_at": "2026-08-03T07:00:00.000000Z"}}
+```
+
+**DELETE /attendance/master-face** membalas `{"message": "Foto Master Wajah berhasil dihapus."}`, atau 400 bila belum ada foto.
+
+**GET /attendances**: query `start_date` + `end_date` (keduanya), atau `month` + `year` (keduanya), dan `status`. Urut tanggal terbaru. `GET /attendances/{id}`: 404 bila tidak ada, 403 bila bukan milik sendiri dan di luar data akses pemanggil.
+
+### 3.3 Cuti / Izin
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/leave-requests` | Token | Riwayat milik sendiri + ringkasan kuota (bentuk B) |
+| POST | `/leave-requests` | Token + profil | Buat pengajuan |
+| GET | `/leave-requests/{id}` | Token | Detail (milik sendiri atau dalam data akses) |
+| PUT | `/leave-requests/{id}` | Token + profil | Ubah, hanya milik sendiri & `pending` |
+| DELETE | `/leave-requests/{id}` | Token + profil | Batalkan, hanya milik sendiri & `pending` |
+
+**POST /leave-requests** (JSON atau `multipart/form-data`)
+
+| Field | Aturan |
+| :--- | :--- |
+| `leave_type` | wajib: `annual_leave` (Cuti Tahunan), `permission` (Izin), `sick` (Sakit), `maternity` (Cuti Melahirkan), `unpaid` (Cuti Tanpa Gaji). Kode lama `annual` dan `permitted` masih diterima dan disimpan sebagai `annual_leave` dan `permission` |
+| `start_date` | wajib, tanggal |
+| `end_date` | wajib, tanggal, `>= start_date` |
+| `reason` | wajib, maks 1000 karakter |
+| `attachment` | opsional, jpeg/png/jpg/pdf/doc/docx, maks 5 MB |
+
+- `days_count` = jumlah hari kalender dari `start_date` sampai `end_date` (termasuk akhir pekan).
+- `annual_leave` dicek terhadap kuota `annual_leave_quota` kebijakan perusahaan (bawaan 12) dikurangi cuti tahunan yang sudah `approved` tahun ini, baik yang diajukan dari panel maupun API. Kurang: 422 dengan `errors.leave_type` `Kuota cuti tahunan Anda tidak mencukupi (Sisa: 2 hari, Pengajuan: 3 hari).`
+- Freelancer tidak bisa mengajukan `annual_leave` (422 `errors.leave_type`), sama seperti di panel.
+- PUT menerima field yang sama (semua opsional), menghitung ulang `days_count`, dan memeriksa kuota lagi.
+
+Respons 201:
+
+```json
+{
+  "message": "Pengajuan cuti berhasil dibuat",
+  "data": {
+    "id": 15, "employee_id": 7, "intern_id": null, "freelancer_id": null,
+    "leave_type": "annual_leave", "leave_type_label": "Cuti Tahunan",
+    "start_date": "2026-08-01", "end_date": "2026-08-03",
+    "days_count": 3, "reason": "Acara keluarga", "status": "pending",
+    "current_step": 1, "total_steps": 3, "rejection_reason": null, "rejection_note": null, "attachment": null,
+    "created_at": "...", "updated_at": "...",
+    "employee": {"id": 7, "full_name": "Karyawan Contoh", "...": "..."}, "intern": null, "freelancer": null,
+    "user": {"name": "Karyawan Contoh", "department": "Operasional"}
+  }
+}
+```
+
+`GET /leave-requests` menambahkan `quota_summary`:
+
+```json
+{"quota_summary": {"annual_leave_quota": 12, "used_days": 3, "remaining_days": 9}, "data": [], "pagination": {"current_page": 1, "last_page": 1, "total": 0}}
+```
+
+Pesan lain: PUT `Pengajuan cuti berhasil diperbarui`, DELETE `Pengajuan cuti berhasil dibatalkan.`, status bukan pending 422 `Pengajuan yang sudah diproses tidak dapat diubah.`, bukan milik sendiri 404.
+
+### 3.4 Lembur
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/overtime-requests` | Token | Riwayat milik sendiri (bentuk B) |
+| POST | `/overtime-requests` | Token + profil | Buat pengajuan |
+| GET | `/overtime-requests/{id}` | Token | Detail (milik sendiri atau dalam data akses) |
+| PUT | `/overtime-requests/{id}` | Token + profil | Ubah, hanya milik sendiri & `pending` |
+| DELETE | `/overtime-requests/{id}` | Token + profil | Batalkan, hanya milik sendiri & `pending` |
+
+**POST /overtime-requests** (JSON)
+
+| Field | Aturan |
+| :--- | :--- |
+| `date` | wajib, tanggal |
+| `start_time` | wajib, format `HH:MM` |
+| `end_time` | wajib, format `HH:MM`, tidak sama dengan `start_time`. Jam yang lebih awal dari `start_time` berarti lembur melewati tengah malam, misalnya `22:00` sampai `01:00` dihitung 180 menit |
+| `reason` | wajib, maks 1000 karakter |
+
+```json
+{"date": "2026-08-05", "start_time": "17:00", "end_time": "20:00", "reason": "Rilis aplikasi ke server staging"}
+```
+
+Respons 201 `{"message": "Pengajuan lembur berhasil dibuat", "data": {...}}`. Field `data`: `id, employee_id, intern_id, freelancer_id, date, start_time, end_time, duration_minutes, actual_duration_minutes, reason, status, current_step, total_steps, rejection_reason, rejection_note, created_at, updated_at, employee, intern, freelancer, user`. PUT menerima field yang sama (opsional). Pesan: `Pengajuan lembur berhasil diperbarui`, `Pengajuan lembur berhasil dibatalkan.`
+
+### 3.5 Koreksi Absensi
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/attendance-corrections` | Token | Riwayat milik sendiri (bentuk B) |
+| POST | `/attendance-corrections` | Token + profil | Buat pengajuan |
+| GET | `/attendance-corrections/{id}` | Token | Detail (milik sendiri atau dalam data akses) |
+| PUT | `/attendance-corrections/{id}` | Token + profil | Ubah, hanya milik sendiri & `pending` |
+| DELETE | `/attendance-corrections/{id}` | Token + profil | Batalkan, hanya milik sendiri & `pending` |
+
+**POST /attendance-corrections** (JSON atau `multipart/form-data`)
+
+| Field | Aturan |
+| :--- | :--- |
+| `date` | wajib, tanggal presensi yang dikoreksi |
+| `corrected_check_in` | opsional, jam (mis. `08:00`), ditempatkan pada `date` |
+| `corrected_check_out` | opsional, jam (mis. `17:00`), ditempatkan pada `date` |
+| `reason` | wajib, maks 1000 karakter |
+| `attachment` | opsional, jpeg/png/jpg/pdf/doc/docx, maks 5 MB |
+
+Respons 201 `{"message": "Pengajuan koreksi absensi berhasil dibuat", "data": {...}}`. Field `data`: `id, employee_id, intern_id, freelancer_id, date, corrected_check_in, corrected_check_out, reason, status, current_step, total_steps, rejection_reason, rejection_note, attachment, created_at, updated_at, employee, intern, freelancer, user`. Setelah disetujui penuh, presensi di tanggal itu dibuat/diperbarui dengan jam koreksi dan `is_corrected = true`.
+
+### 3.6 Pengunduran Diri (Resign)
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/resignations` | Token | Milik sendiri + dalam data akses (bentuk B) |
+| POST | `/resignations` | Token + profil karyawan | Buat pengajuan |
+| GET | `/resignations/{id}` | Token | Detail (403 bila di luar akses) |
+| PUT | `/resignations/{id}` | Token + profil karyawan | Ubah, hanya milik sendiri & `pending` |
+| DELETE | `/resignations/{id}` | Token + profil karyawan | Batalkan, hanya milik sendiri & `pending` |
+
+Hanya akun dengan profil **employee** (Intern/Freelancer: 422 `Profil Karyawan tidak ditemukan.`). Satu karyawan hanya boleh punya satu pengajuan `pending` atau `approved`.
+
+**POST /resignations** (JSON)
+
+| Field | Aturan |
+| :--- | :--- |
+| `resignation_date` | wajib, tanggal |
+| `last_working_day` | wajib, tanggal, `>= resignation_date` |
+| `reason` | wajib, teks |
+| `handover_notes` | opsional, teks |
+
+```json
+{
+  "message": "Pengajuan pengunduran diri berhasil dibuat.",
+  "data": {
+    "id": 4, "employee_id": 7, "intern_id": null, "freelancer_id": null,
+    "employee_name": "Karyawan Contoh",
+    "resignation_date": "2026-08-15", "last_working_day": "2026-09-15",
+    "reason": "Melanjutkan studi", "handover_notes": "Dokumen serah terima sudah diserahkan ke atasan.",
+    "status": "pending", "current_step": 1, "rejection_reason": null,
+    "created_at": "2026-08-03T02:00:00.000000Z", "updated_at": "2026-08-03T02:00:00.000000Z",
+    "employee": {"...": "..."}, "intern": null, "freelancer": null, "user": {"name": "Karyawan Contoh", "department": "Operasional"}
+  }
+}
+```
+
+Setelah disetujui penuh, status karyawan menjadi `inactive` dan akunnya `is_active = false`.
+
+### 3.7 Persetujuan
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/approvals/pending` | Token | Antrean yang boleh diproses pemanggil (lihat 2.4) |
+| PUT | `/approvals/{type}/{id}/process` | Token | Setujui atau tolak tahap aktif |
+
+**GET /approvals/pending** (tanpa paginasi):
+
+```json
+{"leave_requests": [], "overtime_requests": [], "attendance_corrections": [], "geofence_attendances": [], "resignations": []}
+```
+
+Isi tiap array memakai bentuk objek yang sama dengan endpoint detailnya (presensi untuk `geofence_attendances`).
+
+**PUT /approvals/{type}/{id}/process**
+
+| `type` | Alias yang juga diterima | Model |
+| :--- | :--- | :--- |
+| `leave` | `leave-requests` | Cuti/izin |
+| `overtime` | `overtime-requests` | Lembur |
+| `correction` | `attendance-corrections` | Koreksi absensi |
+| `geofence` | `attendance`, `attendances` | Presensi luar geofence / gagal verifikasi wajah |
+| `resignation` | `resignations` | Resign |
+
+| Field | Aturan |
+| :--- | :--- |
+| `action` | wajib: `approved` atau `rejected` |
+| `rejection_note` | wajib bila `rejected`, maks 1000. Saat `approved` boleh diisi sebagai catatan tahap |
+
+```json
+{"message": "Pengajuan berhasil disetujui", "status": "pending", "current_step": 2}
+```
+
+- `status` menjadi `approved` setelah tahap terakhir disetujui (presensi geofence menjadi `on_time`/`late`). Penolakan langsung mengakhiri alur (`rejected`), pesan `Pengajuan telah ditolak`.
+- Error: `type` tidak dikenal 422; data tidak ada 404; bukan pending 422 `Pengajuan ini sudah tidak berstatus pending.`; tidak berhak 422 dengan `errors.approve` atau `errors.reject`.
+- Efek persetujuan akhir: cuti menandai presensi tiap tanggal sebagai `leave`; koreksi menerapkan jam ke presensi; resign menonaktifkan karyawan dan akunnya.
+
+### 3.8 Kalender dan Laporan
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/kalender-cuti` | Token | Cuti `approved` dan `pending` yang beririsan dengan bulan |
+| GET | `/laporan-absensi` | Token | Ringkasan dan daftar presensi (bentuk A) |
+
+**GET /kalender-cuti**: query `month` (bawaan bulan ini), `year` (bawaan tahun ini), `company_id` (opsional).
+
+```json
+{
+  "month": 8, "year": 2026,
+  "data": [{
+    "id": 15, "person_name": "Karyawan Contoh", "user_name": "Karyawan Contoh",
+    "company_name": "PT Contoh Sejahtera", "division_name": "Operasional", "department": "Operasional",
+    "leave_type": "annual_leave", "start_date": "2026-08-01", "end_date": "2026-08-03",
+    "days_count": 3, "status": "approved", "reason": "Acara keluarga", "master_face_photo": null
+  }]
+}
+```
+
+**GET /laporan-absensi**: query `start_date` (bawaan awal bulan), `end_date` (bawaan hari ini), `company_id` (opsional).
+
+```json
+{
+  "start_date": "2026-08-01", "end_date": "2026-08-31",
+  "summary": {"total_present": 18, "total_late": 2, "total_leave": 1, "total_absent": 1},
+  "data": [], "pagination": {"current_page": 1, "last_page": 1, "per_page": 30, "total": 18}
+}
+```
+
+| Ringkasan | Cara hitung |
+| :--- | :--- |
+| `total_present` | Record berstatus `on_time`, `late`, `pending_approval`, atau punya `check_in` |
+| `total_late` | Jumlah kejadian terlambat (bukan total menit) |
+| `total_leave` | Jumlah tanggal unik cuti `approved` dalam rentang |
+| `total_absent` | Record `absent`/`rejected` + hari Senin-Jumat sampai hari ini tanpa presensi dan tanpa cuti |
+
+### 3.9 Master Data
+
+Semua `GET`, read-only, dengan pola `GET /master/<resource>` (daftar) dan `GET /master/<resource>/{id}` (detail, 404 bila tidak ada atau di luar akses). Respons `{"data": ...}` berisi atribut model apa adanya beserta relasi yang dimuat.
+
+| Resource | Izin (`can:`) | Filter akses data | Query | Relasi | Paginasi |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `companies` | `ViewAny:Company` | Ya | - | `locations`, `policy` | - |
+| `company-locations` | `ViewAny:CompanyLocation` | Ya | `company_id` | `company` | - |
+| `company-policies` | `ViewAny:CompanyPolicy` | Ya | `company_id` | `company` | - |
+| `divisions` | `ViewAny:Division` | Ya (per badan usaha) | `company_id` | `company` | - |
+| `job-titles` | `ViewAny:JobTitle` | Tidak | `division_id` | `division` | - |
+| `job-levels` | `ViewAny:JobLevel` | Tidak | - | - | - |
+| `employees` | `ViewAny:Employee` | Ya | `company_id`, `division_id`, `status` (`active`/`inactive`) | `company`, `division`, `jobTitle`, `jobLevel`, `user` | C |
+| `interns` | `ViewAny:Intern` | Ya | `company_id` | `company`, `division`, `mentor`, `user` | C |
+| `freelancers` | `ViewAny:Freelancer` | Ya | `company_id` | `company`, `division`, `supervisor`, `user` | C |
+| `holidays` | `ViewAny:Holiday` | Tidak | `year` | - (urut `date`) | - |
+| `approval-flows` | `ViewAny:ApprovalFlow` | Ya | `company_id`, `request_type` | `company` | - |
+| `approvers` | `ViewAny:Approver` | Ya | `company_id`, `division_id` | lihat di bawah | - |
+| `users` | `ViewAny:User` | Ya | `email` (sebagian) | `roles`, `employee`, `intern`, `freelancer` (+`permissions` di detail) | C |
+
+- `approval-flows`: `request_type` salah satu `leave`, `overtime`, `correction`, `resignation`, `geofence`. Urut `company_id`, `request_type`, `step_order`. Field utama: `step_order`, `name`, `approver_type` (`role`/`user`), `approver_role`, `user_id`.
+- `company-policies`: field utama `late_tolerance_minutes`, `require_photo`, `require_gps`, `require_face_recognition`, `face_match_threshold`, `face_fail_action`, `geofence_radius_meters`, `annual_leave_quota`, `work_start_time`, `work_end_time`.
+
+**GET /master/approvers** mengembalikan **akun** pengguna dengan role Approver atau BOD (tabel lama `approvers` tidak dipakai lagi), urut nama, tanpa paginasi.
+
+| Query | Efek |
+| :--- | :--- |
+| `company_id` | Hanya approver yang data aksesnya mencakup badan usaha ini |
+| `division_id` | Hanya approver yang data aksesnya mencakup divisi ini (badan usaha diambil dari divisi bila `company_id` kosong) |
+
+```json
+{
+  "data": [{
+    "id": 21, "user_id": 21, "name": "Approver Penjualan", "email": "approver@contoh.id",
+    "roles": ["Approver"], "data_scope": "divisions", "data_scope_label": "Divisi",
+    "companies": [],
+    "divisions": [{"id": 4, "name": "Penjualan", "company_id": 1, "company_name": "PT Contoh Sejahtera"}]
+  }]
+}
+```
+
+`companies` (`id, code, name`) hanya terisi untuk `data_scope = companies`, `divisions` hanya untuk `data_scope = divisions`. Daftar ini juga dibatasi data akses pemanggil: akun approver tanpa profil pekerja hanya terlihat oleh pemanggil berakses `all`.
+
+### 3.10 Shield (role dan izin)
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/shield/roles` | `can:ViewAny:Role` | `{"roles": [{"id", "name", "guard_name", "permissions": ["..."]}]}` |
+| GET | `/shield/permissions` | `can:ViewAny:Role` | `{"permissions": [{"id", "name", "guard_name"}]}` |
+
+### 3.11 Webhook karyawan (di luar v1)
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| POST | `/api/webhooks/employees` | Tanda tangan HMAC | Sinkronisasi data karyawan dari sistem inti |
+
+- Header `X-Signature` = HMAC-SHA256 (hex) dari body mentah dengan kunci `CORE_WEBHOOK_SECRET`. Kunci belum diset: 503. Tanda tangan salah: 401.
+- Body: `action` (wajib), `employee.id` (wajib, integer), `employee.name` (wajib), `employee.email`, `employee.phone`, `employee.status` (wajib).
+- `created`/`updated` hanya memperbarui karyawan yang sudah ada (`full_name`, `email`, `phone`, `status`); `deleted` menghapus karyawan. Respons `{"status": "success"}`.
+
+---
+
+## 4. Halaman mobile per role
+
+### 4.1 Matriks tampilan
+
+Keterangan: **Ya** tampilkan; **Tidak** sembunyikan; **Profil** tampilkan bila akun terhubung ke profil pekerja; **Izin** tampilkan bila `user.permissions` memuat izin terkait (tidak diberikan oleh seeder bawaan). Akun dengan beberapa role mendapat gabungan hak.
+
+| Halaman | Endpoint | Izin web | Superadmin | Admin | BOD | Approver | Employee | Intern | Freelancer |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Login, profil, logout | `/auth/*` | - | Ya | Ya | Ya | Ya | Ya | Ya | Ya |
+| Kartu pembimbing | `/auth/me` | - | Tidak | Tidak | Tidak | Tidak | Tidak | Ya (mentor) | Ya (supervisor) |
+| Presensi hari ini, masuk/keluar | `/attendance/*` | `View:AbsenHariIni` | Tidak | Profil | Profil | Profil | Ya | Ya | Ya |
+| Foto master wajah | `/attendance/master-face` | `View:AbsenHariIni` | Tidak | Profil | Profil | Profil | Ya | Ya | Ya |
+| Riwayat presensi, laporan | `/attendances`, `/laporan-absensi` | `View:LaporanAbsensi` | Ya (semua) | Profil | Profil | Profil | Ya | Ya | Ya |
+| Cuti/izin + kuota | `/leave-requests` | `Create:LeaveRequest` | Profil | Izin | Izin | Izin | Ya | Ya | Ya (izin/sakit) |
+| Lembur | `/overtime-requests` | `Create:OvertimeRequest` | Profil | Izin | Izin | Izin | Ya | Ya | Ya |
+| Koreksi absensi | `/attendance-corrections` | `Create:AttendanceCorrection` | Profil | Izin | Izin | Izin | Ya | Ya | Ya |
+| Form resign | `/resignations` | `Create:Resignation` | Profil | Izin | Izin | Izin | Ya | Tidak | Tidak |
+| Kalender cuti tim | `/kalender-cuti` | semua kecuali Intern | Ya | Ya | Ya | Ya | Ya | Tidak | Ya |
+| Inbox persetujuan + badge | `/approvals/*` | role Approver/BOD/Superadmin, Admin berdata akses | Ya | Ya | Ya | Ya | Tidak | Tidak | Tidak |
+| Referensi master data | `/master/*` | `ViewAny:<Model>` | Ya | Izin | Tidak | Tidak | Tidak | Tidak | Tidak |
+
+Catatan:
+- Freelancer tidak punya cuti tahunan. Tampilkan pilihan `permission` dan `sick` saja, seperti form di panel.
+- Inbox persetujuan Admin hanya berisi pekerja dalam data aksesnya. Approver/BOD dengan akses `own` akan selalu kosong.
+- Riwayat presensi dan laporan berisi data milik sendiri ditambah pekerja dalam data akses. Superadmin melihat seluruh pekerja.
+
+### 4.2 Halaman dan endpoint
+
+| Halaman | Endpoint | Isi utama |
+| :--- | :--- | :--- |
+| Login | `POST /auth/login` | Simpan token, user, roles, permissions |
+| Dashboard | `GET /auth/me`, `GET /attendance/today`, `GET /approvals/pending` | Status presensi hari ini, status foto master, kartu kuota/pembimbing, badge antrean |
+| Presensi | `POST /attendance/check-in`, `check-out`, `GET /attendances` | Kamera selfie, GPS vs `company.locations[].radius_meters`, riwayat terakhir |
+| Foto master wajah | `POST`/`DELETE /attendance/master-face` | Unggah dari galeri atau kamera |
+| Pusat pengajuan | `GET` cuti, lembur, koreksi, resign | Menu per role (4.1) dan riwayat dengan badge status |
+| Form cuti | `POST /leave-requests` | Jenis, tanggal mulai/selesai, alasan, lampiran |
+| Form lembur | `POST /overtime-requests` | Tanggal, jam mulai/selesai, alasan |
+| Form koreksi | `POST /attendance-corrections` | Tanggal, jam masuk/keluar koreksi, alasan, lampiran |
+| Form resign | `POST /resignations` | Tanggal resign, hari kerja terakhir, alasan, catatan serah terima |
+| Inbox persetujuan | `GET /approvals/pending`, `PUT /approvals/{type}/{id}/process` | Tab cuti, lembur, koreksi, luar geofence (peta lokasi pekerja vs kantor), resign; tombol Setujui/Tolak + alasan |
+| Kalender cuti | `GET /kalender-cuti` | Grid bulanan cuti rekan |
+| Laporan presensi | `GET /laporan-absensi` | Kartu hadir, terlambat, cuti, tidak hadir |
+| Profil | `GET /auth/me`, `POST /auth/logout` | Biodata, badan usaha, divisi, jabatan, pembimbing, pengaturan base URL |
+
+Label status pengajuan: `pending` Menunggu Persetujuan, `approved` Disetujui, `rejected` Ditolak.
+
+---
+
+## 5. Keterbatasan yang perlu diketahui klien
+
+| Hal | Dampak |
+| :--- | :--- |
+| `master_face_photo` di objek pekerja dan kalender | Berisi path penyimpanan, bukan URL. URL hanya ada di `/auth/me` dan respons master-face. |
+| Riwayat tahap persetujuan | Endpoint detail mengirim `current_step` dan `total_steps`, tetapi belum mengirim daftar tahap beserta penyetujunya. |
+
+### Perubahan untuk klien lama
+
+| Perubahan | Yang perlu disesuaikan |
+| :--- | :--- |
+| `date`, `start_date`, `end_date` kini `YYYY-MM-DD` | Sebelumnya ISO UTC yang bergeser sehari. Parser tanggal biasa tetap bisa membacanya. |
+| `leave_type` kini `annual_leave` dan `permission` | Kode lama masih diterima saat mengirim, tetapi respons selalu memakai kode baru. Gunakan `leave_type_label` untuk tampilan. |
+| `rejection_reason` dikirim di cuti, lembur, dan koreksi | `rejection_note` masih ada dengan isi yang sama untuk aplikasi versi lama. |
+| Akun nonaktif ditolak | Tangani 403 saat login dan 401 pada token lama dengan mengarahkan ke layar login. |
+| Pengajuan tanpa alur persetujuan | Respons 422 `errors.approval_flow` tidak lagi meninggalkan pengajuan setengah jadi, jadi aman untuk dikirim ulang setelah alur dibuat. |
