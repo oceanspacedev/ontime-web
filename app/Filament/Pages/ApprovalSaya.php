@@ -9,8 +9,11 @@ use App\Models\OvertimeRequest;
 use App\Models\Resignation;
 use App\Services\ApprovalFlowService;
 use BackedEnum;
+use Filament\Actions\Action;
+use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Support\Enums\Size;
 use Illuminate\Support\Collection;
 use UnitEnum;
 
@@ -93,7 +96,44 @@ class ApprovalSaya extends Page
         return $service->getPendingRequestsForUser($user, Resignation::class);
     }
 
-    public function approveRequest(string $type, int $id): void
+    /**
+     * Approve, after a confirmation, like the Setujui action on the request lists.
+     */
+    public function approveAction(): Action
+    {
+        return Action::make('approve')
+            ->label('Setujui')
+            ->color('success')
+            ->size(Size::ExtraSmall)
+            ->requiresConfirmation()
+            ->modalHeading('Setujui pengajuan ini?')
+            ->modalSubmitActionLabel('Setujui')
+            ->action(fn (array $arguments) => $this->approveRequest((string) ($arguments['type'] ?? ''), (int) ($arguments['id'] ?? 0)));
+    }
+
+    /**
+     * Reject with a required reason, like the Tolak action on the request lists, so the requester
+     * learns why.
+     */
+    public function rejectAction(): Action
+    {
+        return Action::make('reject')
+            ->label('Tolak')
+            ->color('danger')
+            ->outlined()
+            ->size(Size::ExtraSmall)
+            ->modalHeading('Tolak pengajuan')
+            ->modalSubmitActionLabel('Tolak')
+            ->schema([
+                Textarea::make('reason')
+                    ->label('Alasan Penolakan')
+                    ->required()
+                    ->maxLength(1000),
+            ])
+            ->action(fn (array $arguments, array $data) => $this->rejectRequest((string) ($arguments['type'] ?? ''), (int) ($arguments['id'] ?? 0), (string) $data['reason']));
+    }
+
+    protected function approveRequest(string $type, int $id): void
     {
         $user = auth()->user();
         $service = new ApprovalFlowService;
@@ -117,7 +157,7 @@ class ApprovalSaya extends Page
         }
     }
 
-    public function rejectRequest(string $type, int $id, string $reason = 'Ditolak via Dashboard Approval'): void
+    protected function rejectRequest(string $type, int $id, string $reason): void
     {
         $user = auth()->user();
         $service = new ApprovalFlowService;

@@ -35,7 +35,11 @@ Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini me
 | Resign `resignation_date`, `last_working_day`; kalender cuti `start_date`, `end_date` | `YYYY-MM-DD` |
 | Koordinat presensi (`check_in_lat`, dll.) | String desimal 7 digit, contoh `"-6.1753924"` |
 
-### 1.3 Format error
+### 1.3 Tautan file
+
+`check_in_photo`, `check_out_photo`, `attachment`, dan `master_face_photo` di `/auth/me` adalah URL yang langsung bisa dibuka. Untuk disk privat (`FILESYSTEM_DISK=local` atau s3), URL-nya bertanda tangan dan berlaku 7 hari, jadi jangan disimpan permanen di aplikasi.
+
+### 1.4 Format error
 
 | Status | Kapan | Bentuk body |
 | :--- | :--- | :--- |
@@ -47,7 +51,7 @@ Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini me
 | 422 | Validasi input | `{"message": "...", "errors": {"field": ["..."]}}` |
 | 422 | Aturan bisnis (kuota habis, status bukan pending, profil tidak ada) | `{"message": "..."}` |
 
-### 1.4 Format paginasi
+### 1.5 Format paginasi
 
 Ada tiga bentuk, tergantung endpoint:
 
@@ -96,7 +100,7 @@ Superadmin selalu `all`. Setiap pengguna selalu bisa melihat data miliknya sendi
 | `PUT`/`DELETE` pengajuan | Hanya milik sendiri yang masih `pending` |
 | `GET /attendances`, `/attendances/{id}`, `/laporan-absensi` | Milik sendiri + pekerja dalam data akses, sama dengan panel. Detail di luar itu: 403 |
 | `GET /approvals/pending` | Pengajuan yang boleh diproses pemanggil (lihat 2.4) |
-| `GET /kalender-cuti` | Pekerja dalam data akses + rekan di badan usaha sendiri. `all`: semua |
+| `GET /kalender-cuti` | Pekerja dalam data akses + rekan di badan usaha sendiri. `all`: semua. Peserta magang: 403, sama seperti di panel |
 | `/master/companies`, `company-locations`, `company-policies`, `divisions`, `approval-flows` | Badan usaha yang terlihat: `all` semua; selain itu badan usaha profil sendiri + badan usaha terpilih (atau badan usaha dari divisi terpilih) |
 | `/master/employees`, `interns`, `freelancers` | Pekerja dalam data akses + profil sendiri |
 | `/master/users` | Akun sendiri + akun pekerja dalam data akses |
@@ -423,7 +427,7 @@ Isi tiap array memakai bentuk objek yang sama dengan endpoint detailnya (presens
 | GET | `/kalender-cuti` | Token | Cuti `approved` dan `pending` yang beririsan dengan bulan |
 | GET | `/laporan-absensi` | Token | Ringkasan dan daftar presensi (bentuk A) |
 
-**GET /kalender-cuti**: query `month` (bawaan bulan ini), `year` (bawaan tahun ini), `company_id` (opsional).
+**GET /kalender-cuti**: query `month` (bawaan bulan ini), `year` (bawaan tahun ini), `company_id` (opsional). Peserta magang mendapat 403.
 
 ```json
 {

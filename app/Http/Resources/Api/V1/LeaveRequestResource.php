@@ -3,6 +3,7 @@
 namespace App\Http\Resources\Api\V1;
 
 use App\Models\LeaveRequest;
+use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -29,7 +30,7 @@ class LeaveRequestResource extends JsonResource
             'rejection_reason' => $this->rejection_reason,
             // Older app versions read rejection_note.
             'rejection_note' => $this->rejection_reason,
-            'attachment' => $this->attachment ? url('storage/'.$this->attachment) : null,
+            'attachment' => StorageUrl::for($this->attachment, 'public'),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'employee' => $this->employee ? $this->formatWorkerProfile($this->employee) : null,

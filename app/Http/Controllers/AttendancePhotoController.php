@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\FileNamingService;
+use App\Support\StorageUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -31,9 +32,7 @@ class AttendancePhotoController extends Controller
                         $disk
                     );
 
-                    $url = $disk === 's3'
-                        ? Storage::disk($disk)->temporaryUrl($path, now()->addMinutes(60))
-                        : Storage::disk($disk)->url($path);
+                    $url = StorageUrl::for($path, $disk);
 
                     return response()->json([
                         'success' => true,
@@ -66,9 +65,7 @@ class AttendancePhotoController extends Controller
                     $path = 'attendance-photos/'.$filename;
                     Storage::disk($disk)->put($path, $decoded);
 
-                    $url = $disk === 's3'
-                        ? Storage::disk($disk)->temporaryUrl($path, now()->addMinutes(60))
-                        : Storage::disk($disk)->url($path);
+                    $url = StorageUrl::for($path, $disk);
 
                     return response()->json([
                         'success' => true,

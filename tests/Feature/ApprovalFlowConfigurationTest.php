@@ -16,6 +16,8 @@ use App\Models\JobTitle;
 use App\Models\LeaveRequest;
 use App\Models\Resignation;
 use App\Models\User;
+use App\Services\ApprovalFlowService;
+use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
@@ -155,6 +157,51 @@ class ApprovalFlowConfigurationTest extends TestCase
         $this->actingAs($this->employeeUser);
 
         $this->assertFalse(ApprovalSaya::canAccess());
+    }
+
+    public function test_inbox_rejection_requires_a_reason_and_keeps_it(): void
+    {
+        $leave = $this->makePendingLeaveForApprover($approverUser);
+        $this->actingAs($approverUser);
+
+        Livewire::test(ApprovalSaya::class)
+            ->callAction(TestAction::make('reject')->arguments(['type' => 'leave', 'id' => $leave->id]), data: ['reason' => ''])
+            ->assertHasActionErrors(['reason' => 'required']);
+
+        $this->assertSame('pending', $leave->fresh()->status);
+
+        Livewire::test(ApprovalSaya::class)
+            ->callAction(TestAction::make('reject')->arguments(['type' => 'leave', 'id' => $leave->id]), data: ['reason' => 'Kuota tim sudah penuh'])
+            ->assertHasNoActionErrors();
+
+        $this->assertSame(['rejected', 'Kuota tim sudah penuh'], [$leave->fresh()->status, $leave->fresh()->rejection_reason]);
+    }
+
+    public function test_inbox_approval_goes_through_the_confirm_action(): void
+    {
+        $leave = $this->makePendingLeaveForApprover($approverUser);
+        $this->actingAs($approverUser);
+
+        Livewire::test(ApprovalSaya::class)
+            ->assertActionExists(TestAction::make('approve')->arguments(['type' => 'leave', 'id' => $leave->id]), fn ($action): bool => $action->isConfirmationRequired())
+            ->callAction(TestAction::make('approve')->arguments(['type' => 'leave', 'id' => $leave->id]))
+            ->assertHasNoActionErrors();
+
+        $this->assertSame('approved', $leave->fresh()->status);
+    }
+
+    private function makePendingLeaveForApprover(?User &$approverUser): LeaveRequest
+    {
+        $this->createFlowStep('leave');
+
+        $approverUser = User::factory()->create();
+        $approverUser->assignRole('Approver');
+        $this->grantDataAccessTo($approverUser, $this->company->id, $this->division->id);
+
+        $leave = LeaveRequest::create(['employee_id' => $this->employee->id, 'leave_type' => 'sick', 'start_date' => '2026-11-09', 'end_date' => '2026-11-09', 'days_count' => 1, 'reason' => 'Demam', 'status' => 'pending']);
+        app(ApprovalFlowService::class)->generateSteps($leave, 'leave');
+
+        return $leave->fresh();
     }
 
     private function createFlowStep(string $requestType): ApprovalFlow

@@ -200,6 +200,9 @@ trait ScopesToManagedCompanies
             return false;
         }
 
+        // Accounts usually come from a table with these relations already loaded; loadMissing keeps
+        // a single account check from lazy loading.
+        $account->loadMissing(['employee', 'intern', 'freelancer']);
         $workers = array_filter([$account->employee, $account->intern, $account->freelancer]);
 
         return $workers === [] || collect($workers)->contains(fn (Model $worker): bool => $user->canManageWorker($worker));

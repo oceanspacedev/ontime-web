@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -26,7 +27,7 @@ class AttendanceCorrectionResource extends JsonResource
             'rejection_reason' => $this->rejection_reason,
             // Older app versions read rejection_note.
             'rejection_note' => $this->rejection_reason,
-            'attachment' => $this->attachment ? url('storage/'.$this->attachment) : null,
+            'attachment' => StorageUrl::for($this->attachment),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'employee' => $this->employee ? $this->formatWorkerProfile($this->employee) : null,

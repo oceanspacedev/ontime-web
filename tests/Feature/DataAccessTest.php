@@ -6,6 +6,7 @@ use App\Enums\DataScope;
 use App\Filament\Imports\EmployeeImporter;
 use App\Filament\Resources\CompanyResource;
 use App\Filament\Resources\EmployeeResource;
+use App\Filament\Resources\EmployeeResource\Pages\ListEmployees;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Filament\Resources\Users\Pages\EditUser;
 use App\Filament\Resources\Users\UserResource;
@@ -177,6 +178,20 @@ class DataAccessTest extends TestCase
         $this->assertFalse(CompanyResource::canViewAny());
         $this->assertTrue(LeaveRequestResource::canEdit($this->makeLeave($this->depoWorker)));
         $this->assertFalse(LeaveRequestResource::canEdit($this->makeLeave($this->financeWorker)));
+    }
+
+    public function test_admin_worker_lists_render_rows_with_linked_accounts(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole('Admin');
+        $admin->grantDataAccess(DataScope::Divisions, divisionIds: [$this->sales->id]);
+        $this->actingAs($admin);
+
+        // Both sales workers have a login account, so the account actions are evaluated for several rows
+        // at once, which used to lazy load the account's worker profiles.
+        Livewire::test(ListEmployees::class)
+            ->assertSuccessful()
+            ->assertCanSeeTableRecords([$this->salesWorker, $this->depoWorker]);
     }
 
     public function test_admin_with_own_access_manages_nothing(): void

@@ -14,6 +14,11 @@ class ReportAndCalendarApiController extends Controller
 {
     public function kalenderCuti(Request $request): JsonResponse
     {
+        // Same rule as the Kalender Cuti Tim page: interns do not see the team leave calendar.
+        if ($request->user()->intern !== null) {
+            return response()->json(['message' => 'Kalender cuti tim tidak tersedia untuk peserta magang.'], 403);
+        }
+
         $month = (int) $request->input('month', now()->month);
         $year = (int) $request->input('year', now()->year);
         $companyId = $request->input('company_id');

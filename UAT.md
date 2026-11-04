@@ -22,6 +22,14 @@ Siapkan juga akun uji berikut lewat menu Manajemen User:
 
 Jangan menulis password akun uji di dokumen ini.
 
+Di lokal atau staging, akun uji satu per role bisa dibuat otomatis di CV Top Selular > DISTRIBUTION SALES > REALME. Daftar akunnya ada di `database/seeders/UatAccountSeeder.php`, dan seeder ini menolak berjalan di production.
+
+```bash
+php artisan db:seed --class=UatAccountSeeder
+```
+
+Notifikasi, impor, dan ekspor berjalan di antrean, jadi Horizon harus hidup selama pengujian.
+
 ## 0. Login
 
 - [ ] **0.1** Halaman login menampilkan form email dan password, lalu tombol WhatsApp dan Email di bawah "Atau masuk dengan".
