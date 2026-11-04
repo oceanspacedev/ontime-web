@@ -129,7 +129,7 @@ class SpreadsheetImportExportTest extends TestCase
         $admin = User::factory()->create();
         $admin->assignRole('Admin');
         Company::create(['name' => 'CV Lain', 'code' => 'LAIN', 'is_active' => true]);
-        $admin->managedCompanies()->attach(Company::where('code', 'LAIN')->first());
+        $this->grantDataAccessTo($admin, Company::where('code', 'LAIN')->value('id'));
 
         $this->expectException(RowImportFailedException::class);
         $this->expectExceptionMessage('di luar akses Anda');

@@ -7,7 +7,6 @@ use App\Filament\Pages\LaporanAbsensi;
 use App\Filament\Resources\AttendanceCorrections\AttendanceCorrectionResource;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Filament\Resources\OvertimeRequests\OvertimeRequestResource;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
@@ -114,7 +113,7 @@ class WorkerRequestVisibilityTest extends TestCase
     public function test_company_level_bod_sees_workers_of_that_company_including_interns(): void
     {
         $bod = $this->makeEmployee($this->topFinance, 'BOD');
-        Approver::create(['user_id' => $bod->id, 'company_id' => $this->top->id, 'division_id' => null, 'level' => 2]);
+        $this->grantDataAccessTo($bod, $this->top->id);
 
         $this->assertVisibleLeaves($bod, [$this->leaveTop, $this->leaveIntern]);
     }
@@ -122,7 +121,7 @@ class WorkerRequestVisibilityTest extends TestCase
     public function test_division_approver_sees_employees_and_interns_of_that_division(): void
     {
         $approver = $this->makeEmployee($this->topFinance, 'Approver');
-        Approver::create(['user_id' => $approver->id, 'company_id' => $this->top->id, 'division_id' => $this->topSales->id, 'level' => 1]);
+        $this->grantDataAccessTo($approver, $this->top->id, $this->topSales->id);
 
         $this->assertVisibleLeaves($approver, [$this->leaveTop, $this->leaveIntern]);
     }
@@ -130,7 +129,7 @@ class WorkerRequestVisibilityTest extends TestCase
     public function test_corrections_and_overtime_follow_the_same_scope(): void
     {
         $bod = $this->makeEmployee($this->topFinance, 'BOD');
-        Approver::create(['user_id' => $bod->id, 'company_id' => $this->top->id, 'division_id' => null, 'level' => 2]);
+        $this->grantDataAccessTo($bod, $this->top->id);
 
         $correctionTop = AttendanceCorrection::create(['intern_id' => $this->internTop->intern->id, 'date' => '2026-11-03', 'reason' => 'Lupa absen', 'status' => 'pending']);
         AttendanceCorrection::create(['employee_id' => $this->employeeCs->employee->id, 'date' => '2026-11-03', 'reason' => 'Lupa absen', 'status' => 'pending']);
@@ -151,7 +150,7 @@ class WorkerRequestVisibilityTest extends TestCase
     public function test_attendance_report_is_limited_to_the_approver_scope(): void
     {
         $bod = $this->makeEmployee($this->topFinance, 'BOD');
-        Approver::create(['user_id' => $bod->id, 'company_id' => $this->top->id, 'division_id' => null, 'level' => 2]);
+        $this->grantDataAccessTo($bod, $this->top->id);
 
         $attendanceTop = Attendance::create(['employee_id' => $this->employeeTop->employee->id, 'date' => today(), 'status' => 'on_time']);
         $attendanceIntern = Attendance::create(['intern_id' => $this->internTop->intern->id, 'date' => today(), 'status' => 'on_time']);

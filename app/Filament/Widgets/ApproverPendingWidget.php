@@ -20,7 +20,7 @@ class ApproverPendingWidget extends BaseWidget
     {
         $user = auth()->user();
 
-        return $user && ($user->hasAnyRole(['Approver', 'BOD', 'Superadmin']) || $user->canManageCompanies());
+        return $user && ($user->hasAnyRole(['Approver', 'BOD', 'Superadmin']) || $user->canManageWorkers());
     }
 
     protected function getStats(): array

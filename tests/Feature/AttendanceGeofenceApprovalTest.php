@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Enums\AttendanceStatus;
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\Division;
@@ -104,12 +103,7 @@ class AttendanceGeofenceApprovalTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $company->id, $employee->division_id);
 
         $attendance = Attendance::create([
             'employee_id' => $employee->id,
@@ -138,12 +132,7 @@ class AttendanceGeofenceApprovalTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $company->id, $employee->division_id);
 
         $attendance = Attendance::create([
             'employee_id' => $employee->id,

@@ -5,7 +5,6 @@ namespace App\Filament\Resources;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\FreelanceResource\Pages;
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
-use App\Models\Division;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\User;
@@ -54,12 +53,12 @@ class FreelanceResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('user.roles'));
+        return static::scopeToManagedWorkers(parent::getEloquentQuery()->with('user.roles'));
     }
 
     public static function form(Schema $schema): Schema
@@ -87,7 +86,7 @@ class FreelanceResource extends Resource
 
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(fn (): array => static::managedCompanyOptions())
+                                ->options(fn (): array => static::placeableCompanyOptions())
                                 ->helperText('Otomatis terisi jika PIC / Supervisor Karyawan dipilih.')
                                 ->required()
                                 ->live()
@@ -98,17 +97,7 @@ class FreelanceResource extends Resource
 
                             Select::make('division_id')
                                 ->label('Divisi')
-                                ->options(function (Get $get) {
-                                    $companyId = $get('company_id');
-                                    if (! $companyId) {
-                                        return [];
-                                    }
-
-                                    return Division::query()
-                                        ->where('company_id', $companyId)
-                                        ->where('is_active', true)
-                                        ->pluck('name', 'id');
-                                })
+                                ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
                                 ->helperText('Otomatis terisi jika PIC / Supervisor Karyawan dipilih.')
                                 ->required(),
 
@@ -135,6 +124,8 @@ class FreelanceResource extends Resource
                                     if ($companyId = $get('company_id')) {
                                         $query->where('company_id', $companyId);
                                     }
+
+                                    static::scopeToManagedWorkers($query);
                                 })
                                 ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
                                 ->helperText('Memilih PIC / Supervisor akan otomatis mengeset Badan Usaha & Divisi.')
@@ -270,11 +261,11 @@ class FreelanceResource extends Resource
             ->filters([
                 SelectFilter::make('company_id')
                     ->label('Badan Usaha')
-                    ->relationship('company', 'name'),
+                    ->relationship('company', 'name', fn (Builder $query) => static::scopeToPlaceableCompanies($query, 'companies.id')),
 
                 SelectFilter::make('division_id')
                     ->label('Divisi')
-                    ->relationship('division', 'name'),
+                    ->relationship('division', 'name', fn (Builder $query) => static::scopeToPlaceableDivisions($query)),
 
                 SelectFilter::make('supervisor_id')
                     ->label('PIC / Supervisor (Karyawan)')

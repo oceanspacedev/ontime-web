@@ -7,7 +7,6 @@ use App\Filament\Resources\LeaveRequests\Pages\ListLeaveRequests;
 use App\Filament\Resources\OvertimeRequests\Pages\ListOvertimeRequests;
 use App\Filament\Resources\ResignationResource\Pages\ListResignations;
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
 use App\Models\Division;
@@ -57,7 +56,7 @@ class RequestListRenderingTest extends TestCase
 
         $this->approver = User::factory()->create();
         $this->approver->assignRole('Approver');
-        Approver::create(['user_id' => $this->approver->id, 'company_id' => $company->id, 'division_id' => $division->id, 'level' => 1]);
+        $this->grantDataAccessTo($this->approver, $company->id, $division->id);
 
         $this->workers = [
             'employee' => Employee::create([

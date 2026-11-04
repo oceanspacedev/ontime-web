@@ -16,4 +16,9 @@ class EditUser extends EditRecord
             DeleteAction::make(),
         ];
     }
+
+    protected function afterSave(): void
+    {
+        $this->record->clearUnusedDataAccess();
+    }
 }

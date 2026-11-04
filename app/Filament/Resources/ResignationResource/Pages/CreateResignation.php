@@ -19,9 +19,9 @@ class CreateResignation extends CreateRecord
     {
         $user = auth()->user();
 
-        // Superadmin and Admin Badan Usaha may file for an employee they manage; everyone else only for themself.
+        // Superadmin and Admin may file for an employee inside their data access; everyone else only for themself.
         $onBehalf = filled($data['employee_id'] ?? null)
-            && $user?->canManageCompany(Employee::query()->whereKey($data['employee_id'])->value('company_id'));
+            && $user?->canManageWorker(Employee::query()->find($data['employee_id']));
 
         if (! $onBehalf) {
             $data['employee_id'] = $user?->employee?->id;

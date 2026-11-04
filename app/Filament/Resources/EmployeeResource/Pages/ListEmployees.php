@@ -73,7 +73,7 @@ class ListEmployees extends ListRecords
                     (string) $file->get(),
                     dryRun: (bool) ($data['dry_run'] ?? false),
                     deactivateMissing: (bool) ($data['deactivate_missing'] ?? false),
-                    allowedCompanyIds: auth()->user()?->managedCompanyIds(),
+                    allowedCompanyIds: auth()->user()->manageableCompanyIds(),
                 );
 
                 $this->notifyImportResult($result);

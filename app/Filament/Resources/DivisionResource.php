@@ -142,7 +142,7 @@ class DivisionResource extends Resource
             ->filters([
                 SelectFilter::make('company_id')
                     ->label('Badan Usaha')
-                    ->relationship('company', 'name'),
+                    ->relationship('company', 'name', fn (Builder $query) => static::scopeToManagedCompanies($query, 'companies.id')),
                 TernaryFilter::make('is_active')
                     ->label('Status Aktif'),
             ])

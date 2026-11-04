@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Enums\AttendanceStatus;
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
@@ -147,22 +146,12 @@ class AttendanceTest extends TestCase
         // Approver 1: mapped to division
         $user1 = User::factory()->create();
         $user1->assignRole('Approver');
-        Approver::create([
-            'user_id' => $user1->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($user1, $company->id, $employee->division_id);
 
         // BOD: mapped to company level
         $user2 = User::factory()->create();
         $user2->assignRole('BOD');
-        Approver::create([
-            'user_id' => $user2->id,
-            'company_id' => $company->id,
-            'division_id' => null,
-            'level' => 2,
-        ]);
+        $this->grantDataAccessTo($user2, $company->id);
 
         $user3 = User::factory()->create();
         $user3->assignRole('Superadmin');

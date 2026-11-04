@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\Division;
@@ -120,22 +119,12 @@ class LeaveOvertimeTest extends TestCase
         // Approver 1: division level
         $user1 = User::factory()->create();
         $user1->assignRole('Approver');
-        Approver::create([
-            'user_id' => $user1->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($user1, $company->id, $employee->division_id);
 
         // BOD: company level
         $user2 = User::factory()->create();
         $user2->assignRole('BOD');
-        Approver::create([
-            'user_id' => $user2->id,
-            'company_id' => $company->id,
-            'division_id' => null,
-            'level' => 2,
-        ]);
+        $this->grantDataAccessTo($user2, $company->id);
 
         $user3 = User::factory()->create();
         $user3->assignRole('Superadmin');
@@ -224,12 +213,7 @@ class LeaveOvertimeTest extends TestCase
 
         $user1 = User::factory()->create();
         $user1->assignRole('Approver');
-        Approver::create([
-            'user_id' => $user1->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($user1, $company->id, $employee->division_id);
 
         $leaveRequest = LeaveRequest::create([
             'employee_id' => $employee->id,
@@ -290,12 +274,7 @@ class LeaveOvertimeTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $company->id, $employee->division_id);
 
         $leaveRequest = LeaveRequest::create([
             'employee_id' => $employee->id,
@@ -374,19 +353,9 @@ class LeaveOvertimeTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $company->id,
-            'division_id' => $bodEmployee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $company->id, $bodEmployee->division_id);
 
-        Approver::create([
-            'user_id' => $bodUser->id,
-            'company_id' => $company->id,
-            'division_id' => null,
-            'level' => 2,
-        ]);
+        $this->grantDataAccessTo($bodUser, $company->id);
 
         $leaveRequest = LeaveRequest::create([
             'employee_id' => $bodEmployee->id,
@@ -448,21 +417,11 @@ class LeaveOvertimeTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $company->id,
-            'division_id' => $employee->division_id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $company->id, $employee->division_id);
 
         $bodUser = User::factory()->create();
         $bodUser->assignRole('BOD');
-        Approver::create([
-            'user_id' => $bodUser->id,
-            'company_id' => $company->id,
-            'division_id' => null,
-            'level' => 2,
-        ]);
+        $this->grantDataAccessTo($bodUser, $company->id);
 
         $superadmin = User::factory()->create();
         $superadmin->assignRole('Superadmin');
@@ -557,12 +516,7 @@ class LeaveOvertimeTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $company->id,
-            'division_id' => $division->id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $company->id, $division->id);
 
         $service->approveStep($leaveRequest, $approverUser);
         $leaveRequest = $leaveRequest->fresh();

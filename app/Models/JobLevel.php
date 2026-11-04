@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * CATATAN PENTING:
  * Field 'level_order' (urutan level) HANYA digunakan untuk keperluan tampilan/sorting UI.
  * Field ini TIDAK BOLEH digunakan untuk logic alur persetujuan (approval flow) atau pengizinan hak akses sistem.
- * Alur approval murni ditentukan dari mapping eksplisit pada tabel 'approvers'.
+ * Alur approval murni ditentukan dari role pada tahap approval dan Akses Data tiap user.
  */
 class JobLevel extends Model
 {

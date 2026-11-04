@@ -5,7 +5,6 @@ namespace App\Filament\Resources\Attendances;
 use App\Enums\AttendanceStatus;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Models\Attendance;
-use App\Models\Company;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -49,7 +48,7 @@ class AttendanceResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     public static function getEloquentQuery(): Builder
@@ -216,7 +215,7 @@ class AttendanceResource extends Resource
 
                 SelectFilter::make('company')
                     ->label('Perusahaan')
-                    ->options(fn () => Company::pluck('name', 'id'))
+                    ->options(fn (): array => static::placeableCompanyOptions(activeOnly: false))
                     ->query(function (Builder $query, array $data): Builder {
                         $companyId = $data['value'] ?? null;
                         if (! $companyId) {

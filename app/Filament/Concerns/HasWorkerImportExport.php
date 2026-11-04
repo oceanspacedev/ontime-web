@@ -42,6 +42,6 @@ trait HasWorkerImportExport
             ->icon('heroicon-m-arrows-up-down')
             ->color('gray')
             ->button()
-            ->visible(fn (): bool => (bool) auth()->user()?->canManageCompanies());
+            ->visible(fn (): bool => (bool) auth()->user()?->canManageWorkers());
     }
 }

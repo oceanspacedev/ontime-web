@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\DataScope;
 use App\Filament\Resources\CompanyResource;
 use App\Filament\Resources\EmployeeResource;
 use App\Filament\Resources\EmployeeResource\Pages\ListEmployees;
@@ -55,7 +56,7 @@ class CompanyAdminAccessTest extends TestCase
 
         $this->admin = User::factory()->create();
         $this->admin->assignRole('Admin');
-        $this->admin->managedCompanies()->attach($this->top);
+        $this->grantDataAccessTo($this->admin, $this->top->id);
 
         $this->superadmin = User::factory()->create();
         $this->superadmin->assignRole('Superadmin');
@@ -143,7 +144,8 @@ class CompanyAdminAccessTest extends TestCase
         $this->actingAs($emptyAdmin);
 
         $this->assertFalse(EmployeeResource::canViewAny());
-        $this->assertSame([], $emptyAdmin->managedCompanyIds());
+        $this->assertFalse(CompanyResource::canViewAny());
+        $this->assertSame([], $emptyAdmin->manageableCompanyIds());
     }
 
     public function test_superadmin_grants_company_access_to_an_admin(): void
@@ -154,11 +156,13 @@ class CompanyAdminAccessTest extends TestCase
         $this->actingAs($this->superadmin);
 
         Livewire::test(EditUser::class, ['record' => $user->id])
-            ->fillForm(['managedCompanies' => [$this->top->id, $this->cs->id]])
+            ->fillForm(['data_scope' => DataScope::Companies->value, 'accessibleCompanies' => [$this->top->id, $this->cs->id]])
             ->call('save')
             ->assertHasNoFormErrors();
 
-        $this->assertEqualsCanonicalizing([$this->top->id, $this->cs->id], $user->fresh()->managedCompanyIds());
+        $user = $user->fresh();
+        $this->assertSame(DataScope::Companies, $user->dataScope());
+        $this->assertEqualsCanonicalizing([$this->top->id, $this->cs->id], $user->manageableCompanyIds());
     }
 
     private function makeEmployee(Company $company, string $nip): Employee

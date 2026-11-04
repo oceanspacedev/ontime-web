@@ -52,7 +52,7 @@ class ShiftScheduleTest extends TestCase
 
         $this->admin = User::factory()->create();
         $this->admin->assignRole('Admin');
-        $this->admin->managedCompanies()->attach($this->company);
+        $this->grantDataAccessTo($this->admin, $this->company->id);
     }
 
     public function test_working_hours_come_from_schedule_then_default_shift_then_policy(): void

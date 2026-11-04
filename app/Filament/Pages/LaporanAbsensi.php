@@ -4,11 +4,11 @@ namespace App\Filament\Pages;
 
 use App\Enums\AttendanceStatus;
 use App\Exports\AttendanceReportExport;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\CompanyPolicy;
 use App\Models\Division;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -64,23 +64,8 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
     public static function form(Schema $schema): Schema
     {
         $user = auth()->user();
-        $isSuperadmin = $user?->hasRole('Superadmin');
-        $isApprover = $user?->hasAnyRole(['Approver', 'BOD']);
-
-        $allowedCompanyIds = [];
-        $allowedDivisionIds = [];
-
-        if ($user && ! $isSuperadmin && $isApprover) {
-            $allowedDivisionIds = Approver::where('user_id', $user->id)
-                ->whereNotNull('division_id')
-                ->pluck('division_id')
-                ->toArray();
-
-            $allowedCompanyIds = Approver::where('user_id', $user->id)
-                ->whereNull('division_id')
-                ->pluck('company_id')
-                ->toArray();
-        }
+        $visibleCompanyIds = $user ? DataAccessService::visibleCompanyIds($user) : [];
+        $visibleDivisionIds = $user ? DataAccessService::visibleDivisionIds($user) : [];
 
         return $schema
             ->statePath('filterData')
@@ -100,36 +85,25 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
 
                             Select::make('company_id')
                                 ->label('Badan Usaha')
-                                ->options(function () use ($isSuperadmin, $isApprover, $allowedCompanyIds, $allowedDivisionIds) {
-                                    $query = Company::query()->where('is_active', true);
-                                    if (! $isSuperadmin && $isApprover) {
-                                        $query->where(function ($q) use ($allowedCompanyIds, $allowedDivisionIds) {
-                                            $q->whereIn('id', $allowedCompanyIds)
-                                                ->orWhereHas('divisions', fn ($d) => $d->whereIn('id', $allowedDivisionIds));
-                                        });
-                                    }
-
-                                    return $query->pluck('name', 'id');
-                                })
+                                ->options(fn (): array => Company::query()
+                                    ->where('is_active', true)
+                                    ->when($visibleCompanyIds !== null, fn (Builder $query) => $query->whereIn('id', $visibleCompanyIds))
+                                    ->orderBy('name')
+                                    ->pluck('name', 'id')
+                                    ->all())
                                 ->live()
                                 ->placeholder('Semua Company'),
 
                             Select::make('division_id')
                                 ->label('Divisi')
-                                ->options(function (Get $get) use ($isSuperadmin, $allowedDivisionIds, $isApprover) {
-                                    $companyId = $get('company_id');
-                                    $query = Division::query()->where('is_active', true);
-
-                                    if ($companyId) {
-                                        $query->where('company_id', $companyId);
-                                    }
-
-                                    if (! $isSuperadmin && $isApprover && ! empty($allowedDivisionIds)) {
-                                        $query->whereIn('id', $allowedDivisionIds);
-                                    }
-
-                                    return $query->pluck('name', 'id');
-                                })
+                                ->options(fn (Get $get): array => Division::query()
+                                    ->where('is_active', true)
+                                    ->when($get('company_id'), fn (Builder $query, $companyId) => $query->where('company_id', $companyId))
+                                    ->when($visibleCompanyIds !== null, fn (Builder $query) => $query->whereIn('company_id', $visibleCompanyIds))
+                                    ->when($visibleDivisionIds !== null, fn (Builder $query) => $query->whereIn('id', $visibleDivisionIds))
+                                    ->orderBy('name')
+                                    ->pluck('name', 'id')
+                                    ->all())
                                 ->live()
                                 ->placeholder('Semua Divisi'),
                         ]),

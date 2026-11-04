@@ -9,6 +9,7 @@ use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Shift;
 use App\Models\User;
+use App\Services\DataAccessService;
 use Carbon\Carbon;
 use Filament\Actions\Imports\Exceptions\RowImportFailedException;
 use Illuminate\Database\Eloquent\Model;
@@ -31,12 +32,12 @@ trait ResolvesWorkerPlacement
     }
 
     /**
-     * Stop when an existing record belongs to a company the importing user does not manage.
+     * Stop when an existing record is placed outside the importing user's data access.
      */
     protected function guardExistingRecord(Model $record): void
     {
-        if ($record->exists && ! $this->importingUser()?->canManageCompany($record->getAttribute('company_id'))) {
-            $this->failRow('Data ini terdaftar di badan usaha di luar akses Anda.');
+        if ($record->exists && ! $this->importingUser()?->canManageWorker($record)) {
+            $this->failRow('Data ini terdaftar di badan usaha atau divisi di luar akses Anda.');
         }
     }
 
@@ -53,7 +54,9 @@ trait ResolvesWorkerPlacement
             ->orWhereRaw('UPPER(name) = ?', [$key])
             ->first() ?? $this->failRow("Badan usaha \"{$value}\" tidak ditemukan.");
 
-        if (! $this->importingUser()?->canManageCompany($company->id)) {
+        $placeable = $this->importingUser() ? DataAccessService::placeableCompanyIds($this->importingUser()) : [];
+
+        if ($placeable !== null && ! in_array((int) $company->id, $placeable, true)) {
             $this->failRow("Badan usaha \"{$company->name}\" di luar akses Anda.");
         }
 
@@ -146,7 +149,7 @@ trait ResolvesWorkerPlacement
 
         $employee = Employee::query()->where('nip', $nip)->first() ?? $this->failRow("{$label} dengan NIP {$nip} tidak ditemukan.");
 
-        if (! $this->importingUser()?->canManageCompany($employee->company_id)) {
+        if (! $this->importingUser()?->canManageWorker($employee)) {
             $this->failRow("{$label} dengan NIP {$nip} di luar akses Anda.");
         }
 
@@ -161,6 +164,11 @@ trait ResolvesWorkerPlacement
     {
         $company = $this->companyFromState($this->data['company'] ?? null);
         $division = $this->divisionFromState($company, $this->data['division'] ?? null);
+
+        if (! $this->importingUser()?->canManagePlacement($company->id, $division->id)) {
+            $this->failRow("Divisi \"{$division->name}\" di luar akses Anda.");
+        }
+
         $movedCompany = (int) $record->getOriginal('company_id') !== (int) $company->id;
 
         $record->setAttribute('company_id', $company->id);

@@ -30,7 +30,7 @@ class ApprovalSaya extends Page
 
     public static function canAccess(): bool
     {
-        return (bool) (auth()->user()?->hasAnyRole(['Approver', 'BOD', 'Superadmin']) || auth()->user()?->canManageCompanies());
+        return (bool) (auth()->user()?->hasAnyRole(['Approver', 'BOD', 'Superadmin']) || auth()->user()?->canManageWorkers());
     }
 
     public function getPendingLeaveRequestsProperty(): Collection

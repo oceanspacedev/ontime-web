@@ -8,7 +8,6 @@ use App\Filament\Resources\LeaveRequests\Pages\CreateLeaveRequest;
 use App\Filament\Resources\ResignationResource\Pages\CreateResignation;
 use App\Models\ApprovalFlow;
 use App\Models\ApprovalRequestStep;
-use App\Models\Approver;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
@@ -128,7 +127,7 @@ class ApprovalFlowConfigurationTest extends TestCase
 
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create(['user_id' => $approverUser->id, 'company_id' => $this->company->id, 'division_id' => $this->division->id, 'level' => 1]);
+        $this->grantDataAccessTo($approverUser, $this->company->id, $this->division->id);
 
         $this->actingAs($this->employeeUser);
 

@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Company;
 use App\Models\CompanyPolicy;
 use App\Models\Division;
@@ -97,12 +96,7 @@ class ApiEndpointsExtensionTest extends TestCase
         $this->approverUser->assignRole($approverRole);
         $this->approverUser->refresh();
 
-        Approver::create([
-            'user_id' => $this->approverUser->id,
-            'company_id' => $this->company->id,
-            'division_id' => $this->division->id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($this->approverUser, $this->company->id, $this->division->id);
 
         foreach (['leave', 'overtime', 'correction', 'resignation'] as $type) {
             ApprovalFlow::create([

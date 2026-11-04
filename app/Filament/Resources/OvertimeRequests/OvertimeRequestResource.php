@@ -81,7 +81,7 @@ class OvertimeRequestResource extends Resource
 
     public static function canDeleteAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     public static function getEloquentQuery(): Builder

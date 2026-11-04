@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\AttendanceCorrections\Pages\CreateAttendanceCorrection;
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
 use App\Models\Division;
@@ -97,7 +96,7 @@ class ApprovalIntegrityTest extends TestCase
         ApprovalFlow::create(['company_id' => $this->company->id, 'request_type' => 'overtime', 'step_number' => 1, 'step_order' => 1, 'name' => 'Approver', 'approver_type' => 'role', 'approver_role' => 'Approver']);
 
         $approver = $this->makeWorker('Approver');
-        Approver::create(['user_id' => $approver->id, 'company_id' => $this->company->id, 'division_id' => $this->division->id, 'level' => 1]);
+        $this->grantDataAccessTo($approver, $this->company->id, $this->division->id);
         $colleague = $this->makeWorker('Employee');
 
         $this->assertFalse($this->service->isUserAuthorizedToApprove($this->makeOvertime($approver), $approver));
@@ -107,7 +106,7 @@ class ApprovalIntegrityTest extends TestCase
     public function test_requester_may_pass_an_intermediate_stage_matching_their_role(): void
     {
         $approver = $this->makeWorker('Approver');
-        Approver::create(['user_id' => $approver->id, 'company_id' => $this->company->id, 'division_id' => $this->division->id, 'level' => 1]);
+        $this->grantDataAccessTo($approver, $this->company->id, $this->division->id);
 
         $leave = $this->makeLeave($approver);
 
