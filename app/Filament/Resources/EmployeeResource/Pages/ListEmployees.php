@@ -2,6 +2,9 @@
 
 namespace App\Filament\Resources\EmployeeResource\Pages;
 
+use App\Filament\Concerns\HasWorkerImportExport;
+use App\Filament\Exports\EmployeeExporter;
+use App\Filament\Imports\EmployeeImporter;
 use App\Filament\Resources\EmployeeResource;
 use App\Services\TalentaEmployeeImportService;
 use Filament\Actions;
@@ -14,12 +17,16 @@ use Illuminate\Http\UploadedFile;
 
 class ListEmployees extends ListRecords
 {
+    use HasWorkerImportExport;
+
     protected static string $resource = EmployeeResource::class;
 
     protected function getHeaderActions(): array
     {
         return [
-            $this->importTalentaAction(),
+            $this->importExportActionGroup(EmployeeImporter::class, EmployeeExporter::class, [
+                $this->importTalentaAction(),
+            ]),
             Actions\CreateAction::make(),
         ];
     }

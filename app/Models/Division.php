@@ -69,6 +69,30 @@ class Division extends Model
         return $depth;
     }
 
+    /**
+     * Full path from the top level, e.g. "DISTRIBUTION SALES > DEPO BANDUNG". Uses eager-loaded
+     * parents when present and plain queries otherwise (never lazy loading).
+     */
+    public function pathName(): string
+    {
+        $names = [];
+        $node = $this;
+        $visited = [];
+
+        while ($node && ! isset($visited[$node->id])) {
+            $visited[$node->id] = true;
+            array_unshift($names, $node->name);
+
+            $node = match (true) {
+                $node->relationLoaded('parent') => $node->parent,
+                $node->parent_id !== null => static::query()->find($node->parent_id),
+                default => null,
+            };
+        }
+
+        return implode(' > ', $names);
+    }
+
     public function isDescendantOf(int $targetId): bool
     {
         return in_array($targetId, $this->getAllChildrenIds(), true);

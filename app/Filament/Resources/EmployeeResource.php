@@ -317,7 +317,9 @@ class EmployeeResource extends Resource
                         'active' => 'Aktif',
                         'inactive' => 'Non-Aktif',
                         'resigned' => 'Resign',
-                    ]),
+                    ])
+                    // Most rows are resigned history; start with the people who still work here.
+                    ->default('active'),
             ])
             ->actions([
                 Action::make('createUser')
