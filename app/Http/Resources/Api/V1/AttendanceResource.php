@@ -2,9 +2,9 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Facades\Storage;
 
 class AttendanceResource extends JsonResource
 {
@@ -60,24 +60,6 @@ class AttendanceResource extends JsonResource
 
     private function formatStorageUrl(?string $path): ?string
     {
-        if (! $path) {
-            return null;
-        }
-
-        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-            return $path;
-        }
-
-        $disk = config('filesystems.default');
-
-        if ($disk === 's3') {
-            try {
-                return Storage::disk('s3')->temporaryUrl($path, now()->addDays(7));
-            } catch (\Throwable $e) {
-                return Storage::disk('s3')->url($path);
-            }
-        }
-
-        return Storage::disk($disk)->url($path);
+        return StorageUrl::for($path);
     }
 }

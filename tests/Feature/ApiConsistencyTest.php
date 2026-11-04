@@ -14,8 +14,10 @@ use App\Models\JobTitle;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\User;
+use App\Support\StorageUrl;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -92,6 +94,23 @@ class ApiConsistencyTest extends TestCase
         Sanctum::actingAs($this->salesWorker->user);
 
         $this->getJson('/api/v1/attendances')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $own->id);
+    }
+
+    public function test_photo_links_open_on_a_private_local_disk(): void
+    {
+        config(['filesystems.default' => 'local']);
+        Storage::disk('local')->put('attendance/photos/uat-selfie.png', 'png-bytes');
+
+        try {
+            $url = StorageUrl::for('attendance/photos/uat-selfie.png');
+
+            $this->assertStringContainsString('signature=', (string) $url);
+            $this->get((string) $url)->assertOk();
+            $this->assertNull(StorageUrl::for(null));
+            $this->assertSame('https://cdn.contoh.id/a.png', StorageUrl::for('https://cdn.contoh.id/a.png'));
+        } finally {
+            Storage::disk('local')->delete('attendance/photos/uat-selfie.png');
+        }
     }
 
     public function test_inactive_account_cannot_log_in(): void

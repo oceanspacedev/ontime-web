@@ -58,7 +58,7 @@ class FreelanceResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedWorkers(parent::getEloquentQuery()->with('user.roles'));
+        return static::scopeToManagedWorkers(parent::getEloquentQuery()->with(['user.roles', 'user.employee', 'user.intern', 'user.freelancer']));
     }
 
     public static function form(Schema $schema): Schema

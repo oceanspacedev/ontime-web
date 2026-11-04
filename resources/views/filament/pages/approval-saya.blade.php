@@ -167,8 +167,8 @@
                                 </div>
 
                                 <div class="flex items-center gap-2">
-                                    <x-filament::button wire:click="rejectRequest('geofence', {{ $item->id }})" color="danger" outlined size="xs">Tolak</x-filament::button>
-                                    <x-filament::button wire:click="approveRequest('geofence', {{ $item->id }})" color="success" size="xs">Setujui</x-filament::button>
+                                    {{ ($this->rejectAction)(['type' => 'geofence', 'id' => $item->id]) }}
+                                    {{ ($this->approveAction)(['type' => 'geofence', 'id' => $item->id]) }}
                                 </div>
                             </div>
                         </div>
@@ -225,8 +225,8 @@
                                 @endif
 
                                 <div class="flex items-center gap-2">
-                                    <x-filament::button wire:click="rejectRequest('leave', {{ $item->id }})" color="danger" outlined size="xs">Tolak</x-filament::button>
-                                    <x-filament::button wire:click="approveRequest('leave', {{ $item->id }})" color="success" size="xs">Setujui</x-filament::button>
+                                    {{ ($this->rejectAction)(['type' => 'leave', 'id' => $item->id]) }}
+                                    {{ ($this->approveAction)(['type' => 'leave', 'id' => $item->id]) }}
                                 </div>
                             </div>
                         </div>
@@ -270,8 +270,8 @@
                             </dl>
 
                             <div class="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
-                                <x-filament::button wire:click="rejectRequest('overtime', {{ $item->id }})" color="danger" outlined size="xs">Tolak</x-filament::button>
-                                <x-filament::button wire:click="approveRequest('overtime', {{ $item->id }})" color="success" size="xs">Setujui</x-filament::button>
+                                {{ ($this->rejectAction)(['type' => 'overtime', 'id' => $item->id]) }}
+                                {{ ($this->approveAction)(['type' => 'overtime', 'id' => $item->id]) }}
                             </div>
                         </div>
                     @endforeach
@@ -328,8 +328,8 @@
                                 @endif
 
                                 <div class="flex items-center gap-2">
-                                    <x-filament::button wire:click="rejectRequest('correction', {{ $item->id }})" color="danger" outlined size="xs">Tolak</x-filament::button>
-                                    <x-filament::button wire:click="approveRequest('correction', {{ $item->id }})" color="success" size="xs">Setujui</x-filament::button>
+                                    {{ ($this->rejectAction)(['type' => 'correction', 'id' => $item->id]) }}
+                                    {{ ($this->approveAction)(['type' => 'correction', 'id' => $item->id]) }}
                                 </div>
                             </div>
                         </div>
@@ -373,8 +373,8 @@
                             </dl>
 
                             <div class="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
-                                <x-filament::button wire:click="rejectRequest('resignation', {{ $item->id }})" color="danger" outlined size="xs">Tolak</x-filament::button>
-                                <x-filament::button wire:click="approveRequest('resignation', {{ $item->id }})" color="success" size="xs">Setujui</x-filament::button>
+                                {{ ($this->rejectAction)(['type' => 'resignation', 'id' => $item->id]) }}
+                                {{ ($this->approveAction)(['type' => 'resignation', 'id' => $item->id]) }}
                             </div>
                         </div>
                     @endforeach

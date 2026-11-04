@@ -197,6 +197,15 @@ class WorkerRequestVisibilityTest extends TestCase
         $this->assertSame([$this->leaveCs->id], collect($response->json('data'))->pluck('id')->all());
     }
 
+    public function test_leave_calendar_is_closed_to_interns_on_web_and_api(): void
+    {
+        $this->actingAs($this->internTop);
+        $this->assertFalse(KalenderCuti::canAccess());
+
+        Sanctum::actingAs($this->internTop);
+        $this->getJson('/api/v1/kalender-cuti')->assertForbidden();
+    }
+
     public function test_leave_api_detail_is_forbidden_for_other_companies(): void
     {
         Sanctum::actingAs($this->employeeTop);
