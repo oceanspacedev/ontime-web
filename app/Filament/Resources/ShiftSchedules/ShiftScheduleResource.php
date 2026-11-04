@@ -49,7 +49,7 @@ class ShiftScheduleResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     /**
@@ -72,7 +72,7 @@ class ShiftScheduleResource extends Resource
 
     public static function canDeleteAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     public static function getEloquentQuery(): Builder
@@ -144,7 +144,7 @@ class ShiftScheduleResource extends Resource
             ->filters([
                 SelectFilter::make('company')
                     ->label('Badan Usaha')
-                    ->options(fn (): array => static::managedCompanyOptions(activeOnly: false))
+                    ->options(fn (): array => static::placeableCompanyOptions(activeOnly: false))
                     ->query(fn (Builder $query, array $data): Builder => filled($data['value'] ?? null)
                         ? $query->whereWorkerInCompanies([(int) $data['value']])
                         : $query),
@@ -174,13 +174,13 @@ class ShiftScheduleResource extends Resource
     }
 
     /**
-     * Active shifts of a company the current user manages.
+     * Active shifts of a company the current user may place workers in.
      *
      * @return array<int, string>
      */
     public static function shiftOptions(int|string|null $companyId): array
     {
-        if (! $companyId || ! auth()->user()?->canManageCompany($companyId)) {
+        if (! static::canPlaceInCompany($companyId)) {
             return [];
         }
 
@@ -194,20 +194,21 @@ class ShiftScheduleResource extends Resource
     }
 
     /**
-     * Active workers of a company, grouped by type and keyed "employee:ID", "intern:ID" or "freelancer:ID".
+     * Active workers of a company inside the user's data access, grouped by type and keyed
+     * "employee:ID", "intern:ID" or "freelancer:ID".
      *
      * @return array<string, array<string, string>>
      */
     public static function workerOptions(int|string|null $companyId): array
     {
-        if (! $companyId || ! auth()->user()?->canManageCompany($companyId)) {
+        if (! static::canPlaceInCompany($companyId)) {
             return [];
         }
 
         $options = [];
 
         foreach (['Karyawan' => [Employee::class, 'employee', 'nip'], 'Magang' => [Intern::class, 'intern', 'nis'], 'Freelancer' => [Freelancer::class, 'freelancer', 'freelancer_number']] as $group => [$model, $type, $code]) {
-            $options[$group] = $model::query()
+            $options[$group] = static::scopeToManagedWorkers($model::query())
                 ->where('company_id', $companyId)
                 ->where('status', 'active')
                 ->orderBy('full_name')

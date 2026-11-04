@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Enums\DataScope;
 use App\Models\ApprovalFlow;
 use App\Models\Company;
 use App\Models\Division;
@@ -112,6 +113,7 @@ class DatabaseSeeder extends Seeder
             ]
         );
         $approverUser->assignRole($approverRole);
+        $approverUser->grantDataAccess(DataScope::All);
 
         $bodUser = User::firstOrCreate(
             ['email' => 'bod@ontime.oceanspace.co.id'],
@@ -121,6 +123,7 @@ class DatabaseSeeder extends Seeder
             ]
         );
         $bodUser->assignRole($bodRole);
+        $bodUser->grantDataAccess(DataScope::All);
 
         // Assign Employee Role to All Generated Users from ProductionSeeder
         foreach (User::all() as $usr) {

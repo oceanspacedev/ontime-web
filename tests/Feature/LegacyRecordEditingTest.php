@@ -2,14 +2,12 @@
 
 namespace Tests\Feature;
 
-use App\Filament\Resources\ApproverResource\Pages\CreateApprover;
-use App\Filament\Resources\ApproverResource\Pages\EditApprover;
+use App\Enums\DataScope;
 use App\Filament\Resources\EmployeeResource\Pages\EditEmployee;
 use App\Filament\Resources\FreelanceResource\Pages\EditFreelancer;
 use App\Filament\Resources\InternResource\Pages\EditIntern;
 use App\Filament\Resources\Users\Pages\CreateUser;
 use App\Filament\Resources\Users\Pages\EditUser;
-use App\Models\Approver;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
@@ -172,30 +170,32 @@ class LegacyRecordEditingTest extends TestCase
         $this->assertSame($this->resignedEmployee->id, $freelancer->fresh()->supervisor_id);
     }
 
-    public function test_approver_scope_can_change_from_division_to_company(): void
+    public function test_data_access_can_change_from_division_to_company(): void
     {
         $approverUser = $this->makeApproverUser();
-        $mapping = Approver::create(['user_id' => $approverUser->id, 'company_id' => $this->company->id, 'division_id' => $this->division->id, 'level' => 1]);
+        $this->grantDataAccessTo($approverUser, $this->company->id, $this->division->id);
 
-        Livewire::test(EditApprover::class, ['record' => $mapping->id])
-            ->fillForm(['scope_type' => 'company'])
+        Livewire::test(EditUser::class, ['record' => $approverUser->id])
+            ->fillForm(['data_scope' => DataScope::Companies->value, 'accessibleCompanies' => [$this->company->id]])
             ->call('save')
             ->assertHasNoFormErrors();
 
-        $this->assertNull($mapping->fresh()->division_id);
+        $approverUser = $approverUser->fresh();
+        $this->assertSame(DataScope::Companies, $approverUser->dataScope());
+        $this->assertSame([$this->company->id], $approverUser->accessibleCompanies()->pluck('companies.id')->all());
+        $this->assertSame(0, $approverUser->accessibleDivisions()->count(), 'Division picks the new level does not use are cleared.');
     }
 
-    public function test_duplicate_approver_mapping_shows_the_error_on_the_form(): void
+    public function test_missing_data_access_picks_show_the_error_on_the_form(): void
     {
         $approverUser = $this->makeApproverUser();
-        Approver::create(['user_id' => $approverUser->id, 'company_id' => $this->company->id, 'division_id' => null, 'level' => 1]);
 
-        Livewire::test(CreateApprover::class)
-            ->fillForm(['user_id' => $approverUser->id, 'scope_type' => 'company', 'company_id' => $this->company->id, 'level' => 1])
-            ->call('create')
-            ->assertHasFormErrors(['user_id']);
+        Livewire::test(EditUser::class, ['record' => $approverUser->id])
+            ->fillForm(['data_scope' => DataScope::Divisions->value, 'accessibleDivisions' => []])
+            ->call('save')
+            ->assertHasFormErrors(['accessibleDivisions']);
 
-        $this->assertSame(1, Approver::count());
+        $this->assertSame(DataScope::Own, $approverUser->fresh()->dataScope());
     }
 
     private function makeEmployee(string $nip, string $status): Employee

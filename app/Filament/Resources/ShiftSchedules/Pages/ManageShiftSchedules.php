@@ -47,7 +47,7 @@ class ManageShiftSchedules extends ManageRecords
                 ->schema([
                     Select::make('company_id')
                         ->label('Badan Usaha')
-                        ->options(fn (): array => ShiftScheduleResource::managedCompanyOptions())
+                        ->options(fn (): array => ShiftScheduleResource::placeableCompanyOptions())
                         ->searchable()
                         ->required()
                         ->live()
@@ -114,7 +114,7 @@ class ManageShiftSchedules extends ManageRecords
     public function assignSchedule(array $data): void
     {
         $companyId = (int) $data['company_id'];
-        abort_unless(auth()->user()?->canManageCompany($companyId), 403);
+        abort_unless(ShiftScheduleResource::canPlaceInCompany($companyId), 403);
 
         $from = Carbon::parse($data['date_from'])->startOfDay();
         $until = Carbon::parse($data['date_until'])->startOfDay();
@@ -173,7 +173,7 @@ class ManageShiftSchedules extends ManageRecords
     }
 
     /**
-     * Turn "employee:12" style keys into [column, id] pairs, keeping only active workers of the company.
+     * Turn "employee:12" style keys into [column, id] pairs, keeping only workers of the company inside the user's data access.
      *
      * @param  list<string>  $keys
      * @return list<array{0: string, 1: int}>
@@ -186,7 +186,7 @@ class ManageShiftSchedules extends ManageRecords
             [$type, $id] = array_pad(explode(':', (string) $key, 2), 2, null);
             $model = self::WORKER_MODELS[$type] ?? null;
 
-            if ($model && $model::query()->whereKey((int) $id)->where('company_id', $companyId)->exists()) {
+            if ($model && ShiftScheduleResource::scopeToManagedWorkers($model::query())->whereKey((int) $id)->where('company_id', $companyId)->exists()) {
                 $workers[] = ["{$type}_id", (int) $id];
             }
         }

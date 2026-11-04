@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Models\Company;
 use App\Models\LeaveRequest;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Carbon\Carbon;
 use Filament\Forms\Components\Select;
@@ -99,13 +100,32 @@ class KalenderCuti extends Page implements HasForms
 
                             Select::make('selectedCompanyId')
                                 ->label('Perusahaan (Opsional)')
-                                ->options(Company::where('is_active', true)->pluck('name', 'id'))
+                                ->options(fn (): array => static::companyOptions())
                                 ->placeholder('Semua Perusahaan')
                                 ->live()
                                 ->nullable(),
                         ]),
                     ]),
             ]);
+    }
+
+    /**
+     * Companies on the calendar: the user's data access plus their own company.
+     *
+     * @return array<int, string>
+     */
+    public static function companyOptions(): array
+    {
+        $user = auth()->user();
+
+        if (! $user) {
+            return [];
+        }
+
+        return DataAccessService::scopeCompanies(Company::query()->where('is_active', true), $user, 'companies.id')
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->all();
     }
 
     public function getLeaveRequestsProperty()
@@ -131,10 +151,11 @@ class KalenderCuti extends Page implements HasForms
         }
 
         $user = auth()->user();
-        $visibleCompanyIds = $user ? $user->visibleCompanyIds() : [];
 
-        if ($visibleCompanyIds !== null) {
-            $query->whereWorkerInCompanies($visibleCompanyIds);
+        if ($user) {
+            $query->visibleWithColleaguesTo($user);
+        } else {
+            $query->whereRaw('1 = 0');
         }
 
         return $query->orderBy('start_date')->get();

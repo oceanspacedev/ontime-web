@@ -51,8 +51,8 @@ class ResignationResource extends Resource
     }
 
     /**
-     * Resignations belong to employees: Superadmin manages all of them, employees file their own,
-     * and Approver / BOD review the ones inside their approvers mapping.
+     * Resignations belong to employees: Superadmin and Admin manage the ones inside their data access,
+     * employees file their own, and Approver / BOD review the ones inside their data access.
      */
     public static function canViewAny(): bool
     {
@@ -62,14 +62,14 @@ class ResignationResource extends Resource
             return false;
         }
 
-        return $user->hasAnyRole(['Superadmin', 'Approver', 'BOD']) || $user->canManageCompanies() || $user->employee !== null;
+        return $user->hasAnyRole(['Superadmin', 'Approver', 'BOD']) || $user->canManageWorkers() || $user->employee !== null;
     }
 
     public static function canCreate(): bool
     {
         $user = auth()->user();
 
-        return (bool) ($user?->canManageCompanies() || $user?->employee);
+        return (bool) ($user?->canManageWorkers() || $user?->employee);
     }
 
     public static function canEdit(Model $record): bool
@@ -84,7 +84,7 @@ class ResignationResource extends Resource
 
     public static function canDeleteAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     public static function getEloquentQuery(): Builder
@@ -110,11 +110,11 @@ class ResignationResource extends Resource
                                 ->relationship('employee', 'full_name', fn (Builder $query) => $query
                                     ->whereNotIn('status', ['inactive'])
                                     ->when(
-                                        auth()->user()?->canManageCompanies(),
-                                        fn (Builder $managed) => static::scopeToManagedCompanies($managed),
+                                        auth()->user()?->canManageWorkers(),
+                                        fn (Builder $managed) => static::scopeToManagedWorkers($managed),
                                         fn (Builder $ownOnly) => $ownOnly->whereKey(auth()->user()?->employee?->id),
                                     ))
-                                ->default(fn (): ?int => auth()->user()?->canManageCompanies() ? null : auth()->user()?->employee?->id)
+                                ->default(fn (): ?int => auth()->user()?->canManageWorkers() ? null : auth()->user()?->employee?->id)
                                 ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
                                 ->searchable()
                                 ->preload()

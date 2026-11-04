@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Filament\Pages\LaporanAbsensi;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\Division;
@@ -64,12 +63,7 @@ class ReportExportTest extends TestCase
         // Approver User mapped ONLY to Company A
         $approverUser = User::factory()->create();
         $approverUser->assignRole('Approver');
-        Approver::create([
-            'user_id' => $approverUser->id,
-            'company_id' => $companyA->id,
-            'division_id' => null,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($approverUser, $companyA->id);
 
         $this->actingAs($approverUser);
 

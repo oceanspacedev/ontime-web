@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Company;
 use App\Models\CompanyPolicy;
 use App\Models\Division;
@@ -98,12 +97,7 @@ class ApiTest extends TestCase
 
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
-        Approver::create([
-            'user_id' => $this->approverUser->id,
-            'company_id' => $this->company->id,
-            'division_id' => $this->division->id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($this->approverUser, $this->company->id, $this->division->id);
 
         // Standard 3-step flows
         foreach (['leave', 'overtime', 'correction'] as $type) {

@@ -44,9 +44,13 @@ class ApproverResource extends Resource
 
     protected static ?int $navigationSort = 3;
 
+    /**
+     * Retired: who approves which workers now follows each user's Akses Data in the User menu. The
+     * approvers table stays as history of the old mapping (it seeded Akses Data on migration).
+     */
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

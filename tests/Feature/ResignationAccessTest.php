@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Filament\Resources\ResignationResource;
 use App\Filament\Resources\ResignationResource\Pages\CreateResignation;
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
@@ -132,7 +131,7 @@ class ResignationAccessTest extends TestCase
 
         $approver = User::factory()->create();
         $approver->assignRole('Approver');
-        Approver::create(['user_id' => $approver->id, 'company_id' => $this->company->id, 'division_id' => $this->division->id, 'level' => 1]);
+        $this->grantDataAccessTo($approver, $this->company->id, $this->division->id);
 
         $this->actingAs($approver);
 

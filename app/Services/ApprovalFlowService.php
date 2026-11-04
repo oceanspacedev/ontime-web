@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Enums\AttendanceStatus;
 use App\Models\ApprovalFlow;
 use App\Models\ApprovalRequestStep;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\User;
@@ -204,8 +203,8 @@ class ApprovalFlowService
             return ! $isOwnRequest;
         }
 
-        // Admin Badan Usaha Override: same authority, limited to the companies they manage
-        if ($user->isCompanyAdmin() && $workerProfile && $user->canManageCompany($workerProfile->company_id)) {
+        // Admin Override: same authority, limited to the workers inside their data access
+        if ($workerProfile && $user->hasRole('Admin') && $user->canManageWorker($workerProfile)) {
             return ! $isOwnRequest;
         }
 
@@ -214,27 +213,15 @@ class ApprovalFlowService
             return (int) $user->id === (int) $step->user_id;
         }
 
-        // 2. Role + Scope Mapping Check (Approver Table Lookup)
+        // 2. Role + data access: the step's role, and the requester inside the approver's data access
         if ($step->approver_type === 'role') {
             $requiredRole = $step->approver_role ?? 'Approver';
-            if (! $user->hasRole($requiredRole)) {
+
+            if (! $user->hasRole($requiredRole) || ! $workerProfile) {
                 return false;
             }
 
-            if (! $workerProfile) {
-                return false;
-            }
-
-            return Approver::query()
-                ->where('user_id', $user->id)
-                ->where(function ($query) use ($workerProfile) {
-                    $query->where('division_id', $workerProfile->division_id)
-                        ->orWhere(function ($q) use ($workerProfile) {
-                            $q->whereNull('division_id')
-                                ->where('company_id', $workerProfile->company_id);
-                        });
-                })
-                ->exists();
+            return DataAccessService::canAccessPlacement($user, $workerProfile->company_id, $workerProfile->division_id);
         }
 
         return false;

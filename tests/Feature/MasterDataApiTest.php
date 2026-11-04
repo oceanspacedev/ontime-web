@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\ApprovalFlow;
-use App\Models\Approver;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\CompanyLocation;
@@ -44,8 +43,6 @@ class MasterDataApiTest extends TestCase
     protected Holiday $holiday;
 
     protected ApprovalFlow $flow;
-
-    protected Approver $approver;
 
     protected Attendance $attendance;
 
@@ -128,12 +125,7 @@ class MasterDataApiTest extends TestCase
             'approver_role' => 'Approver',
         ]);
 
-        $this->approver = Approver::create([
-            'user_id' => $this->adminUser->id,
-            'company_id' => $this->company->id,
-            'division_id' => $this->division->id,
-            'level' => 1,
-        ]);
+        $this->grantDataAccessTo($this->adminUser, $this->company->id, $this->division->id);
 
         $this->attendance = Attendance::create([
             'employee_id' => $this->employee->id,
@@ -193,5 +185,9 @@ class MasterDataApiTest extends TestCase
         $this->getJson("/api/v1/attendances/{$this->attendance->id}")
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'on_time');
+
+        $this->getJson("/api/v1/master/approvers/{$this->adminUser->id}")
+            ->assertStatus(200)
+            ->assertJsonPath('data.data_scope', 'all');
     }
 }

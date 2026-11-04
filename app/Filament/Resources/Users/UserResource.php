@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Users;
 
+use App\Enums\DataScope;
 use App\Enums\SystemRole;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\Users\Pages\CreateUser;
@@ -11,6 +12,7 @@ use App\Models\Division;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\User;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -33,7 +35,6 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
-use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class UserResource extends Resource
@@ -45,6 +46,8 @@ class UserResource extends Resource
         $query = parent::getEloquentQuery()
             ->with([
                 'roles',
+                'accessibleCompanies',
+                'accessibleDivisions',
                 'employee.company',
                 'employee.division',
                 'intern.company',
@@ -53,45 +56,58 @@ class UserResource extends Resource
                 'freelancer.division',
             ]);
 
-        $user = auth()->user();
-
-        if (! $user) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        if ($user->hasRole('Superadmin')) {
-            return $query;
-        }
-
-        // Admin Badan Usaha: accounts of workers in their companies, never Superadmin/Admin accounts or their own.
-        $managed = $user->managedCompanyIds() ?? [];
-
-        return $query
-            ->whereKeyNot($user->getKey())
-            ->whereDoesntHave('roles', fn (Builder $roles) => $roles->whereIn('name', [SystemRole::Superadmin->value, SystemRole::Admin->value]))
-            ->where(fn (Builder $scope) => $scope
-                ->whereHas('employee', fn (Builder $worker) => $worker->whereIn('company_id', $managed))
-                ->orWhereHas('intern', fn (Builder $worker) => $worker->whereIn('company_id', $managed))
-                ->orWhereHas('freelancer', fn (Builder $worker) => $worker->whereIn('company_id', $managed)));
+        // Admin: accounts of workers inside their data access, never Superadmin/Admin accounts or their own.
+        return static::scopeToManageableAccounts($query, includeUnlinked: false);
     }
 
     /**
-     * Deteksi tipe profil yang terhubung ke user ini.
-     * Mengembalikan: 'employee' | 'intern' | 'freelancer' | null
+     * Labels for the division picker: "TOP · DISTRIBUTION SALES > DEPO BANDUNG", built from one query.
+     *
+     * @return array<int, string>
      */
+    public static function divisionPathLabels(): array
+    {
+        return once(function (): array {
+            $divisions = Division::query()->with('company:id,code,name')->get(['id', 'company_id', 'parent_id', 'name'])->keyBy('id');
+
+            return $divisions
+                ->map(function (Division $division) use ($divisions): string {
+                    $names = [];
+                    $visited = [];
+
+                    for ($node = $division; $node && ! isset($visited[$node->id]); $node = $divisions->get($node->parent_id)) {
+                        $visited[$node->id] = true;
+                        array_unshift($names, $node->name);
+                    }
+
+                    return ($division->company?->code ?: $division->company?->name).' · '.implode(' > ', $names);
+                })
+                ->sort()
+                ->all();
+        });
+    }
+
+    protected static function selectedScope(Get $get): ?DataScope
+    {
+        $state = $get('data_scope');
+
+        return $state instanceof DataScope ? $state : DataScope::tryFrom((string) $state);
+    }
+
+    public static function dataAccessSummary(User $record): string
+    {
+        $scope = DataAccessService::scopeOf($record);
+
+        return match ($scope) {
+            DataScope::Companies => $scope->getLabel().': '.($record->accessibleCompanies->pluck('code')->filter()->implode(', ') ?: '-'),
+            DataScope::Divisions => $scope->getLabel().': '.($record->accessibleDivisions->pluck('name')->implode(', ') ?: '-'),
+            default => $scope->getLabel(),
+        };
+    }
+
     /**
      * Interns and freelancers are managed from their own menus, so the employee section is hidden for them.
      */
-    /**
-     * @param  array<int|string>|null  $roleIds
-     */
-    protected static function selectsAdminRole(?array $roleIds): bool
-    {
-        $adminRoleId = Role::query()->where('name', SystemRole::Admin->value)->value('id');
-
-        return $adminRoleId !== null && in_array((string) $adminRoleId, array_map('strval', $roleIds ?? []), true);
-    }
-
     protected static function canManageEmployeeProfile(?User $user): bool
     {
         if ($user === null) {
@@ -101,6 +117,9 @@ class UserResource extends Resource
         return ! in_array(static::detectProfileType($user), ['intern', 'freelancer'], true);
     }
 
+    /**
+     * Deteksi tipe profil yang terhubung ke user ini: 'employee' | 'intern' | 'freelancer' | null.
+     */
     protected static function detectProfileType(User $user): ?string
     {
         if ($user->employee !== null) {
@@ -134,7 +153,12 @@ class UserResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return (bool) auth()->user()?->hasRole(SystemRole::Superadmin->value) || static::canManageAccount($record);
     }
 
     public static function canDelete(Model $record): bool
@@ -184,16 +208,6 @@ class UserResource extends Resource
                                 ->live()
                                 ->required(),
 
-                            Select::make('managedCompanies')
-                                ->label('Akses Badan Usaha')
-                                ->helperText('Badan usaha yang dikelola penuh oleh Admin ini: karyawan, absensi, shift, pengajuan, laporan, dan akun user.')
-                                ->relationship('managedCompanies', 'name')
-                                ->multiple()
-                                ->preload()
-                                ->required(fn (Get $get): bool => static::selectsAdminRole($get('roles')))
-                                ->visible(fn (Get $get): bool => (bool) auth()->user()?->hasRole('Superadmin') && static::selectsAdminRole($get('roles')))
-                                ->columnSpanFull(),
-
                             Toggle::make('has_employee_profile')
                                 ->label('Kelola data karyawan untuk akun ini')
                                 ->helperText('Matikan untuk akun tanpa data karyawan, misalnya Superadmin atau BOD. Data karyawan yang sudah ada tidak akan dihapus.')
@@ -208,6 +222,42 @@ class UserResource extends Resource
                                 ->visible(fn (callable $livewire) => (bool) auth()->user()?->hasRole('Superadmin') && static::canManageEmployeeProfile($livewire->record))
                                 ->columnSpanFull(),
                         ]),
+                    ]),
+
+                Section::make('Akses Data')
+                    ->description('Menentukan data siapa yang bisa dilihat, dikelola, dan disetujui akun ini. Role menentukan apa yang bisa dilakukan, akses data menentukan untuk siapa.')
+                    ->icon('heroicon-o-shield-check')
+                    ->visible(fn (): bool => (bool) auth()->user()?->hasRole(SystemRole::Superadmin->value))
+                    ->schema([
+                        Select::make('data_scope')
+                            ->label('Tingkat Akses')
+                            ->options(DataScope::class)
+                            ->default(DataScope::Own->value)
+                            ->required()
+                            ->live()
+                            ->helperText(fn (Get $get, ?User $record): string => $record?->hasRole(SystemRole::Superadmin->value)
+                                ? 'Superadmin selalu punya akses Semua, apa pun pilihan di sini.'
+                                : (string) static::selectedScope($get)?->getDescription()),
+
+                        Select::make('accessibleCompanies')
+                            ->label('Badan Usaha')
+                            ->relationship('accessibleCompanies', 'name')
+                            ->multiple()
+                            ->preload()
+                            ->searchable()
+                            ->required(fn (Get $get): bool => static::selectedScope($get) === DataScope::Companies)
+                            ->visible(fn (Get $get): bool => static::selectedScope($get) === DataScope::Companies),
+
+                        Select::make('accessibleDivisions')
+                            ->label('Divisi')
+                            ->helperText('Sub-divisi di bawahnya ikut otomatis.')
+                            ->relationship('accessibleDivisions', 'name')
+                            ->options(fn (): array => static::divisionPathLabels())
+                            ->getOptionLabelFromRecordUsing(fn (Division $record): string => static::divisionPathLabels()[$record->id] ?? $record->name)
+                            ->multiple()
+                            ->searchable()
+                            ->required(fn (Get $get): bool => static::selectedScope($get) === DataScope::Divisions)
+                            ->visible(fn (Get $get): bool => static::selectedScope($get) === DataScope::Divisions),
                     ]),
 
                 // === SECTION: Profil Magang (read-only) ===
@@ -291,7 +341,7 @@ class UserResource extends Resource
                         Grid::make(2)->schema([
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(fn (): array => static::managedCompanyOptions())
+                                ->options(fn (): array => static::placeableCompanyOptions())
                                 ->required()
                                 ->live()
                                 ->afterStateUpdated(fn (Set $set) => $set('division_id', null))
@@ -299,17 +349,7 @@ class UserResource extends Resource
 
                             Select::make('division_id')
                                 ->label('Divisi Target')
-                                ->options(function (Get $get) {
-                                    $companyId = $get('company_id');
-                                    if (! $companyId) {
-                                        return [];
-                                    }
-
-                                    return Division::query()
-                                        ->where('company_id', $companyId)
-                                        ->where('is_active', true)
-                                        ->pluck('name', 'id');
-                                })
+                                ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
                                 ->required()
                                 ->default(fn (callable $livewire) => $livewire->record?->employee?->division_id ?? null),
 
@@ -406,6 +446,18 @@ class UserResource extends Resource
                         'freelancer' => 'Freelancer',
                         default => 'Belum Linked',
                     }),
+
+                TextColumn::make('data_access')
+                    ->label('Akses Data')
+                    ->badge()
+                    ->color(fn (User $record): string => match (DataAccessService::scopeOf($record)) {
+                        DataScope::All => 'danger',
+                        DataScope::Companies => 'warning',
+                        DataScope::Divisions => 'info',
+                        DataScope::Own => 'gray',
+                    })
+                    ->state(fn (User $record): string => static::dataAccessSummary($record))
+                    ->wrap(),
 
                 BadgeColumn::make('roles.name')
                     ->label('Role Akses')

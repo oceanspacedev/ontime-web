@@ -40,11 +40,7 @@ class ReportAndCalendarApiController extends Controller
             });
         }
 
-        $visibleCompanyIds = $request->user()->visibleCompanyIds();
-
-        if ($visibleCompanyIds !== null) {
-            $query->whereWorkerInCompanies($visibleCompanyIds);
-        }
+        $query->visibleWithColleaguesTo($request->user());
 
         $leaveRequests = $query->orderBy('start_date', 'asc')->get()->map(function ($leave) {
             $person = $leave->employee ?? $leave->intern ?? $leave->freelancer;

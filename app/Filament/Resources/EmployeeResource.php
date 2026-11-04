@@ -6,7 +6,6 @@ use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\EmployeeResource\Pages;
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Company;
-use App\Models\Division;
 use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
@@ -59,12 +58,12 @@ class EmployeeResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageWorkerData();
     }
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('user.roles'));
+        return static::scopeToManagedWorkers(parent::getEloquentQuery()->with('user.roles'));
     }
 
     public static function canImportFromTalenta(): bool
@@ -92,7 +91,7 @@ class EmployeeResource extends Resource
 
                             Select::make('company_id')
                                 ->label('Badan Usaha (Company)')
-                                ->options(fn (): array => static::managedCompanyOptions())
+                                ->options(fn (): array => static::placeableCompanyOptions())
                                 ->required()
                                 ->live()
                                 ->afterStateUpdated(function ($set): void {
@@ -102,17 +101,7 @@ class EmployeeResource extends Resource
 
                             Select::make('division_id')
                                 ->label('Divisi')
-                                ->options(function (Get $get) {
-                                    $companyId = $get('company_id');
-                                    if (! $companyId) {
-                                        return [];
-                                    }
-
-                                    return Division::query()
-                                        ->where('company_id', $companyId)
-                                        ->where('is_active', true)
-                                        ->pluck('name', 'id');
-                                })
+                                ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
                                 ->live()
                                 ->afterStateUpdated(fn ($set) => $set('job_title_id', null))
                                 ->required(),
@@ -301,11 +290,11 @@ class EmployeeResource extends Resource
             ->filters([
                 SelectFilter::make('company_id')
                     ->label('Badan Usaha')
-                    ->relationship('company', 'name'),
+                    ->relationship('company', 'name', fn (Builder $query) => static::scopeToPlaceableCompanies($query, 'companies.id')),
 
                 SelectFilter::make('division_id')
                     ->label('Divisi')
-                    ->relationship('division', 'name'),
+                    ->relationship('division', 'name', fn (Builder $query) => static::scopeToPlaceableDivisions($query)),
 
                 SelectFilter::make('job_level_id')
                     ->label('Level Jabatan')
@@ -434,7 +423,7 @@ class EmployeeResource extends Resource
                         ->schema([
                             Select::make('shift_id')
                                 ->label('Shift')
-                                ->options(fn (): array => static::scopeToManagedCompanies(Shift::query()->active()->with('company'))
+                                ->options(fn (): array => static::scopeToPlaceableCompanies(Shift::query()->active()->with('company'))
                                     ->get()
                                     ->mapWithKeys(fn (Shift $shift): array => [$shift->id => "{$shift->company->name} - {$shift->label()}"])
                                     ->all())
@@ -443,7 +432,7 @@ class EmployeeResource extends Resource
                         ])
                         ->action(function (Collection $records, array $data): void {
                             $shift = filled($data['shift_id'] ?? null) ? Shift::query()->find($data['shift_id']) : null;
-                            abort_if($shift && ! auth()->user()?->canManageCompany($shift->company_id), 403);
+                            abort_if($shift && ! static::canPlaceInCompany($shift->company_id), 403);
 
                             // A shift belongs to one company, so only employees of that company receive it.
                             $targets = $records->filter(fn (Employee $employee): bool => $shift ? (int) $employee->company_id === (int) $shift->company_id : true);

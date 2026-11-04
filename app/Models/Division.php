@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\DataAccessService;
 use App\Traits\PreventsDeletionWhileInUse;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -31,6 +32,9 @@ class Division extends Model
 
     protected static function booted(): void
     {
+        static::saved(fn () => DataAccessService::flush());
+        static::deleted(fn () => DataAccessService::flush());
+
         static::saving(function (Division $division) {
             if ($division->exists && $division->parent_id) {
                 if ((int) $division->parent_id === (int) $division->id) {

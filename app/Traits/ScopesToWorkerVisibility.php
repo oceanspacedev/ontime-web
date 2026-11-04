@@ -3,15 +3,12 @@
 namespace App\Traits;
 
 use App\Models\User;
+use App\Services\DataAccessService;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
  * Shared visibility rules for records that belong to a worker (employee, intern or freelancer).
- *
- * - Superadmin sees everything.
- * - Admin Badan Usaha sees every worker of the companies they manage.
- * - Approver / BOD see their own records plus workers inside their `approvers` mapping.
- * - Everyone else sees only their own records.
+ * Everyone sees their own records plus the workers inside their data access (see DataAccessService).
  */
 trait ScopesToWorkerVisibility
 {
@@ -39,52 +36,26 @@ trait ScopesToWorkerVisibility
 
     public function scopeVisibleTo(Builder $query, User $user): Builder
     {
-        if ($user->hasRole('Superadmin')) {
+        return DataAccessService::scopeWorkerRecords($query, $user, static::workerRelations());
+    }
+
+    /**
+     * Calendar visibility: everything in the user's data access plus colleagues of their own company,
+     * so workers can see who else is on leave.
+     */
+    public function scopeVisibleWithColleaguesTo(Builder $query, User $user): Builder
+    {
+        if (DataAccessService::workerFilter($user) === null) {
             return $query;
         }
 
-        return $query->where(function (Builder $visible) use ($user): void {
-            $visible->whereRaw('1 = 0');
+        $ownCompanyIds = collect(DataAccessService::ownProfiles($user))->pluck('company_id')->filter()->map(fn ($id): int => (int) $id)->unique()->values()->all();
 
-            foreach (static::workerRelations() as $relation) {
-                $profile = $user->{$relation};
+        return $query->where(function (Builder $visible) use ($user, $ownCompanyIds): void {
+            $visible->where(fn (Builder $scoped) => $scoped->visibleTo($user));
 
-                if ($profile) {
-                    $visible->orWhere($this->qualifyColumn("{$relation}_id"), $profile->getKey());
-                }
-            }
-
-            // Admin Badan Usaha: every worker of the companies they manage.
-            $managedCompanyIds = $user->managedCompanyIds() ?? [];
-
-            if ($managedCompanyIds !== []) {
-                foreach (static::workerRelations() as $relation) {
-                    $visible->orWhereHas($relation, fn (Builder $worker) => $worker->whereIn('company_id', $managedCompanyIds));
-                }
-            }
-
-            if (! $user->hasAnyRole(['Approver', 'BOD'])) {
-                return;
-            }
-
-            ['division_ids' => $divisionIds, 'company_ids' => $companyIds] = $user->approverScope();
-
-            if ($divisionIds === [] && $companyIds === []) {
-                return;
-            }
-
-            foreach (static::workerRelations() as $relation) {
-                $visible->orWhereHas($relation, function (Builder $worker) use ($divisionIds, $companyIds): void {
-                    $worker->where(function (Builder $scope) use ($divisionIds, $companyIds): void {
-                        if ($divisionIds !== []) {
-                            $scope->orWhereIn('division_id', $divisionIds);
-                        }
-
-                        if ($companyIds !== []) {
-                            $scope->orWhereIn('company_id', $companyIds);
-                        }
-                    });
-                });
+            if ($ownCompanyIds !== []) {
+                $visible->orWhere(fn (Builder $colleagues) => $colleagues->whereWorkerInCompanies($ownCompanyIds));
             }
         });
     }
