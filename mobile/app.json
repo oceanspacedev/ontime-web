@@ -1,0 +1,76 @@
+{
+  "expo": {
+    "name": "OnTime",
+    "slug": "ontime-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "ontime",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F4C81"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "co.id.oceanspace.ontime",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "co.id.oceanspace.ontime",
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "backgroundColor": "#0F4C81",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "OnTime memakai kamera untuk foto selfie presensi dan foto master wajah.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "OnTime memakai lokasi untuk memastikan presensi dilakukan di area kantor."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "OnTime membuka galeri untuk memilih foto master wajah dan lampiran pengajuan.",
+          "cameraPermission": "OnTime memakai kamera untuk foto master wajah."
+        }
+      ],
+      "expo-document-picker",
+      [
+        "expo-notifications",
+        {
+          "color": "#0F4C81",
+          "defaultChannel": "default"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

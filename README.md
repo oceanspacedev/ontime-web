@@ -72,6 +72,26 @@ Panel admin ada di `/admin`. Import dan ekspor CSV atau Excel berjalan di antrea
 
 Data demo dibuat oleh `database/seeders/DatabaseSeeder.php`. Akun dan password demo bisa dilihat di file itu dan hanya untuk lokal.
 
+## Aplikasi mobile
+
+Aplikasi untuk pekerja ada di folder `mobile/`, dibangun dengan Expo (React Native) dan memakai REST API v1 di atas. Fiturnya mengikuti matriks halaman per role di [API.md](API.md): presensi dengan selfie dan GPS, foto master wajah, riwayat, pengajuan cuti, lembur, koreksi, dan resign, inbox persetujuan untuk Approver, BOD, Admin, dan Superadmin, serta kalender cuti tim.
+
+1. Pasang dependensi.
+
+   ```bash
+   cd mobile && npm install
+   ```
+
+2. Atur alamat API bawaan di `mobile/.env` (salin dari `mobile/.env.example`). Alamat ini juga bisa diganti dari layar login atau Profil di dalam aplikasi.
+
+3. Jalankan di simulator atau Expo Go.
+
+   ```bash
+   cd mobile && npx expo start
+   ```
+
+Perintah `npm run typecheck` dan `npm run lint` di folder `mobile/` memeriksa kode sebelum commit. Kamera tidak tersedia di simulator, jadi alur selfie hanya bisa dicoba di perangkat fisik.
+
 ## Integrasi opsional
 
 Semua kunci di bawah ini boleh dikosongkan di lokal.
