@@ -84,6 +84,7 @@ class ApiTest extends TestCase
             'nip' => 'EMP.API.001',
             'full_name' => 'Employee Test',
             'join_date' => now()->toDateString(),
+            'has_annual_leave' => true,
             'status' => 'permanent',
         ]);
 

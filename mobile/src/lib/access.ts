@@ -32,6 +32,8 @@ export interface Access {
   canSeeLeaveCalendar: boolean;
   canApprove: boolean;
   isSuperadmin: boolean;
+  /** HR gave this employee annual leave; never true for interns and freelancers. */
+  hasAnnualLeave: boolean;
   leaveTypes: LeaveTypeOption[];
   masterFacePhoto: string | null;
   masterFaceVerifiedAt: string | null;
@@ -58,9 +60,11 @@ export function deriveAccess(user: User | null): Access {
   // Workers get their forms by role; other accounts need the matching Shield permission plus a profile.
   const requestAllowed = (permission: string) => hasProfile && (isWorkerRole || isSuperadmin || hasPermission(permission));
 
+  // Annual leave is granted per employee by HR; interns and freelancers never have it.
+  const hasAnnualLeave = profileKind === 'employee' && user?.employee?.has_annual_leave === true;
   const leaveTypes = profileKind === 'freelancer'
     ? ALL_LEAVE_TYPES.filter((type) => type.value === 'permission' || type.value === 'sick')
-    : ALL_LEAVE_TYPES;
+    : ALL_LEAVE_TYPES.filter((type) => type.value !== 'annual_leave' || hasAnnualLeave);
 
   return {
     roles,
@@ -77,6 +81,7 @@ export function deriveAccess(user: User | null): Access {
     canSeeLeaveCalendar: !hasRole('Intern') || isApproverRole,
     canApprove: isApproverRole,
     isSuperadmin,
+    hasAnnualLeave,
     leaveTypes,
     masterFacePhoto: profile?.master_face_photo ?? user?.master_face_photo ?? null,
     masterFaceVerifiedAt: profile?.master_face_verified_at ?? user?.master_face_verified_at ?? null,

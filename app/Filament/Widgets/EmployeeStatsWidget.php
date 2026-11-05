@@ -6,8 +6,8 @@ use App\Filament\Pages\AbsenHariIni;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Filament\Resources\OvertimeRequests\OvertimeRequestResource;
 use App\Models\Attendance;
-use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
+use App\Services\AnnualLeaveService;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 
@@ -42,14 +42,7 @@ class EmployeeStatsWidget extends BaseWidget
         $presentDays = (int) ($attendanceStats?->present_days ?? 0);
         $lateDays = (int) ($attendanceStats?->late_days ?? 0);
 
-        $maxQuota = $employee->company?->policy?->annual_leave_quota ?? 12;
-        $usedLeaveDays = (int) LeaveRequest::where('employee_id', $employee->id)
-            ->where('leave_type', 'annual_leave')
-            ->where('status', 'approved')
-            ->whereYear('start_date', $currentYear)
-            ->sum('days_count');
-
-        $remainingLeave = max(0, $maxQuota - $usedLeaveDays);
+        $annualLeave = app(AnnualLeaveService::class)->summary($employee);
 
         $overtimeMinutes = (int) OvertimeRequest::where('employee_id', $employee->id)
             ->where('status', 'approved')
@@ -66,11 +59,17 @@ class EmployeeStatsWidget extends BaseWidget
                 ->icon('heroicon-o-check-circle')
                 ->url(AbsenHariIni::getUrl()),
 
-            Stat::make('Kuota Cuti Tahunan', "Sisa {$remainingLeave} Hari")
-                ->description("Terpakai: {$usedLeaveDays} dari {$maxQuota} hari")
-                ->color($remainingLeave > 2 ? 'primary' : 'warning')
-                ->icon('heroicon-o-calendar')
-                ->url(LeaveRequestResource::getUrl('index')),
+            $annualLeave['eligible']
+                ? Stat::make('Kuota Cuti Tahunan', "Sisa {$annualLeave['remaining_days']} Hari")
+                    ->description("Terpakai: {$annualLeave['used_days']} dari {$annualLeave['annual_leave_quota']} hari")
+                    ->color($annualLeave['remaining_days'] > 2 ? 'primary' : 'warning')
+                    ->icon('heroicon-o-calendar')
+                    ->url(LeaveRequestResource::getUrl('index'))
+                : Stat::make('Cuti Tahunan', 'Tidak ada jatah')
+                    ->description('Hubungi HR bila Anda seharusnya mendapat cuti tahunan')
+                    ->color('gray')
+                    ->icon('heroicon-o-calendar')
+                    ->url(LeaveRequestResource::getUrl('index')),
 
             Stat::make('Lembur Bulan Ini', "{$overtimeHours} Jam")
                 ->description('Total durasi lembur disetujui')
