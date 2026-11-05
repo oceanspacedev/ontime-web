@@ -130,7 +130,9 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
 
 | Method | Path | Akses | Keterangan |
 | :--- | :--- | :--- | :--- |
-| POST | `/auth/login` | Publik | Login, mengembalikan token |
+| POST | `/auth/login` | Publik | Login dengan kata sandi, mengembalikan token |
+| POST | `/auth/otp/request` | Publik | Kirim kode OTP ke WhatsApp atau email, mengembalikan `challenge_id` |
+| POST | `/auth/otp/verify` | Publik | Tukar `challenge_id` + kode OTP dengan token |
 | GET | `/auth/me` | Token | Profil akun saat ini |
 | POST | `/auth/logout` | Token | Menghapus token yang sedang dipakai |
 
@@ -176,6 +178,38 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
 - `GET /auth/me` membalas `{"user": {...}}` dengan isi yang sama. `data_scope` tidak ikut dikirim.
 - Logout membalas `{"message": "Logged out successfully"}`.
 - Akun nonaktif (`is_active = false`, misalnya setelah resign disetujui) ditolak saat login dengan 403 `Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.` Token yang sudah ada langsung tidak berlaku dan membalas 401.
+
+#### Login dengan kode OTP
+
+Alternatif tanpa kata sandi, memakai kanal yang sama dengan halaman login web: kode 6 digit lewat WhatsApp (WhatsApp Gateway harus dikonfigurasi) atau lewat email (mailer sungguhan harus dikonfigurasi). Dua langkah:
+
+**POST /auth/otp/request** (JSON): `channel` (wajib, `whatsapp` atau `email`), lalu `phone` (wajib jika `channel = whatsapp`, nomor Indonesia dalam format apa pun, misalnya `0812-3456-7890`) atau `email` (wajib jika `channel = email`).
+
+```json
+{
+  "message": "Kode OTP dikirim ke WhatsApp.",
+  "channel": "whatsapp",
+  "challenge_id": "otp_…",
+  "expires_in": 300
+}
+```
+
+- `challenge_id` mewakili satu permintaan kode dan berlaku selama `expires_in` detik (WhatsApp `WHATSAPP_OTP_TTL_MINUTES`, bawaan 5 menit; email `EMAIL_LOGIN_EXPIRES_IN`, bawaan 600 detik). Simpan di klien, jangan ditampilkan.
+- Jawaban tidak membocorkan apakah nomor atau email terdaftar. Kode WhatsApp dikirim ke nomor valid mana pun; kode email hanya benar-benar dikirim jika alamatnya milik tepat satu akun, tetapi klien tetap menerima `challenge_id` dan pesan `Jika email terdaftar, kode OTP sudah dikirim ke email tersebut.`
+- Meminta kode baru untuk nomor atau email yang sama membatalkan kode sebelumnya.
+- 422 jika `channel` bukan `whatsapp`/`email`, nomor HP tidak valid (`errors.phone`), atau alamat email tidak valid (`errors.email`).
+- 429 `Terlalu banyak permintaan OTP. Silakan coba lagi nanti.` dengan header `Retry-After` dan `retry_after` (detik) bila batas terlampaui: per IP 10 permintaan/menit (kedua kanal), per nomor 3 kode/2 menit, per email 3 kode/5 menit dan 10 kode/jam.
+- 503 jika kanal belum dikonfigurasi di server (`Login dengan WhatsApp belum tersedia…` / `Login dengan email belum tersedia…`) atau pengiriman gagal (`Kode OTP belum bisa dikirim. Coba lagi sebentar lagi.`).
+
+**POST /auth/otp/verify** (JSON): `challenge_id` (wajib), `code` (wajib, 6 digit).
+
+Berhasil membalas 200 dengan isi yang persis sama seperti `POST /auth/login` (`message`, `token_type`, `token`, `user`). Satu kode hanya bisa dipakai sekali.
+
+- 401 `Kode OTP tidak valid atau sudah kedaluwarsa.` untuk kode salah, kode atau `challenge_id` yang kedaluwarsa, `challenge_id` yang tidak dikenal, dan email yang tidak terdaftar.
+- 401 `Nomor belum terdaftar untuk login. Hubungi administrator.` jika kode WhatsApp benar tetapi nomornya tidak tercatat pada tepat satu akun (kolom `phone` user, karyawan, magang, atau freelancer).
+- 403 `Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.` jika kode benar tetapi akunnya nonaktif. Tidak ada token yang dibuat.
+- 429 dengan `Retry-After` setelah 5 kode salah untuk satu `challenge_id` WhatsApp (`Terlalu banyak percobaan kode yang salah. Minta kode OTP baru.`), 15 percobaan/5 menit per email, atau 20 percobaan/menit per IP. Kode email berhenti berlaku setelah 5 kode salah dan membalas 401.
+- 422 jika `code` bukan 6 digit angka atau `challenge_id` kosong.
 
 ### 3.2 Presensi
 

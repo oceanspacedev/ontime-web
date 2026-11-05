@@ -7,8 +7,11 @@ use App\Services\Core\CoreSsoProvider;
 use App\Support\ObservabilityAccess;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -48,6 +51,17 @@ class AppServiceProvider extends ServiceProvider
 
         $this->protectSystemRoles();
         $this->explainBlockedDeletions();
+        $this->limitOtpLogin();
+    }
+
+    /**
+     * Per-address ceilings for the OTP login endpoints. The per-number and per-email limits live in
+     * the OTP services themselves, the same ones the web login pages use.
+     */
+    private function limitOtpLogin(): void
+    {
+        RateLimiter::for('api-otp-request', fn (Request $request): Limit => Limit::perMinute(10)->by('api-otp-request:'.$request->ip()));
+        RateLimiter::for('api-otp-verify', fn (Request $request): Limit => Limit::perMinute(20)->by('api-otp-verify:'.$request->ip()));
     }
 
     /**
