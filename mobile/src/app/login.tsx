@@ -4,26 +4,17 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 
-import { Button, ErrorBanner, Field, Notice, Screen, Segmented, Text } from '@/components/ui';
+import { Button, ErrorBanner, Field, Notice, Screen, Text } from '@/components/ui';
 import { authApi, errorMessage } from '@/lib/api';
-import type { OtpChannel } from '@/lib/api';
+import { clearPendingMagicLink, savePendingMagicLink } from '@/lib/magicLink';
 import { useSession } from '@/lib/session';
 import { BRAND_GLOSS, BRAND_GRADIENT, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
 
-type Mode = 'password' | 'otp';
+/** Email and password by default; WhatsApp code and email link are the alternatives below it. */
+type Mode = 'password' | 'whatsapp' | 'emailLink';
 
 /** Shared by every sign-in mutation so the mode switch can stay still while one is running. */
 const AUTH_MUTATION_KEY = ['auth', 'sign-in'];
-
-const MODES: { value: Mode; label: string }[] = [
-  { value: 'password', label: 'Kata sandi' },
-  { value: 'otp', label: 'Kode OTP' },
-];
-
-const OTP_CHANNELS: { value: OtpChannel; label: string }[] = [
-  { value: 'whatsapp', label: 'WhatsApp' },
-  { value: 'email', label: 'Email' },
-];
 
 export default function LoginScreen() {
   const styles = useStyles();
@@ -51,10 +42,27 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.form}>
-          <View style={busy && styles.modeBusy}>
-            <Segmented options={MODES} value={mode} onChange={changeMode} />
+          {mode === 'password' ? <PasswordForm /> : null}
+          {mode === 'whatsapp' ? <WhatsAppForm /> : null}
+          {mode === 'emailLink' ? <EmailLinkForm /> : null}
+
+          <View style={[styles.alternatives, busy && styles.modeBusy]}>
+            {mode === 'password' ? (
+              <>
+                <View style={styles.dividerRow}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>atau masuk dengan</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+                <View style={styles.alternativeRow}>
+                  <Button title="WhatsApp" variant="secondary" icon="logo-whatsapp" style={styles.alternativeButton} onPress={() => changeMode('whatsapp')} />
+                  <Button title="Link email" variant="secondary" icon="mail-outline" style={styles.alternativeButton} onPress={() => changeMode('emailLink')} />
+                </View>
+              </>
+            ) : (
+              <Button title="Masuk dengan kata sandi" variant="ghost" size="sm" icon="arrow-back-outline" onPress={() => changeMode('password')} />
+            )}
           </View>
-          {mode === 'password' ? <PasswordForm /> : <OtpForm />}
         </View>
 
         <Pressable
@@ -132,24 +140,19 @@ function PasswordForm() {
   );
 }
 
-/**
- * Two steps: pick WhatsApp or email and ask for a code, then type the 6-digit code. The server
- * answers the same way whether or not the number or address is registered, so the hint below the
- * code field says so instead of the app guessing.
- */
-function OtpForm() {
+/** Two steps: ask for a code at the WhatsApp number, then type the 6-digit code. */
+function WhatsAppForm() {
   const styles = useStyles();
-  const [channel, setChannel] = useState<OtpChannel>('whatsapp');
   const [destination, setDestination] = useState('');
   const [code, setCode] = useState('');
-  const [challenge, setChallenge] = useState<{ id: string; channel: OtpChannel; destination: string; expiresIn: number } | null>(null);
+  const [challenge, setChallenge] = useState<{ id: string; destination: string; expiresIn: number } | null>(null);
   const signIn = useSession((state) => state.signIn);
 
   const requestOtp = useMutation({
     mutationKey: AUTH_MUTATION_KEY,
-    mutationFn: () => authApi.requestOtp(channel, destination.trim()),
+    mutationFn: () => authApi.requestOtp('whatsapp', destination.trim()),
     onSuccess: (response) => {
-      setChallenge({ id: response.challenge_id, channel, destination: destination.trim(), expiresIn: response.expires_in });
+      setChallenge({ id: response.challenge_id, destination: destination.trim(), expiresIn: response.expires_in });
       setCode('');
     },
   });
@@ -171,12 +174,6 @@ function OtpForm() {
   const canRequest = destination.trim().length > 0 && !pending;
   const canVerify = /^\d{6}$/.test(code.trim()) && !pending;
 
-  const changeChannel = (next: OtpChannel) => {
-    setChannel(next);
-    setDestination('');
-    requestOtp.reset();
-  };
-
   const startOver = () => {
     setChallenge(null);
     setCode('');
@@ -186,20 +183,11 @@ function OtpForm() {
 
   if (challenge) {
     const minutes = Math.max(1, Math.round(challenge.expiresIn / 60));
-    const sentTo = challenge.channel === 'whatsapp' ? `WhatsApp ${challenge.destination}` : challenge.destination;
     return (
       <View style={styles.form}>
         {verifyOtp.isError ? <ErrorBanner message={errorMessage(verifyOtp.error)} /> : null}
         {requestOtp.isError ? <ErrorBanner message={errorMessage(requestOtp.error)} /> : null}
-        <Notice
-          tone="info"
-          icon={challenge.channel === 'whatsapp' ? 'logo-whatsapp' : 'mail-outline'}
-          message={
-            challenge.channel === 'whatsapp'
-              ? `Kode 6 digit dikirim ke ${sentTo}. Berlaku ${minutes} menit.`
-              : `Jika ${sentTo} terdaftar, kode 6 digit sudah dikirim ke email tersebut. Berlaku ${minutes} menit.`
-          }
-        />
+        <Notice tone="info" icon="logo-whatsapp" message={`Kode 6 digit dikirim ke WhatsApp ${challenge.destination}. Berlaku ${minutes} menit.`} />
         <Field
           label="Kode OTP"
           value={code}
@@ -224,7 +212,7 @@ function OtpForm() {
             disabled={pending}
           />
           <Button
-            title={challenge.channel === 'whatsapp' ? 'Ganti nomor' : 'Ganti email'}
+            title="Ganti nomor"
             variant="ghost"
             size="sm"
             icon="arrow-back-outline"
@@ -239,47 +227,100 @@ function OtpForm() {
   return (
     <View style={styles.form}>
       {requestOtp.isError ? <ErrorBanner message={errorMessage(requestOtp.error)} /> : null}
-      <View style={styles.channel}>
-        <Text style={styles.channelLabel}>Kirim kode lewat</Text>
-        <Segmented options={OTP_CHANNELS} value={channel} onChange={changeChannel} />
-      </View>
-      {channel === 'whatsapp' ? (
-        <Field
-          key="phone"
-          label="Nomor WhatsApp"
-          value={destination}
-          onChangeText={setDestination}
-          keyboardType="phone-pad"
-          autoComplete="tel"
-          textContentType="telephoneNumber"
-          placeholder="0812xxxxxxxx"
-          hint="Nomor yang tercatat di data karyawan Anda."
-          returnKeyType="go"
-          onSubmitEditing={() => canRequest && requestOtp.mutate()}
-        />
-      ) : (
-        <Field
-          key="email"
-          label="Email"
-          value={destination}
-          onChangeText={setDestination}
-          autoCapitalize="none"
-          autoComplete="email"
-          autoCorrect={false}
-          keyboardType="email-address"
-          textContentType="emailAddress"
-          placeholder="nama@perusahaan.id"
-          returnKeyType="go"
-          onSubmitEditing={() => canRequest && requestOtp.mutate()}
-        />
-      )}
+      <Field
+        label="Nomor WhatsApp"
+        value={destination}
+        onChangeText={setDestination}
+        keyboardType="phone-pad"
+        autoComplete="tel"
+        textContentType="telephoneNumber"
+        placeholder="0812xxxxxxxx"
+        hint="Nomor yang tercatat di data karyawan Anda."
+        returnKeyType="go"
+        onSubmitEditing={() => canRequest && requestOtp.mutate()}
+      />
       <Button
-        title={channel === 'whatsapp' ? 'Kirim kode ke WhatsApp' : 'Kirim kode ke email'}
+        title="Kirim kode ke WhatsApp"
         size="lg"
         onPress={() => requestOtp.mutate()}
         disabled={!canRequest}
         loading={requestOtp.isPending}
       />
+    </View>
+  );
+}
+
+/**
+ * Asks for a link by email; the email's button opens the app at /email-login, which finishes the
+ * login with the challenge kept here. No code to type.
+ */
+function EmailLinkForm() {
+  const styles = useStyles();
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState<{ email: string; expiresIn: number } | null>(null);
+
+  const requestLink = useMutation({
+    mutationKey: AUTH_MUTATION_KEY,
+    mutationFn: async () => {
+      const address = email.trim();
+      const response = await authApi.requestMagicLink(address);
+      await savePendingMagicLink({ challengeId: response.challenge_id, email: address, expiresAt: Date.now() + response.expires_in * 1000 });
+      return { email: address, expiresIn: response.expires_in };
+    },
+    onSuccess: setSent,
+  });
+
+  const canRequest = email.trim().length > 0 && !requestLink.isPending;
+
+  const startOver = () => {
+    void clearPendingMagicLink();
+    setSent(null);
+    requestLink.reset();
+  };
+
+  if (sent) {
+    const minutes = Math.max(1, Math.round(sent.expiresIn / 60));
+    return (
+      <View style={styles.form}>
+        {requestLink.isError ? <ErrorBanner message={errorMessage(requestLink.error)} /> : null}
+        <Notice
+          tone="info"
+          icon="mail-unread-outline"
+          message={`Jika ${sent.email} terdaftar, link masuk sudah dikirim ke email tersebut. Buka email di HP ini lalu ketuk tombol "Masuk". Link berlaku ${minutes} menit.`}
+        />
+        <View style={styles.linkRow}>
+          <Button
+            title={requestLink.isPending ? 'Mengirim ulang…' : 'Kirim ulang link'}
+            variant="ghost"
+            size="sm"
+            icon="refresh-outline"
+            onPress={() => requestLink.mutate()}
+            disabled={requestLink.isPending}
+          />
+          <Button title="Ganti email" variant="ghost" size="sm" icon="create-outline" onPress={startOver} disabled={requestLink.isPending} />
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.form}>
+      {requestLink.isError ? <ErrorBanner message={errorMessage(requestLink.error)} /> : null}
+      <Field
+        label="Email"
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        autoComplete="email"
+        autoCorrect={false}
+        keyboardType="email-address"
+        textContentType="emailAddress"
+        placeholder="nama@perusahaan.id"
+        hint="Kami kirim link untuk langsung masuk, tanpa kata sandi."
+        returnKeyType="go"
+        onSubmitEditing={() => canRequest && requestLink.mutate()}
+      />
+      <Button title="Kirim link masuk" size="lg" icon="paper-plane-outline" onPress={() => requestLink.mutate()} disabled={!canRequest} loading={requestLink.isPending} />
     </View>
   );
 }
@@ -302,8 +343,12 @@ const useStyles = makeStyles((c, dark) => ({
   subtitle: { fontSize: fontSize.md, color: c.textMuted },
   form: { gap: spacing.lg },
   modeBusy: { opacity: 0.5, pointerEvents: 'none' },
-  channel: { gap: spacing.sm },
-  channelLabel: { fontSize: fontSize.sm, fontWeight: '500', color: c.textMuted, paddingHorizontal: 4 },
+  alternatives: { gap: spacing.md, alignItems: 'stretch' },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  dividerLine: { flex: 1, height: 1, backgroundColor: c.separator },
+  dividerText: { fontSize: fontSize.sm, color: c.textMuted },
+  alternativeRow: { flexDirection: 'row', gap: spacing.sm },
+  alternativeButton: { flex: 1 },
   linkRow: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', gap: spacing.sm },
   server: {
     flexDirection: 'row',

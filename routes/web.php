@@ -2,6 +2,7 @@
 
 use App\Filament\Auth\Pages\EmailLogin;
 use App\Filament\Auth\Pages\PhoneLogin;
+use App\Http\Controllers\AppEmailLoginController;
 use App\Http\Controllers\AttendancePhotoController;
 use App\Http\Controllers\CoreSsoController;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -33,6 +34,11 @@ Route::get('email-login/link/{token}', EmailLogin::class)
         DispatchServingFilamentEvent::class,
     ])
     ->name('email-login.link');
+
+// Magic link from the mobile app's login email: hands the token to the app; see AppEmailLoginController.
+Route::get('app/email-login/{token}', AppEmailLoginController::class)
+    ->where('token', '[A-Za-z0-9]{64}')
+    ->name('app-login.link');
 
 Route::get('/auth/redirect', [CoreSsoController::class, 'redirect'])->name('sso.redirect');
 Route::get('/auth/callback', [CoreSsoController::class, 'callback'])->name('sso.callback');

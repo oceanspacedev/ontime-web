@@ -144,6 +144,13 @@ export interface OtpRequestResponse {
   expires_in: number;
 }
 
+export interface MagicLinkRequestResponse {
+  message: string;
+  challenge_id: string;
+  /** Seconds the emailed link and challenge stay valid. */
+  expires_in: number;
+}
+
 export interface WorkerSummary {
   id: number;
   full_name: string;

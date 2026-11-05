@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\LoginRequest;
+use App\Http\Requests\Api\V1\MagicLinkRequestRequest;
+use App\Http\Requests\Api\V1\MagicLinkVerifyRequest;
 use App\Http\Requests\Api\V1\OtpRequestRequest;
 use App\Http\Requests\Api\V1\OtpVerifyRequest;
 use App\Http\Resources\Api\V1\UserResource;
@@ -98,6 +100,50 @@ class AuthController extends Controller
             'busy' => $this->retryLater('Verifikasi OTP sedang diproses. Coba lagi sebentar lagi.', 503, $verified['retry_after']),
             default => response()->json(['message' => 'Kode OTP tidak valid atau sudah kedaluwarsa.'], 401),
         };
+    }
+
+    /**
+     * Email a link that opens the app. Like requestOtp, the answer is the same whether or not the
+     * address belongs to an account.
+     */
+    public function requestMagicLink(MagicLinkRequestRequest $request, ApiOtpLoginService $otpLogin): JsonResponse
+    {
+        if (! ApiOtpLoginService::isChannelConfigured(ApiOtpLoginService::CHANNEL_EMAIL)) {
+            return response()->json(['message' => 'Login dengan email belum tersedia. Masuk dengan email dan kata sandi.'], 503);
+        }
+
+        $issued = $otpLogin->requestMagicLink((string) $request->validated('email'), (string) $request->ip());
+
+        if ($issued['ok']) {
+            return response()->json([
+                'message' => 'Jika email terdaftar, link masuk sudah dikirim ke email tersebut.',
+                'challenge_id' => $issued['challenge_id'],
+                'expires_in' => $issued['expires_in'],
+            ]);
+        }
+
+        return match ($issued['status']) {
+            'invalid_destination' => response()->json(['message' => 'Alamat email tidak valid.', 'errors' => ['email' => ['Alamat email tidak valid.']]], 422),
+            'rate_limited' => $this->retryLater('Terlalu banyak permintaan link masuk. Silakan coba lagi nanti.', 429, $issued['retry_after']),
+            'busy' => $this->retryLater('Pengiriman link masuk sedang sibuk. Coba lagi sebentar lagi.', 503, $issued['retry_after']),
+            default => response()->json(['message' => 'Link masuk belum bisa dikirim. Coba lagi sebentar lagi.'], 503),
+        };
+    }
+
+    public function verifyMagicLink(MagicLinkVerifyRequest $request, ApiOtpLoginService $otpLogin): JsonResponse
+    {
+        $verified = $otpLogin->verifyMagicLink(
+            (string) $request->validated('challenge_id'),
+            (string) $request->validated('token'),
+        );
+
+        if ($verified['ok']) {
+            return $this->loginResponse($verified['user']);
+        }
+
+        return $verified['status'] === 'inactive'
+            ? response()->json(['message' => self::INACTIVE_MESSAGE], 403)
+            : response()->json(['message' => 'Link masuk tidak valid atau sudah kedaluwarsa. Minta link baru dari aplikasi.'], 401);
     }
 
     private function loginResponse(User $user): JsonResponse

@@ -92,6 +92,7 @@ export default function RootLayout() {
           }}>
           <Stack.Protected guard={!signedIn}>
             <Stack.Screen name="login" options={{ headerShown: false }} />
+            <Stack.Screen name="email-login" options={{ headerShown: false, animation: 'fade' }} />
           </Stack.Protected>
 
           <Stack.Protected guard={signedIn}>

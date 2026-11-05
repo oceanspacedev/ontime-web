@@ -22,6 +22,8 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/login', [AuthController::class, 'login']);
     Route::post('/auth/otp/request', [AuthController::class, 'requestOtp'])->middleware('throttle:api-otp-request');
     Route::post('/auth/otp/verify', [AuthController::class, 'verifyOtp'])->middleware('throttle:api-otp-verify');
+    Route::post('/auth/magic-link/request', [AuthController::class, 'requestMagicLink'])->middleware('throttle:api-otp-request');
+    Route::post('/auth/magic-link/verify', [AuthController::class, 'verifyMagicLink'])->middleware('throttle:api-otp-verify');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);

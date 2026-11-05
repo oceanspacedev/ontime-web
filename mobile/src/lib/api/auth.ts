@@ -1,5 +1,5 @@
 import { request } from './client';
-import type { LoginResponse, OtpChannel, OtpRequestResponse, User } from './types';
+import type { LoginResponse, MagicLinkRequestResponse, OtpChannel, OtpRequestResponse, User } from './types';
 
 export function login(email: string, password: string): Promise<LoginResponse> {
   return request<LoginResponse>('/auth/login', {
@@ -23,6 +23,24 @@ export function verifyOtp(challengeId: string, code: string): Promise<LoginRespo
   return request<LoginResponse>('/auth/otp/verify', {
     method: 'POST',
     json: { challenge_id: challengeId, code },
+    skipAuthHandling: true,
+  });
+}
+
+/** Email a link that opens the app; keep the challenge id to redeem the link's token later. */
+export function requestMagicLink(email: string): Promise<MagicLinkRequestResponse> {
+  return request<MagicLinkRequestResponse>('/auth/magic-link/request', {
+    method: 'POST',
+    json: { email },
+    skipAuthHandling: true,
+  });
+}
+
+/** Exchange the challenge id and the token from the emailed link for a session; same payload as login. */
+export function verifyMagicLink(challengeId: string, token: string): Promise<LoginResponse> {
+  return request<LoginResponse>('/auth/magic-link/verify', {
+    method: 'POST',
+    json: { challenge_id: challengeId, token },
     skipAuthHandling: true,
   });
 }

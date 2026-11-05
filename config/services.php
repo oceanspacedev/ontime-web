@@ -53,6 +53,12 @@ return [
         'expires_in' => (int) env('EMAIL_LOGIN_EXPIRES_IN', 600),
     ],
 
+    // Where the email login link sends the mobile app. Expo Go in development needs its own URL,
+    // e.g. exp://127.0.0.1:8081/--/
+    'mobile_app' => [
+        'deep_link' => env('MOBILE_APP_DEEP_LINK', 'ontime://'),
+    ],
+
     // Expo Push API for the mobile app. EXPO_ACCESS_TOKEN is only needed once "enhanced push
     // security" is enabled for the Expo project.
     'expo' => [
