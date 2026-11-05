@@ -54,7 +54,11 @@ export default function RequestDetailScreen() {
     );
   }
   if (query.isPending) {
-    return <LoadingView />;
+    return (
+      <Screen scroll={false} padded={false}>
+        <LoadingView />
+      </Screen>
+    );
   }
   if (query.isError) {
     return (
@@ -79,9 +83,14 @@ export default function RequestDetailScreen() {
   };
 
   return (
-    <Screen onRefresh={() => query.refetch()}>
+    <Screen
+      onRefresh={() => query.refetch()}
+      footer={
+        canCancel ? (
+          <Button title="Batalkan pengajuan" variant="danger" size="lg" icon="close-circle-outline" onPress={confirmCancel} loading={cancel.isPending} />
+        ) : undefined
+      }>
       <RequestDetail item={item} />
-      {canCancel ? <Button title="Batalkan pengajuan" variant="danger" icon="close-circle-outline" onPress={confirmCancel} loading={cancel.isPending} /> : null}
     </Screen>
   );
 }

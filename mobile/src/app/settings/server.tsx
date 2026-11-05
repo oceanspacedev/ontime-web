@@ -1,11 +1,11 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, View } from 'react-native';
 
-import { Button, Card, Choice, Field, Notice, Screen, text } from '@/components/ui';
+import { Button, Choice, Field, Group, Notice, Screen, Text, useTextStyles } from '@/components/ui';
 import { buildUrl } from '@/lib/api/client';
 import { DEFAULT_BASE_URL, normalizeBaseUrl, useSession } from '@/lib/session';
-import { spacing } from '@/theme';
+import { makeStyles, spacing } from '@/theme';
 
 type Preset = 'default' | 'ios' | 'android' | 'custom';
 
@@ -17,6 +17,8 @@ const PRESETS: { value: Preset; label: string; url: string | null }[] = [
 ];
 
 export default function ServerSettingsScreen() {
+  const styles = useStyles();
+  const t = useTextStyles();
   const baseUrl = useSession((state) => state.baseUrl);
   const setBaseUrl = useSession((state) => state.setBaseUrl);
   const signedIn = useSession((state) => state.status === 'signedIn');
@@ -66,9 +68,8 @@ export default function ServerSettingsScreen() {
 
   return (
     <Screen>
-      <Card>
-        <Text style={text.strong}>Alamat server</Text>
-        <Text style={text.muted}>
+      <Group title="Alamat server" padded>
+        <Text style={[t.muted, styles.description]}>
           Masukkan alamat OnTime, misalnya https://ontime.perusahaan.id. Akhiran /api/v1 ditambahkan otomatis.
         </Text>
         <Choice options={PRESETS.map(({ value: presetValue, label }) => ({ value: presetValue, label }))} value={preset} onChange={choosePreset} />
@@ -93,7 +94,7 @@ export default function ServerSettingsScreen() {
           <Button title="Tes koneksi" variant="secondary" onPress={testConnection} loading={testing} style={styles.action} />
           <Button title="Simpan" onPress={save} disabled={value.trim().length === 0} style={styles.action} />
         </View>
-      </Card>
+      </Group>
       {signedIn ? (
         <Notice tone="warning" message="Mengganti server saat masih masuk bisa membuat token tidak dikenali. Keluar dulu bila berpindah server." />
       ) : null}
@@ -101,7 +102,8 @@ export default function ServerSettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+const useStyles = makeStyles(() => ({
+  description: { lineHeight: 20 },
+  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
   action: { flex: 1 },
-});
+}));

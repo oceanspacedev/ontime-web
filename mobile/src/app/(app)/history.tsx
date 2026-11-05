@@ -1,17 +1,19 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AttendanceRow } from '@/components/AttendanceRow';
 import { currentMonth, MonthSwitcher, monthRange } from '@/components/MonthSwitcher';
-import { Button, EmptyState, ErrorBanner, LoadingView, Screen } from '@/components/ui';
+import { Button, EmptyState, ErrorBanner, Group, LoadingView, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { attendanceApi, errorMessage, reportsApi } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
-import { colors, fontSize, radius, spacing } from '@/theme';
+import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 export default function HistoryScreen() {
   const access = useAccess();
+  const styles = useStyles();
+  const { colors } = useTheme();
   const [month, setMonth] = useState(currentMonth());
   const range = monthRange(month);
 
@@ -33,20 +35,21 @@ export default function HistoryScreen() {
   const summary = report.data?.summary;
 
   return (
-    <Screen
-      onRefresh={() => {
-        void attendances.refetch();
-        void report.refetch();
-      }}>
+    <Screen title="Riwayat" onRefresh={() => Promise.all([attendances.refetch(), report.refetch()])}>
       <MonthSwitcher value={month} onChange={setMonth} />
 
       {summary ? (
-        <View style={styles.summary}>
-          <SummaryTile label="Hadir" value={summary.total_present} color={colors.success} />
-          <SummaryTile label="Terlambat" value={summary.total_late} color={colors.warning} />
-          <SummaryTile label="Cuti" value={summary.total_leave} color={colors.info} />
-          <SummaryTile label="Absen" value={summary.total_absent} color={colors.danger} />
-        </View>
+        <Group title="Ringkasan" separated={false}>
+          <View style={styles.summary}>
+            <SummaryColumn label="Hadir" value={summary.total_present} color={colors.success} />
+            <View style={styles.divider} />
+            <SummaryColumn label="Terlambat" value={summary.total_late} color={colors.warning} />
+            <View style={styles.divider} />
+            <SummaryColumn label="Cuti" value={summary.total_leave} color={colors.info} />
+            <View style={styles.divider} />
+            <SummaryColumn label="Absen" value={summary.total_absent} color={colors.danger} />
+          </View>
+        </Group>
       ) : null}
 
       {attendances.isPending ? (
@@ -56,40 +59,37 @@ export default function HistoryScreen() {
       ) : rows.length === 0 ? (
         <EmptyState icon="calendar-outline" title="Belum ada presensi" message="Tidak ada catatan presensi di bulan ini." />
       ) : (
-        <View style={styles.list}>
-          {rows.map((attendance) => (
-            <AttendanceRow key={attendance.id} attendance={attendance} showWorker={showWorker} />
-          ))}
+        <>
+          <Group title="Presensi">
+            {rows.map((attendance) => (
+              <AttendanceRow key={attendance.id} attendance={attendance} showWorker={showWorker} />
+            ))}
+          </Group>
           {attendances.hasNextPage ? (
             <Button title="Muat lebih banyak" variant="secondary" onPress={() => attendances.fetchNextPage()} loading={attendances.isFetchingNextPage} />
           ) : null}
-        </View>
+        </>
       )}
     </Screen>
   );
 }
 
-function SummaryTile({ label, value, color }: { label: string; value: number; color: string }) {
+function SummaryColumn({ label, value, color }: { label: string; value: number; color: string }) {
+  const styles = useStyles();
   return (
-    <View style={styles.tile}>
-      <Text style={[styles.tileValue, { color }]}>{value}</Text>
-      <Text style={styles.tileLabel}>{label}</Text>
+    <View style={styles.column}>
+      <Text style={[styles.columnValue, { color }]}>{value}</Text>
+      <Text style={styles.columnLabel} numberOfLines={1}>
+        {label}
+      </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  summary: { flexDirection: 'row', gap: spacing.sm },
-  tile: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  tileValue: { fontSize: fontSize.xl, fontWeight: '700' },
-  tileLabel: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
-  list: { gap: spacing.sm },
-});
+const useStyles = makeStyles((c) => ({
+  summary: { flexDirection: 'row', alignItems: 'stretch', paddingVertical: 18 },
+  column: { flex: 1, alignItems: 'center', gap: 4, paddingHorizontal: spacing.xs },
+  columnValue: { fontSize: fontSize.xxl, fontWeight: '700', letterSpacing: -0.4, fontVariant: ['tabular-nums'] },
+  columnLabel: { fontSize: fontSize.xs, color: c.textMuted, fontWeight: '500' },
+  divider: { width: StyleSheet.hairlineWidth, backgroundColor: c.separator, marginVertical: spacing.xs },
+}));

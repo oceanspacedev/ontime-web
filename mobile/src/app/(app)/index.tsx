@@ -1,18 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { router, type Href } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
-import { TodayCard } from '@/components/TodayCard';
-import { Avatar, Card, ErrorBanner, type IconName, LoadingView, Notice, Screen, SectionTitle } from '@/components/ui';
+import { TODAY_GROUP_TITLE, TodayCard } from '@/components/TodayCard';
+import { Avatar, ErrorBanner, Group, IconButton, type IconName, LoadingView, Notice, ProgressBar, QuickAction, Row, Screen, SectionTitle, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { approvalsApi, attendanceApi, errorMessage, requestsApi } from '@/lib/api';
+import { countPending } from '@/lib/approvals';
 import { greeting } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
-import { countPending } from '@/lib/approvals';
-import { colors, fontSize, radius, spacing } from '@/theme';
+import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface MenuItem {
   key: string;
@@ -22,7 +22,25 @@ interface MenuItem {
   badge?: number;
 }
 
+/** Quick action tiles per row on the home screen. */
+const MENU_COLUMNS = 4;
+
+/** Splits the menu into rows of equal length, padding the last row with empty slots. */
+function toRows(items: MenuItem[]): (MenuItem | null)[][] {
+  const rows: (MenuItem | null)[][] = [];
+  for (let index = 0; index < items.length; index += MENU_COLUMNS) {
+    const row: (MenuItem | null)[] = items.slice(index, index + MENU_COLUMNS);
+    while (row.length < MENU_COLUMNS) {
+      row.push(null);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 export default function HomeScreen() {
+  const styles = useStyles();
+  const { colors } = useTheme();
   const user = useSession((state) => state.user);
   const access = useAccess();
   const refreshUser = useRefreshUser();
@@ -50,27 +68,37 @@ export default function HomeScreen() {
     void pending.refetch();
   };
 
+  const pendingCount = countPending(pending.data);
+
   const menu: MenuItem[] = [
     { key: 'history', label: 'Riwayat', icon: 'calendar-outline', href: '/history' },
     ...(access.canRequestLeave ? [{ key: 'leave', label: 'Cuti / Izin', icon: 'sunny-outline', href: '/request/leave/new' } as MenuItem] : []),
     ...(access.canRequestOvertime ? [{ key: 'overtime', label: 'Lembur', icon: 'moon-outline', href: '/request/overtime/new' } as MenuItem] : []),
     ...(access.canRequestCorrection ? [{ key: 'correction', label: 'Koreksi', icon: 'create-outline', href: '/request/correction/new' } as MenuItem] : []),
     ...(access.canSeeLeaveCalendar ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
-    ...(access.canApprove ? [{ key: 'approvals', label: 'Persetujuan', icon: 'checkmark-done-outline', href: '/approvals', badge: countPending(pending.data) } as MenuItem] : []),
+    ...(access.canApprove ? [{ key: 'approvals', label: 'Persetujuan', icon: 'checkmark-done-outline', href: '/approvals', badge: pendingCount } as MenuItem] : []),
     ...(access.canUseAttendance ? [{ key: 'face', label: 'Master Wajah', icon: 'scan-outline', href: '/attendance/master-face' } as MenuItem] : []),
   ];
 
+  const displayName = access.profileName || user?.name;
   const mentor = user?.intern?.mentor ?? null;
   const supervisor = user?.freelancer?.supervisor ?? null;
+  const guide = mentor ?? supervisor;
   const quota = access.hasAnnualLeave && leaves.data?.quota_summary.eligible !== false ? leaves.data?.quota_summary : undefined;
+  const quotaRatio = quota && quota.annual_leave_quota > 0 ? quota.remaining_days / quota.annual_leave_quota : 0;
 
   return (
-    <Screen edges={['top', 'bottom']} onRefresh={refresh}>
+    <Screen edges={['top']} onRefresh={refresh}>
       <View style={styles.hero}>
+        <Pressable onPress={() => router.push('/profile')} accessibilityRole="button" accessibilityLabel="Profil">
+          <Avatar name={displayName || ''} uri={access.masterFacePhoto} size={44} />
+        </Pressable>
         <View style={styles.heroText}>
-          <Text style={styles.greeting}>{greeting()},</Text>
+          <Text style={styles.greeting} numberOfLines={1}>
+            {greeting()},
+          </Text>
           <Text style={styles.name} numberOfLines={1}>
-            {access.profileName || user?.name}
+            {displayName}
           </Text>
           <Text style={styles.company} numberOfLines={1}>
             {[access.company?.name, user?.employee?.division?.name ?? user?.intern?.division?.name ?? user?.freelancer?.division?.name]
@@ -78,16 +106,18 @@ export default function HomeScreen() {
               .join(' · ') || access.roles.join(', ')}
           </Text>
         </View>
-        <Pressable onPress={() => router.push('/profile')}>
-          <Avatar name={access.profileName || user?.name || ''} uri={access.masterFacePhoto} size={52} />
-        </Pressable>
+        {access.canApprove ? (
+          <IconButton icon="notifications-outline" onPress={() => router.push('/approvals')} badge={pendingCount} accessibilityLabel="Persetujuan" />
+        ) : (
+          <IconButton icon="person-outline" onPress={() => router.push('/profile')} accessibilityLabel="Profil" />
+        )}
       </View>
 
       {access.canUseAttendance ? (
         today.isPending ? (
-          <Card>
+          <Group title={TODAY_GROUP_TITLE} padded>
             <LoadingView message="Memuat presensi hari ini…" />
-          </Card>
+          </Group>
         ) : today.isError ? (
           <ErrorBanner message={errorMessage(today.error)} onRetry={() => today.refetch()} />
         ) : today.data ? (
@@ -97,95 +127,71 @@ export default function HomeScreen() {
         <Notice tone="info" message="Akun ini tidak terhubung ke profil pekerja, jadi presensi dan pengajuan pribadi tidak tersedia. Menu lain tetap bisa dipakai sesuai role." />
       )}
 
+      <View style={styles.menu}>
+        <SectionTitle title="Menu" />
+        {toRows(menu).map((row, rowIndex) => (
+          <View key={rowIndex} style={styles.menuRow}>
+            {row.map((item, slot) =>
+              item ? (
+                <QuickAction key={item.key} icon={item.icon} label={item.label} badge={item.badge} onPress={() => router.push(item.href)} />
+              ) : (
+                <View key={`empty-${slot}`} style={styles.menuSpacer} />
+              ),
+            )}
+          </View>
+        ))}
+      </View>
+
       {quota ? (
-        <Card style={styles.quotaCard}>
+        <Group title="Cuti Tahunan" padded>
           <View style={styles.quotaRow}>
-            <View>
+            <View style={styles.quotaText}>
               <Text style={styles.quotaLabel}>Sisa cuti tahunan</Text>
               <Text style={styles.quotaValue}>
                 {quota.remaining_days} <Text style={styles.quotaUnit}>dari {quota.annual_leave_quota} hari</Text>
               </Text>
             </View>
-            <Ionicons name="sunny-outline" size={32} color={colors.primary} />
-          </View>
-        </Card>
-      ) : null}
-
-      {mentor || supervisor ? (
-        <Card>
-          <Text style={styles.cardLabel}>{mentor ? 'Mentor' : 'Supervisor'}</Text>
-          <Text style={styles.cardValue}>{(mentor ?? supervisor)?.full_name}</Text>
-        </Card>
-      ) : null}
-
-      <SectionTitle title="Menu" />
-      <View style={styles.grid}>
-        {menu.map((item) => (
-          <Pressable key={item.key} style={({ pressed }) => [styles.menuItem, pressed && styles.menuPressed]} onPress={() => router.push(item.href)}>
-            <View style={styles.menuIcon}>
-              <Ionicons name={item.icon} size={24} color={colors.primary} />
-              {item.badge ? (
-                <View style={styles.menuBadge}>
-                  <Text style={styles.menuBadgeText}>{item.badge}</Text>
-                </View>
-              ) : null}
+            <View style={styles.quotaIcon}>
+              <Ionicons name="sunny-outline" size={24} color={colors.primary} />
             </View>
-            <Text style={styles.menuLabel} numberOfLines={2}>
-              {item.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+          </View>
+          <ProgressBar
+            progress={quotaRatio}
+            height={6}
+            accessibilityValue={{ min: 0, max: quota.annual_leave_quota, now: quota.remaining_days }}
+          />
+        </Group>
+      ) : null}
+
+      {guide ? (
+        <Group title={mentor ? 'Mentor' : 'Supervisor'}>
+          <Row title={guide.full_name} left={<Avatar name={guide.full_name} size={40} />} />
+        </Group>
+      ) : null}
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  hero: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingTop: spacing.sm },
+const useStyles = makeStyles((c) => ({
+  hero: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingTop: spacing.sm, paddingHorizontal: spacing.xs },
   heroText: { flex: 1 },
-  greeting: { fontSize: fontSize.sm, color: colors.textMuted },
-  name: { fontSize: fontSize.xl, fontWeight: '700', color: colors.text },
-  company: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: 2 },
-  quotaCard: { backgroundColor: colors.primarySoft, borderColor: colors.primarySoft },
-  quotaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  quotaLabel: { fontSize: fontSize.sm, color: colors.primaryDark },
-  quotaValue: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.primaryDark },
-  quotaUnit: { fontSize: fontSize.sm, fontWeight: '500' },
-  cardLabel: { fontSize: fontSize.xs, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
-  cardValue: { fontSize: fontSize.md, fontWeight: '600', color: colors.text },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-  menuItem: {
-    width: '30%',
-    flexGrow: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    alignItems: 'center',
-    gap: spacing.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  menuPressed: { opacity: 0.8 },
-  menuIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: radius.md,
-    backgroundColor: colors.primarySoft,
+  greeting: { fontSize: fontSize.sm, color: c.textMuted },
+  name: { fontSize: fontSize.xl, fontWeight: '700', color: c.text, letterSpacing: -0.3 },
+  company: { fontSize: fontSize.xs, color: c.textMuted, marginTop: 2 },
+  menu: { gap: spacing.md },
+  menuRow: { flexDirection: 'row', gap: spacing.sm },
+  menuSpacer: { flex: 1 },
+  quotaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  quotaText: { flex: 1, gap: 2 },
+  quotaLabel: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },
+  quotaValue: { fontSize: 34, fontWeight: '700', color: c.text, letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  quotaUnit: { fontSize: fontSize.md, fontWeight: '500', color: c.textMuted, letterSpacing: 0 },
+  quotaIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: c.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  menuBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: colors.danger,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 5,
-  },
-  menuBadgeText: { color: colors.textOnPrimary, fontSize: 11, fontWeight: '700' },
-  menuLabel: { fontSize: fontSize.sm, color: colors.text, textAlign: 'center', fontWeight: '500' },
-});
+}));
