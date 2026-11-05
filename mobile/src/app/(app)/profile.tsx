@@ -7,7 +7,7 @@ import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { Avatar, Badge, Button, Group, InfoRow, Pill, Row, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { attendanceApi, authApi, type PolicyFailAction, type SelfieMode } from '@/lib/api';
+import { attendanceApi, type PolicyFailAction, type SelfieMode } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { useSession } from '@/lib/session';
 import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance, useTheme } from '@/theme';
@@ -41,14 +41,7 @@ export default function ProfileScreen() {
   const refreshUser = useRefreshUser();
 
   const logout = useMutation({
-    mutationFn: async () => {
-      try {
-        await authApi.logout();
-      } catch {
-        // The token is dropped locally either way.
-      }
-      await signOut();
-    },
+    mutationFn: () => signOut(),
   });
 
   const confirmLogout = () => {

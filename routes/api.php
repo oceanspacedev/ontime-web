@@ -19,7 +19,7 @@ Route::post('/webhooks/employees', [EmployeeWebhookController::class, 'handle'])
 Route::prefix('v1')->group(function () {
 
     // Auth Routes
-    Route::post('/auth/login', [AuthController::class, 'login']);
+    Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:api-login');
     Route::post('/auth/otp/request', [AuthController::class, 'requestOtp'])->middleware('throttle:api-otp-request');
     Route::post('/auth/otp/verify', [AuthController::class, 'verifyOtp'])->middleware('throttle:api-otp-verify');
     Route::post('/auth/magic-link/request', [AuthController::class, 'requestMagicLink'])->middleware('throttle:api-otp-request');

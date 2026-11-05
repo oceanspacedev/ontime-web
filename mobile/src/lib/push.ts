@@ -138,16 +138,14 @@ export async function registerPushToken(): Promise<string | null> {
   }
 }
 
-/** Remove this install's token from the API. Must run while the session token is still valid. */
-export async function unregisterPushToken(): Promise<void> {
+/**
+ * Forget this install's registered push token and return it, so sign-out can ask the server to
+ * drop it along with the session. The next sign-in registers it again.
+ */
+export async function takeStoredPushToken(): Promise<string | null> {
   const token = await readStoredToken();
-  if (!token) {
-    return;
+  if (token) {
+    await writeStoredToken(null);
   }
-  await writeStoredToken(null);
-  try {
-    await devicesApi.unregister(token);
-  } catch {
-    // Expo will report the device as unregistered on the next push anyway.
-  }
+  return token;
 }

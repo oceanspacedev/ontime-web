@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\LoginRequest;
+use App\Http\Requests\Api\V1\LogoutRequest;
 use App\Http\Requests\Api\V1\MagicLinkRequestRequest;
 use App\Http\Requests\Api\V1\MagicLinkVerifyRequest;
 use App\Http\Requests\Api\V1\OtpRequestRequest;
@@ -172,8 +173,16 @@ class AuthController extends Controller
         ]);
     }
 
-    public function logout(Request $request): JsonResponse
+    /**
+     * End this session. With push_token the install also stops receiving this account's pushes, in
+     * the same request, so the app never needs the session token after it is revoked.
+     */
+    public function logout(LogoutRequest $request): JsonResponse
     {
+        if (filled($pushToken = $request->validated('push_token'))) {
+            $request->user()->deviceTokens()->where('token', $pushToken)->delete();
+        }
+
         $request->user()->currentAccessToken()->delete();
 
         return response()->json([

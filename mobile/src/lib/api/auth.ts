@@ -50,6 +50,17 @@ export async function me(): Promise<User> {
   return response.user;
 }
 
-export function logout(): Promise<{ message: string }> {
-  return request<{ message: string }>('/auth/logout', { method: 'POST' });
+/**
+ * Revoke a session on the server that issued it; with pushToken this install also stops getting
+ * that account's pushes. Takes the session explicitly because the app clears it locally first.
+ */
+export function logout(session: { token: string; baseUrl: string }, pushToken: string | null): Promise<{ message: string }> {
+  return request<{ message: string }>('/auth/logout', {
+    method: 'POST',
+    json: pushToken ? { push_token: pushToken } : {},
+    token: session.token,
+    baseUrl: session.baseUrl,
+    skipAuthHandling: true,
+    timeoutMs: 10000,
+  });
 }

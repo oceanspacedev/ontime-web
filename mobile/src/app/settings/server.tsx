@@ -26,6 +26,8 @@ export default function ServerSettingsScreen() {
   const [preset, setPreset] = useState<Preset>(() => PRESETS.find((item) => item.url === baseUrl)?.value ?? 'custom');
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // Saving another server ends the session (see setBaseUrl), so say so before it happens.
+  const signsOut = signedIn && value.trim().length > 0 && normalizeBaseUrl(value) !== baseUrl;
 
   const choosePreset = (next: Preset) => {
     setPreset(next);
@@ -95,9 +97,7 @@ export default function ServerSettingsScreen() {
           <Button title="Simpan" onPress={save} disabled={value.trim().length === 0} style={styles.action} />
         </View>
       </Group>
-      {signedIn ? (
-        <Notice tone="warning" message="Mengganti server saat masih masuk bisa membuat token tidak dikenali. Keluar dulu bila berpindah server." />
-      ) : null}
+      {signsOut ? <Notice tone="warning" message="Anda akan keluar dari akun ini. Sesi hanya berlaku di server yang menerbitkannya, jadi masuk lagi setelah alamat diganti." /> : null}
     </Screen>
   );
 }

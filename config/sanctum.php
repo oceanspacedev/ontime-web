@@ -54,6 +54,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Idle Expiration Minutes
+    |--------------------------------------------------------------------------
+    |
+    | A token unused for this many minutes stops working and is pruned daily
+    | (sanctum:prune-idle). Default 90 days; null or 0 turns it off.
+    |
+    */
+
+    'idle_expiration' => env('SANCTUM_IDLE_EXPIRATION', 60 * 24 * 90),
+
+    /*
+    |--------------------------------------------------------------------------
     | Token Prefix
     |--------------------------------------------------------------------------
     |

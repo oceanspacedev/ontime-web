@@ -21,7 +21,7 @@ Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini me
 | `Authorization` | `Bearer <token>` (semua endpoint kecuali login) |
 | `Content-Type` | `application/json`, atau `multipart/form-data` untuk unggah foto/lampiran |
 
-- Autentikasi memakai Laravel Sanctum (personal access token). Token didapat dari `POST /auth/login` dan dihapus lewat `POST /auth/logout`. Token tidak kedaluwarsa otomatis.
+- Autentikasi memakai Laravel Sanctum (personal access token). Token didapat dari `POST /auth/login` dan dihapus lewat `POST /auth/logout`. Token berhenti berlaku setelah 90 hari tidak dipakai (`SANCTUM_IDLE_EXPIRATION`, menit) dan saat akun dinonaktifkan; selama dipakai, token tidak kedaluwarsa.
 - Semua path di bawah `api/*` selalu membalas JSON, termasuk error.
 - PHP tidak membaca `multipart/form-data` pada request `PUT`. Untuk mengubah pengajuan sambil mengunggah file, kirim `POST` ke URL yang sama dengan field `_method=PUT`.
 
@@ -135,9 +135,11 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
 | POST | `/auth/otp/request` | Publik | Kirim kode OTP ke WhatsApp atau email, mengembalikan `challenge_id` |
 | POST | `/auth/otp/verify` | Publik | Tukar `challenge_id` + kode OTP dengan token |
 | GET | `/auth/me` | Token | Profil akun saat ini |
-| POST | `/auth/logout` | Token | Menghapus token yang sedang dipakai |
+| POST | `/auth/logout` | Token | Menghapus token yang sedang dipakai, dan push token perangkat bila dikirim |
 
-**POST /auth/login** (JSON): `email` (wajib, email), `password` (wajib).
+**POST /auth/login** (JSON): `email` (wajib, email), `password` (wajib). Dibatasi 5 percobaan/menit per email dari satu IP dan 20/menit per IP; selebihnya 429 `Terlalu banyak percobaan masuk. Silakan coba lagi sebentar lagi.` dengan header `Retry-After` dan `retry_after` (detik).
+
+**POST /auth/logout** (JSON, opsional): `push_token` (Expo push token perangkat ini, maks 255). Push token itu ikut dihapus dalam request yang sama, jadi aplikasi tidak perlu memanggil `DELETE /devices` lebih dulu. Membalas `{"message": "Logged out successfully"}`.
 
 ```json
 {
@@ -676,7 +678,7 @@ Semua `GET`, read-only, dengan pola `GET /master/<resource>` (daftar) dan `GET /
 | Method | Path | Akses | Keterangan |
 | :--- | :--- | :--- | :--- |
 | POST | `/devices` | Token | Daftarkan atau perbarui Expo push token perangkat ini |
-| DELETE | `/devices` | Token | Hapus token perangkat ini; panggil sebelum `POST /auth/logout` |
+| DELETE | `/devices` | Token | Hapus token perangkat ini tanpa logout (saat logout, kirim `push_token` ke `POST /auth/logout`) |
 
 **POST /devices** (JSON)
 
@@ -754,7 +756,7 @@ Catatan:
 | Kalender cuti | `GET /kalender-cuti` | Grid bulanan cuti rekan |
 | Laporan presensi | `GET /laporan-absensi` | Kartu hadir, terlambat, cuti, tidak hadir |
 | Profil | `GET /auth/me`, `POST /auth/logout` | Biodata, badan usaha, divisi, jabatan, pembimbing, pengaturan base URL |
-| Push notification | `POST /devices` setelah login dan tiap aplikasi dibuka, `DELETE /devices` sebelum logout | Minta izin notifikasi, daftarkan Expo push token; tekan notifikasi membuka detail pengajuan (3.12) |
+| Push notification | `POST /devices` setelah login dan tiap aplikasi dibuka, `push_token` di `POST /auth/logout` | Minta izin notifikasi, daftarkan Expo push token; tekan notifikasi membuka detail pengajuan (3.12) |
 
 Label status pengajuan: `pending` Menunggu Persetujuan, `approved` Disetujui, `rejected` Ditolak.
 
