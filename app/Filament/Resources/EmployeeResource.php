@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Concerns\ScopesToManagedCompanies;
+use App\Filament\Forms\Components\MasterFacePhotoField;
 use App\Filament\Resources\EmployeeResource\Pages;
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Company;
@@ -24,7 +25,6 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
-use Filament\Forms\Components\ViewField;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
@@ -168,9 +168,8 @@ class EmployeeResource extends Resource
                                 ->searchable()
                                 ->nullable(),
 
-                            ViewField::make('master_face_photo')
+                            MasterFacePhotoField::make('master_face_photo')
                                 ->label('Foto Master Wajah (Face Recognition)')
-                                ->view('filament.components.master-face-capture')
                                 ->columnSpanFull()
                                 ->helperText('Pilih foto dari penyimpanan atau ambil foto via kamera langsung sebagai referensi Face Recognition.'),
                         ]),

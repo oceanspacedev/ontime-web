@@ -3,9 +3,10 @@
 namespace App\Filament\Pages;
 
 use App\Filament\Concerns\HasPresensiActions;
+use App\Services\Attendance\AttendanceRuleException;
+use App\Support\SelfieUploadToken;
 use BackedEnum;
 use Filament\Actions\Action;
-use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\ViewField;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -43,7 +44,7 @@ class AbsenHariIni extends Page
     {
         $policy = $this->companyPolicy;
 
-        if (! ($policy?->require_face_recognition ?? false)) {
+        if (! in_array($policy?->selfieMode(), ['face', 'liveness'], true)) {
             return [];
         }
 
@@ -107,112 +108,34 @@ class AbsenHariIni extends Page
                     return;
                 }
 
-                $profile->update([
-                    'master_face_photo' => $data['master_face_photo'],
-                    'master_face_verified_at' => now(),
-                ]);
+                $submitted = (string) ($data['master_face_photo'] ?? '');
+
+                // The form keeps the stored path when the photo is unchanged; a new photo arrives as an
+                // upload token, so nobody can point their master face at another stored file.
+                if ($submitted !== $profile->master_face_photo) {
+                    try {
+                        $masterPath = SelfieUploadToken::resolve($submitted, auth()->user());
+                    } catch (AttendanceRuleException $exception) {
+                        Notification::make()
+                            ->title('Foto Master Wajah Gagal Disimpan')
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    $profile->update([
+                        'master_face_photo' => $masterPath,
+                        'master_face_verified_at' => now(),
+                    ]);
+                }
 
                 Notification::make()
                     ->title('Foto Master Wajah Berhasil Disimpan!')
                     ->body('Foto master biometrik Anda telah terdaftar dan diperbarui.')
                     ->success()
                     ->send();
-            });
-    }
-
-    public function checkInAction(): Action
-    {
-        $policy = $this->companyPolicy;
-        $requirePhoto = $policy?->require_photo ?? false;
-        $requireGps = $policy?->require_gps ?? false;
-        $requireFaceRecognition = $policy?->require_face_recognition ?? false;
-        $isPhotoNeeded = $requirePhoto || $requireFaceRecognition;
-
-        return Action::make('checkIn')
-            ->label('Check In Sekarang')
-            ->icon('heroicon-o-arrow-right-on-rectangle')
-            ->color('success')
-            ->modalHeading('Check In Absensi Hari Ini')
-            ->schema([
-                ViewField::make('check_in_photo')
-                    ->label('Foto Selfie Check In')
-                    ->view('filament.components.camera-capture', [
-                        'requireFaceRecognition' => $requireFaceRecognition,
-                        'requireGps' => $requireGps,
-                        'mode' => 'check_in',
-                    ])
-                    ->required($isPhotoNeeded)
-                    ->visible($isPhotoNeeded)
-                    ->validationMessages([
-                        'required' => 'Foto selfie wajib diambil. Silakan klik tombol "Check In".',
-                    ]),
-
-                ViewField::make('gps_capture')
-                    ->view('filament.components.gps-capture', ['type' => 'check_in'])
-                    ->visible($requireGps),
-
-                Hidden::make('check_in_lat')
-                    ->required($requireGps)
-                    ->visible($requireGps),
-
-                Hidden::make('check_in_lng')
-                    ->required($requireGps)
-                    ->visible($requireGps),
-            ])
-            ->action(function (array $data): void {
-                $this->processCheckIn(
-                    $data['check_in_photo'] ?? null,
-                    isset($data['check_in_lat']) ? (float) $data['check_in_lat'] : null,
-                    isset($data['check_in_lng']) ? (float) $data['check_in_lng'] : null
-                );
-            });
-    }
-
-    public function checkOutAction(): Action
-    {
-        $policy = $this->companyPolicy;
-        $requirePhoto = $policy?->require_photo ?? false;
-        $requireGps = $policy?->require_gps ?? false;
-        $requireFaceRecognition = $policy?->require_face_recognition ?? false;
-        $isPhotoNeeded = $requirePhoto || $requireFaceRecognition;
-
-        return Action::make('checkOut')
-            ->label('Check Out Sekarang')
-            ->icon('heroicon-o-arrow-left-on-rectangle')
-            ->color('danger')
-            ->modalHeading('Check Out Absensi Hari Ini')
-            ->schema([
-                ViewField::make('check_out_photo')
-                    ->label('Foto Selfie Check Out')
-                    ->view('filament.components.camera-capture', [
-                        'requireFaceRecognition' => $requireFaceRecognition,
-                        'requireGps' => $requireGps,
-                        'mode' => 'check_out',
-                    ])
-                    ->required($isPhotoNeeded)
-                    ->visible($isPhotoNeeded)
-                    ->validationMessages([
-                        'required' => 'Foto selfie wajib diambil. Silakan klik tombol "Check Out".',
-                    ]),
-
-                ViewField::make('gps_capture')
-                    ->view('filament.components.gps-capture', ['type' => 'check_out'])
-                    ->visible($requireGps),
-
-                Hidden::make('check_out_lat')
-                    ->required($requireGps)
-                    ->visible($requireGps),
-
-                Hidden::make('check_out_lng')
-                    ->required($requireGps)
-                    ->visible($requireGps),
-            ])
-            ->action(function (array $data): void {
-                $this->processCheckOut(
-                    $data['check_out_photo'] ?? null,
-                    isset($data['check_out_lat']) ? (float) $data['check_out_lat'] : null,
-                    isset($data['check_out_lng']) ? (float) $data['check_out_lng'] : null
-                );
             });
     }
 }

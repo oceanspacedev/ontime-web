@@ -4,10 +4,14 @@ namespace App\Providers;
 
 use App\Enums\SystemRole;
 use App\Services\Core\CoreSsoProvider;
+use App\Services\Face\BasicFaceVerifier;
+use App\Services\Face\CompreFaceVerifier;
+use App\Services\Face\FaceVerifier;
 use App\Support\ObservabilityAccess;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -23,7 +27,10 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        $this->app->bind(FaceVerifier::class, fn (Application $app): FaceVerifier => match (config('services.face.driver')) {
+            'compreface' => $app->make(CompreFaceVerifier::class),
+            default => $app->make(BasicFaceVerifier::class),
+        });
     }
 
     public function boot(): void

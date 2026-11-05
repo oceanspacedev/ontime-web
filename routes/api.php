@@ -37,6 +37,7 @@ Route::prefix('v1')->group(function () {
 
         // Attendance Presensi
         Route::get('/attendance/today', [AttendanceApiController::class, 'today']);
+        Route::post('/attendance/liveness-challenge', [AttendanceApiController::class, 'livenessChallenge']);
         Route::post('/attendance/check-in', [AttendanceApiController::class, 'checkIn']);
         Route::post('/attendance/check-out', [AttendanceApiController::class, 'checkOut']);
         Route::post('/attendance/master-face', [AttendanceApiController::class, 'registerMasterFace']);

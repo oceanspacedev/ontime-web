@@ -26,9 +26,17 @@ export function AttendanceDetail({ attendance }: { attendance: Attendance }) {
         <InfoRow label="Pulang" value={formatTime(attendance.check_out)} valueStyle={styles.time} />
         {attendance.late_minutes ? <InfoRow label="Terlambat" value={`${attendance.late_minutes} menit`} /> : null}
         {attendance.is_corrected ? <InfoRow label="Koreksi" value="Sudah dikoreksi" /> : null}
+        {attendance.liveness_verified ? <InfoRow label="Liveness" value="Lolos" /> : null}
+        {attendance.is_face_verified !== null && attendance.face_match_score !== null ? (
+          <InfoRow label="Kemiripan wajah" value={`${attendance.face_match_score}%`} />
+        ) : null}
       </Group>
 
       {attendance.is_out_of_bounds ? <Notice tone="warning" message="Presensi dilakukan di luar area kantor." /> : null}
+      {attendance.is_mock_location ? <Notice tone="warning" message="Lokasi palsu (mock location) terdeteksi saat presensi." /> : null}
+      {attendance.liveness_verified === false ? (
+        <Notice tone="warning" message={`Verifikasi liveness gagal${attendance.liveness_notes ? `: ${attendance.liveness_notes}` : '.'}`} />
+      ) : null}
       {attendance.is_face_verified === false ? (
         <Notice tone="warning" message={`Verifikasi wajah tidak cocok${attendance.face_verification_notes ? `: ${attendance.face_verification_notes}` : '.'}`} />
       ) : null}

@@ -166,8 +166,8 @@
 
             if (data && data.success) {
                 this.previewUrl = data.url;
-                this.photoPath = data.path;
-                $wire.set('{{ $getStatePath() }}', data.path);
+                this.photoPath = data.token;
+                $wire.set('{{ $getStatePath() }}', data.token);
                 this.stopCamera();
             } else {
                 const errMsg = data?.message || (text.length > 0 ? text.substring(0, 150) : ('HTTP Status ' + res.status));

@@ -73,4 +73,23 @@ return [
         'webhook_secret' => env('CORE_WEBHOOK_SECRET'),
     ],
 
+    // Face matching and liveness for attendance selfies.
+    'face' => [
+        // basic: built-in pixel comparison, not real face recognition. compreface: self-hosted CompreFace.
+        'driver' => env('FACE_DRIVER', 'basic'),
+        'compreface' => [
+            'url' => env('COMPREFACE_URL'), // e.g. http://compreface:8000
+            'verification_key' => env('COMPREFACE_VERIFICATION_KEY'),
+            'detection_key' => env('COMPREFACE_DETECTION_KEY'),
+            'timeout' => (int) env('COMPREFACE_TIMEOUT', 15),
+            'det_prob_threshold' => (float) env('COMPREFACE_DET_PROB_THRESHOLD', 0.8),
+        ],
+        'liveness' => [
+            'ttl_seconds' => (int) env('LIVENESS_TTL_SECONDS', 180),
+            'front_max_yaw' => 15, // degrees, |yaw| allowed for the "hadap depan" frame
+            'side_min_yaw' => 20, // degrees, |yaw| needed for each "tengok" frame
+            'max_pitch' => 25, // degrees, |pitch| allowed on every frame
+        ],
+    ],
+
 ];

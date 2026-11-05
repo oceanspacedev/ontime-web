@@ -37,4 +37,6 @@ Route::get('email-login/link/{token}', EmailLogin::class)
 Route::get('/auth/redirect', [CoreSsoController::class, 'redirect'])->name('sso.redirect');
 Route::get('/auth/callback', [CoreSsoController::class, 'callback'])->name('sso.callback');
 
+// Selfies for the panel's "Presensi Mandiri": the controller requires the panel (web guard) login and
+// answers with an upload token instead of the storage path (see App\Support\SelfieUploadToken).
 Route::post('/upload-selfie', [AttendancePhotoController::class, 'upload'])->name('upload.selfie');

@@ -3,13 +3,26 @@ import { useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Alert, View } from 'react-native';
 
+import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { Avatar, Badge, Button, Group, InfoRow, Pill, Row, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { authApi } from '@/lib/api';
+import { attendanceApi, authApi, type PolicyFailAction, type SelfieMode } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { useSession } from '@/lib/session';
 import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance, useTheme } from '@/theme';
+
+const SELFIE_MODE_LABELS: Record<SelfieMode, string> = {
+  none: 'Tanpa foto',
+  photo: 'Foto selfie',
+  face: 'Foto + wajah',
+  liveness: 'Liveness + wajah',
+};
+
+const MOCK_LOCATION_LABELS: Record<PolicyFailAction, string> = {
+  reject: 'Ditolak',
+  approval: 'Perlu persetujuan',
+};
 
 const APPEARANCE_LABELS: Record<AppearancePreference, string> = {
   system: 'Ikuti sistem',
@@ -85,9 +98,12 @@ export default function ProfileScreen() {
         <Group title="Aturan presensi">
           <InfoRow label="Jam kerja" value={`${policy.work_start_time?.slice(0, 5) ?? '-'} – ${policy.work_end_time?.slice(0, 5) ?? '-'}`} />
           <InfoRow label="Toleransi terlambat" value={`${policy.late_tolerance_minutes} menit`} />
+          <InfoRow label="Mode presensi" value={<AttendanceModeChips policy={policy} style={styles.chips} />} />
           <InfoRow label="Wajib GPS" value={yesNo(policy.require_gps)} />
-          <InfoRow label="Wajib foto" value={yesNo(policy.require_photo)} />
-          <InfoRow label="Verifikasi wajah" value={yesNo(policy.require_face_recognition)} />
+          {policy.require_gps ? (
+            <InfoRow label="Lokasi palsu" value={MOCK_LOCATION_LABELS[policy.mock_location_action ?? 'reject']} />
+          ) : null}
+          <InfoRow label="Verifikasi selfie" value={SELFIE_MODE_LABELS[attendanceApi.selfieModeOf(policy)]} />
         </Group>
       ) : null}
 
@@ -120,6 +136,7 @@ export default function ProfileScreen() {
 const useStyles = makeStyles((c) => ({
   roles: { maxWidth: 140 },
   badge: { alignSelf: 'flex-end' },
+  chips: { justifyContent: 'flex-end' },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: spacing.sm },
   footerText: { fontSize: fontSize.xs, color: c.textMuted },
 }));

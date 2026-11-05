@@ -2,293 +2,110 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\AttendanceStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\CheckInRequest;
 use App\Http\Requests\Api\V1\CheckOutRequest;
+use App\Http\Requests\Api\V1\LivenessChallengeRequest;
 use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
-use App\Services\ApprovalFlowService;
-use App\Services\FaceRecognitionService;
+use App\Services\Attendance\AttendanceCheckInput;
+use App\Services\Attendance\AttendanceRuleException;
+use App\Services\AttendanceCheckService;
 use App\Services\FileNamingService;
-use App\Services\GeofenceService;
-use App\Services\WorkScheduleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
 {
-    public function checkIn(CheckInRequest $request): JsonResponse
+    public function livenessChallenge(LivenessChallengeRequest $request, AttendanceCheckService $attendanceCheck): JsonResponse
+    {
+        try {
+            return response()->json($attendanceCheck->livenessChallenge($request->user(), $request->validated('purpose')));
+        } catch (AttendanceRuleException $exception) {
+            return $this->ruleError($exception);
+        }
+    }
+
+    public function checkIn(CheckInRequest $request, AttendanceCheckService $attendanceCheck): JsonResponse
+    {
+        return $this->runCheck($request, AttendanceCheckService::PURPOSE_CHECK_IN, $attendanceCheck);
+    }
+
+    public function checkOut(CheckOutRequest $request, AttendanceCheckService $attendanceCheck): JsonResponse
+    {
+        return $this->runCheck($request, AttendanceCheckService::PURPOSE_CHECK_OUT, $attendanceCheck);
+    }
+
+    /**
+     * Store the uploaded selfie and liveness frames, then let the shared service apply the policy.
+     *
+     * The service owns the stored files from here: it removes those of a refused attempt and those
+     * the saved record does not use.
+     */
+    private function runCheck(CheckInRequest|CheckOutRequest $request, string $purpose, AttendanceCheckService $attendanceCheck): JsonResponse
     {
         $user = $request->user();
-        $employee = $user->employee;
-        $intern = $user->intern;
-        $freelancer = $user->freelancer;
-
-        $profile = $employee ?? $intern ?? $freelancer;
-
-        if (! $profile) {
-            return response()->json(['message' => 'Profile absensi tidak ditemukan.'], 422);
-        }
-
-        $todayAttendance = Attendance::byWorker($user)->whereDate('date', today())->first();
-
-        if ($todayAttendance && $todayAttendance->check_in) {
-            return response()->json(['message' => 'Sudah melakukan check in hari ini.'], 409);
-        }
-
-        $company = $profile->company;
-        $policy = $company?->policy;
-
-        $lat = $request->input('latitude');
-        $lng = $request->input('longitude');
-
-        $isOutOfBounds = false;
-        if ($policy?->require_gps) {
-            if ($lat === null || $lng === null) {
-                return response()->json(['message' => 'Lokasi GPS wajib diisi.'], 422);
-            }
-
-            if ($company) {
-                $geofenceResult = GeofenceService::validateCompanyGeofence($company, (float) $lat, (float) $lng);
-
-                if (! $geofenceResult['is_valid']) {
-                    $isOutOfBounds = true;
-                }
-            }
-        }
-
-        $isPhotoNeeded = ($policy?->require_photo || $policy?->require_face_recognition);
-
-        if ($isPhotoNeeded && ! $request->hasFile('photo')) {
-            return response()->json(['message' => 'Foto selfie absensi wajib diunggah.'], 422);
-        }
+        $isCheckIn = $purpose === AttendanceCheckService::PURPOSE_CHECK_IN;
+        $disk = config('filesystems.default');
+        $profile = $user->employee ?? $user->intern ?? $user->freelancer;
+        $identifier = $profile?->employee_code ?? $profile?->nik ?? (string) ($profile?->id ?? $user->id);
 
         $photoPath = null;
         if ($request->hasFile('photo')) {
-            $file = $request->file('photo');
-            if (! $file->isValid()) {
-                return response()->json(['message' => 'File foto selfie yang diunggah tidak valid atau gagal disimpan di temporary server.'], 422);
-            }
-            $identifier = $profile->employee_code ?? $profile->nik ?? (string) ($profile->id ?? $user->id);
             $photoPath = FileNamingService::storeUploadedFile(
-                $file,
+                $request->file('photo'),
                 'attendance/photos',
-                'ATT_IN',
+                $isCheckIn ? 'ATT_IN' : 'ATT_OUT',
                 $identifier,
-                config('filesystems.default')
+                $disk
             );
         }
 
-        $isFaceVerified = null;
-        $faceMatchScore = null;
-        $faceVerificationNotes = null;
-        $faceFailedAndRequiresApproval = false;
-
-        if ($policy?->require_face_recognition) {
-            if (empty($profile->master_face_photo)) {
-                return response()->json(['message' => 'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.'], 422);
-            }
-
-            $faceResult = app(FaceRecognitionService::class)->verifyFace(
-                $photoPath,
-                $profile->master_face_photo,
-                $policy
+        $framePaths = [];
+        foreach ($request->file('liveness_frames', []) as $frame) {
+            $framePath = FileNamingService::storeUploadedFile(
+                $frame,
+                'attendance/liveness',
+                $isCheckIn ? 'LIVE_IN' : 'LIVE_OUT',
+                $identifier,
+                $disk
             );
-
-            $isFaceVerified = $faceResult['is_matched'];
-            $faceMatchScore = $faceResult['score'];
-            $faceVerificationNotes = $faceResult['notes'];
-
-            if (! $isFaceVerified) {
-                if ($policy->face_fail_action === 'reject') {
-                    return response()->json([
-                        'message' => 'Verifikasi Face Recognition Gagal: '.$faceVerificationNotes,
-                    ], 422);
-                }
-
-                $faceFailedAndRequiresApproval = true;
-            }
+            $framePaths[] = $framePath;
         }
 
-        // Late calculation from today's shift (schedule, default shift, then company policy)
-        $now = now();
-        $workSchedule = app(WorkScheduleService::class);
-        $workingHours = $workSchedule->resolve($profile, $now);
-
-        $requiresApproval = $isOutOfBounds || $faceFailedAndRequiresApproval;
-        $lateMinutes = $requiresApproval ? 0 : $workSchedule->lateMinutes($workingHours, $now);
-        $status = match (true) {
-            $requiresApproval => AttendanceStatus::PendingApproval,
-            $lateMinutes > 0 => AttendanceStatus::Late,
-            default => AttendanceStatus::OnTime,
-        };
-
-        $attendance = Attendance::updateOrCreate(
-            [
-                'employee_id' => $employee?->id,
-                'intern_id' => $intern?->id,
-                'freelancer_id' => $freelancer?->id,
-                'date' => today()->toDateString(),
-            ],
-            [
-                'shift_id' => $workingHours['shift']?->id,
-                'check_in' => $now->toTimeString(),
-                'check_in_lat' => $lat,
-                'check_in_lng' => $lng,
-                'check_in_photo' => $photoPath,
-                'status' => $status,
-                'late_minutes' => $lateMinutes,
-                'is_out_of_bounds' => $isOutOfBounds,
-                'is_face_verified' => $isFaceVerified,
-                'face_match_score' => $faceMatchScore,
-                'face_verification_notes' => $faceVerificationNotes,
-            ]
+        $input = new AttendanceCheckInput(
+            latitude: $request->filled('latitude') ? (float) $request->input('latitude') : null,
+            longitude: $request->filled('longitude') ? (float) $request->input('longitude') : null,
+            accuracy: $request->filled('accuracy') ? (float) $request->input('accuracy') : null,
+            isMocked: $request->boolean('is_mocked'),
+            photoPath: $photoPath,
+            livenessChallengeId: $request->input('liveness_challenge_id'),
+            livenessFramePaths: $framePaths,
         );
 
-        if ($requiresApproval) {
-            app(ApprovalFlowService::class)->generateSteps($attendance, 'geofence');
+        try {
+            $result = $isCheckIn
+                ? $attendanceCheck->checkIn($user, $input)
+                : $attendanceCheck->checkOut($user, $input);
+        } catch (AttendanceRuleException $exception) {
+            return $this->ruleError($exception);
         }
 
         return response()->json([
-            'message' => $requiresApproval
-                ? 'Check in berhasil dicatat dan sedang menunggu persetujuan atasan.'
-                : 'Check in berhasil',
-            'attendance' => new AttendanceResource($attendance),
+            'message' => $result->message,
+            'attendance' => new AttendanceResource($result->attendance),
+            'requires_approval' => $result->requiresApproval,
+            'approval_reasons' => $result->approvalReasons,
         ]);
     }
 
-    public function checkOut(CheckOutRequest $request): JsonResponse
+    private function ruleError(AttendanceRuleException $exception): JsonResponse
     {
-        $user = $request->user();
-        $employee = $user->employee;
-        $intern = $user->intern;
-        $freelancer = $user->freelancer;
-
-        $profile = $employee ?? $intern ?? $freelancer;
-
-        if (! $profile) {
-            return response()->json(['message' => 'Profile absensi tidak ditemukan.'], 422);
-        }
-
-        $attendance = Attendance::byWorker($user)->whereDate('date', today())->first();
-
-        if (! $attendance || ! $attendance->check_in) {
-            return response()->json(['message' => 'Anda belum melakukan check in hari ini.'], 422);
-        }
-
-        if ($attendance->check_out) {
-            return response()->json(['message' => 'Sudah melakukan check out hari ini.'], 409);
-        }
-
-        $company = $profile->company;
-        $policy = $company?->policy;
-
-        $lat = $request->input('latitude');
-        $lng = $request->input('longitude');
-
-        $isOutOfBounds = false;
-        if ($policy?->require_gps) {
-            if ($lat === null || $lng === null) {
-                return response()->json(['message' => 'Lokasi GPS wajib diisi.'], 422);
-            }
-
-            if ($company) {
-                $geofenceResult = GeofenceService::validateCompanyGeofence($company, (float) $lat, (float) $lng);
-
-                if (! $geofenceResult['is_valid']) {
-                    $isOutOfBounds = true;
-                }
-            }
-        }
-
-        $isPhotoNeeded = ($policy?->require_photo || $policy?->require_face_recognition);
-
-        if ($isPhotoNeeded && ! $request->hasFile('photo')) {
-            return response()->json(['message' => 'Foto selfie absensi wajib diunggah.'], 422);
-        }
-
-        $photoPath = null;
-        if ($request->hasFile('photo')) {
-            $file = $request->file('photo');
-            if (! $file->isValid()) {
-                return response()->json(['message' => 'File foto selfie yang diunggah tidak valid atau gagal disimpan di temporary server.'], 422);
-            }
-            $identifier = $profile->employee_code ?? $profile->nik ?? (string) ($profile->id ?? $user->id);
-            $photoPath = FileNamingService::storeUploadedFile(
-                $file,
-                'attendance/photos',
-                'ATT_OUT',
-                $identifier,
-                config('filesystems.default')
-            );
-        }
-
-        $isFaceVerified = null;
-        $faceMatchScore = null;
-        $faceVerificationNotes = null;
-        $faceFailedAndRequiresApproval = false;
-
-        if ($policy?->require_face_recognition) {
-            if (empty($profile->master_face_photo)) {
-                return response()->json(['message' => 'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.'], 422);
-            }
-
-            $faceResult = app(FaceRecognitionService::class)->verifyFace(
-                $photoPath,
-                $profile->master_face_photo,
-                $policy
-            );
-
-            $isFaceVerified = $faceResult['is_matched'];
-            $faceMatchScore = $faceResult['score'];
-            $faceVerificationNotes = $faceResult['notes'];
-
-            if (! $isFaceVerified) {
-                if ($policy->face_fail_action === 'reject') {
-                    return response()->json([
-                        'message' => 'Verifikasi Face Recognition Gagal: '.$faceVerificationNotes,
-                    ], 422);
-                }
-
-                $faceFailedAndRequiresApproval = true;
-            }
-        }
-
-        $requiresApproval = $isOutOfBounds || $faceFailedAndRequiresApproval;
-
-        $updateData = [
-            'check_out' => now()->toTimeString(),
-            'check_out_lat' => $lat,
-            'check_out_lng' => $lng,
-            'check_out_photo' => $photoPath,
-            'is_face_verified' => $isFaceVerified ?? $attendance->is_face_verified,
-            'face_match_score' => $faceMatchScore ?? $attendance->face_match_score,
-            'face_verification_notes' => $faceVerificationNotes ?? $attendance->face_verification_notes,
-        ];
-
-        if ($requiresApproval) {
-            $updateData['is_out_of_bounds'] = $isOutOfBounds || $attendance->is_out_of_bounds;
-            $updateData['status'] = AttendanceStatus::PendingApproval;
-        }
-
-        $attendance->update($updateData);
-
-        if ($requiresApproval && $attendance->needsNewApprovalRound()) {
-            app(ApprovalFlowService::class)->generateSteps($attendance, 'geofence');
-        }
-
-        $pendingReason = $faceFailedAndRequiresApproval
-            ? 'karena verifikasi wajah tidak cocok'
-            : 'karena di luar geofence';
-
         return response()->json([
-            'message' => $requiresApproval
-                ? "Check out berhasil dicatat dan sedang menunggu persetujuan atasan {$pendingReason}."
-                : 'Check out berhasil',
-            'attendance' => new AttendanceResource($attendance->fresh()),
-        ]);
+            'message' => $exception->getMessage(),
+            'errors' => [$exception->field => [$exception->getMessage()]],
+        ], $exception->status);
     }
 
     public function index(Request $request): JsonResponse

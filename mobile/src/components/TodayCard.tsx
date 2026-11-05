@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { View } from 'react-native';
 
+import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { Badge, Button, Group, Notice, Text } from '@/components/ui';
 import type { Access } from '@/lib/access';
-import type { TodayAttendance } from '@/lib/api';
+import { type Attendance, attendanceApi, type TodayAttendance } from '@/lib/api';
 import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatTime } from '@/lib/format';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
@@ -16,12 +17,31 @@ interface Props {
 /** Group title shared with the home screen's loading state, so both render the same frame. */
 export const TODAY_GROUP_TITLE = 'Presensi Hari Ini';
 
+/** Why today's record waits for approval, in the server's own wording for approval reasons. */
+function pendingApprovalMessage(attendance: Attendance): string {
+  const reasons: string[] = [];
+  if (attendance.is_out_of_bounds) {
+    reasons.push('di luar area kantor');
+  }
+  if (attendance.is_mock_location) {
+    reasons.push('lokasi palsu terdeteksi');
+  }
+  if (attendance.is_face_verified === false) {
+    reasons.push('verifikasi wajah tidak cocok');
+  }
+  if (reasons.length === 0) {
+    return 'Presensi hari ini menunggu persetujuan atasan.';
+  }
+  return `Presensi hari ini menunggu persetujuan atasan karena ${reasons.join(' dan ')}.`;
+}
+
 export function TodayCard({ today, access }: Props) {
   const styles = useStyles();
   const { colors } = useTheme();
   const attendance = today.attendance;
   const policy = access.company?.policy ?? null;
-  const needsMasterFace = policy?.require_face_recognition && !access.masterFacePhoto;
+  const selfieMode = attendanceApi.selfieModeOf(policy);
+  const needsMasterFace = (selfieMode === 'face' || selfieMode === 'liveness') && !access.masterFacePhoto;
   const done = today.has_checked_in && today.has_checked_out;
   const schedule = today.schedule ?? null;
   const workStart = schedule?.start_time ?? policy?.work_start_time ?? null;
@@ -49,6 +69,7 @@ export function TodayCard({ today, access }: Props) {
               </Text>
             </View>
           ) : null}
+          {policy ? <AttendanceModeChips policy={policy} style={styles.modeChips} /> : null}
         </View>
         {attendance ? <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} /> : null}
       </View>
@@ -62,11 +83,19 @@ export function TodayCard({ today, access }: Props) {
       {attendance?.late_minutes ? <Badge label={`Terlambat ${attendance.late_minutes} menit`} tone="warning" dot /> : null}
 
       {attendance?.status === 'pending_approval' ? (
-        <Notice tone="warning" message="Presensi hari ini menunggu persetujuan atasan karena di luar area kantor atau verifikasi wajah tidak cocok." />
+        <Notice tone="warning" message={pendingApprovalMessage(attendance)} />
       ) : null}
 
       {needsMasterFace ? (
-        <Notice tone="warning" icon="scan-outline" message="Perusahaan mewajibkan verifikasi wajah. Daftarkan foto master wajah dulu sebelum absen." />
+        <Notice
+          tone="warning"
+          icon="scan-outline"
+          message={
+            selfieMode === 'liveness'
+              ? 'Perusahaan mewajibkan verifikasi wajah dengan gerakan kepala (liveness). Daftarkan foto master wajah dulu sebelum absen.'
+              : 'Perusahaan mewajibkan verifikasi wajah. Daftarkan foto master wajah dulu sebelum absen.'
+          }
+        />
       ) : null}
 
       {done ? (
@@ -112,6 +141,7 @@ const useStyles = makeStyles((c) => ({
   date: { fontSize: fontSize.lg, fontWeight: '600', color: c.text },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   schedule: { flexShrink: 1, fontSize: fontSize.sm, color: c.textMuted },
+  modeChips: { marginTop: 4 },
   times: {
     flexDirection: 'row',
     alignItems: 'stretch',
