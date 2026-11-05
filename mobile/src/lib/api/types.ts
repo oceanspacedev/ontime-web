@@ -68,6 +68,10 @@ export interface EmployeeProfile {
   division: NamedRef | null;
   job_title: NamedRef | null;
   job_level: NamedRef | null;
+  /** Whether HR gave this employee annual leave. Missing in responses from older servers. */
+  has_annual_leave?: boolean;
+  /** Yearly annual leave quota in days, 0 without annual leave. */
+  annual_leave_quota?: number;
 }
 
 export interface InternProfile {
@@ -245,6 +249,8 @@ export interface Resignation extends RequestBase {
 }
 
 export interface QuotaSummary {
+  /** False for interns, freelancers and employees without annual leave. Missing on older servers. */
+  eligible?: boolean;
   annual_leave_quota: number;
   used_days: number;
   remaining_days: number;

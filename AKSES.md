@@ -15,8 +15,8 @@ Aturan ini dipakai di semua tempat: panel admin, laporan, kalender, API mobile, 
 | Admin | Mengelola pekerja, absensi, shift, pengajuan, dan akun di dalam Akses Data-nya. |
 | BOD | Menyetujui tahap BOD untuk pekerja di dalam Akses Data-nya. |
 | Approver | Menyetujui tahap Approver untuk pekerja di dalam Akses Data-nya. |
-| Employee | Absen dan membuat pengajuan untuk dirinya sendiri. |
-| Intern | Seperti Employee, tanpa menu Kalender Cuti Tim. |
+| Employee | Absen dan membuat pengajuan untuk dirinya sendiri. Cuti tahunan hanya bila HR menyalakannya di data karyawan. |
+| Intern | Seperti Employee, tanpa menu Kalender Cuti Tim dan tanpa cuti tahunan. |
 | Freelancer | Seperti Employee, tanpa cuti tahunan. |
 
 Nama role di atas dipakai langsung oleh kode, jadi tidak bisa diganti atau dihapus dari menu Roles.

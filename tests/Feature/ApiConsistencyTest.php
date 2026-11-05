@@ -229,6 +229,7 @@ class ApiConsistencyTest extends TestCase
             'nip' => 'NIP-'.$user->id,
             'full_name' => "Pekerja {$division->name} {$user->id}",
             'join_date' => '2025-01-06',
+            'has_annual_leave' => true,
             'status' => 'active',
         ])->load('user');
     }

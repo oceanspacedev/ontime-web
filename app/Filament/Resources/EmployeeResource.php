@@ -11,6 +11,7 @@ use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Shift;
 use App\Models\User;
+use App\Services\AnnualLeaveService;
 use App\Services\WhatsAppNotificationService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -22,6 +23,7 @@ use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\ViewField;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -30,6 +32,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -63,7 +66,7 @@ class EmployeeResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedWorkers(parent::getEloquentQuery()->with(['user.roles', 'user.employee', 'user.intern', 'user.freelancer']));
+        return static::scopeToManagedWorkers(parent::getEloquentQuery()->with(['company.policy', 'user.roles', 'user.employee', 'user.intern', 'user.freelancer']));
     }
 
     public static function canImportFromTalenta(): bool
@@ -173,6 +176,29 @@ class EmployeeResource extends Resource
                         ]),
                     ]),
 
+                Section::make('Cuti Tahunan')
+                    ->description('Tidak semua karyawan mendapat cuti tahunan, misalnya karyawan kontrak atau masa percobaan. Peserta magang dan freelance tidak pernah mendapatkannya.')
+                    ->schema([
+                        Grid::make(2)->schema([
+                            Toggle::make('has_annual_leave')
+                                ->label('Berhak cuti tahunan')
+                                ->helperText('Bila mati, karyawan hanya bisa mengajukan izin, sakit, dan jenis cuti lain.')
+                                ->default(false)
+                                ->live(),
+
+                            TextInput::make('annual_leave_quota')
+                                ->label('Kuota per tahun (hari)')
+                                ->numeric()
+                                ->integer()
+                                ->minValue(0)
+                                ->maxValue(365)
+                                ->nullable()
+                                ->placeholder(fn (Get $get): string => 'Ikut badan usaha: '.static::companyAnnualLeaveQuota($get('company_id')).' hari')
+                                ->helperText('Kosongkan untuk memakai kuota badan usaha.')
+                                ->visible(fn (Get $get): bool => (bool) $get('has_annual_leave')),
+                        ]),
+                    ]),
+
                 Section::make('Data Pribadi')
                     ->description('Ikut terisi dari import Talenta.')
                     ->collapsible()
@@ -256,6 +282,14 @@ class EmployeeResource extends Resource
                         'resigned' => 'Resign',
                         default => ucfirst($state),
                     }),
+
+                IconColumn::make('has_annual_leave')
+                    ->label('Cuti Tahunan')
+                    ->boolean()
+                    ->tooltip(fn (Employee $record): string => $record->has_annual_leave
+                        ? 'Kuota '.($record->annual_leave_quota ?? $record->company?->policy?->annual_leave_quota ?? AnnualLeaveService::DEFAULT_QUOTA).' hari per tahun'
+                        : 'Tidak berhak cuti tahunan')
+                    ->toggleable(),
 
                 TextColumn::make('offboarding_status')
                     ->label('Pengunduran Diri')
@@ -448,9 +482,56 @@ class EmployeeResource extends Resource
                         })
                         ->deselectRecordsAfterCompletion(),
 
+                    BulkAction::make('setAnnualLeave')
+                        ->label('Atur Cuti Tahunan')
+                        ->icon('heroicon-o-calendar-days')
+                        ->schema([
+                            Toggle::make('has_annual_leave')
+                                ->label('Berhak cuti tahunan')
+                                ->default(true)
+                                ->live(),
+                            TextInput::make('annual_leave_quota')
+                                ->label('Kuota per tahun (hari)')
+                                ->numeric()
+                                ->integer()
+                                ->minValue(0)
+                                ->maxValue(365)
+                                ->nullable()
+                                ->helperText('Kosongkan untuk memakai kuota badan usaha masing-masing karyawan.')
+                                ->visible(fn (Get $get): bool => (bool) $get('has_annual_leave')),
+                        ])
+                        ->action(function (Collection $records, array $data): void {
+                            $eligible = (bool) ($data['has_annual_leave'] ?? false);
+                            $quota = $eligible && filled($data['annual_leave_quota'] ?? null) ? (int) $data['annual_leave_quota'] : null;
+
+                            Employee::query()->whereKey($records->modelKeys())->update([
+                                'has_annual_leave' => $eligible,
+                                'annual_leave_quota' => $quota,
+                            ]);
+
+                            Notification::make()
+                                ->title('Cuti tahunan diperbarui')
+                                ->body($eligible
+                                    ? "{$records->count()} karyawan kini berhak cuti tahunan".($quota !== null ? " dengan kuota {$quota} hari." : ' dengan kuota badan usaha.')
+                                    : "{$records->count()} karyawan tidak lagi berhak cuti tahunan.")
+                                ->success()
+                                ->send();
+                        })
+                        ->deselectRecordsAfterCompletion(),
+
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * Annual leave quota of a company, shown as the default when an employee has no own quota.
+     */
+    protected static function companyAnnualLeaveQuota(mixed $companyId): int
+    {
+        $policyQuota = filled($companyId) ? Company::query()->with('policy')->find($companyId)?->policy?->annual_leave_quota : null;
+
+        return $policyQuota ?? AnnualLeaveService::DEFAULT_QUOTA;
     }
 
     public static function getPages(): array

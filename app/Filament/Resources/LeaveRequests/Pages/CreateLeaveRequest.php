@@ -4,7 +4,7 @@ namespace App\Filament\Resources\LeaveRequests\Pages;
 
 use App\Filament\Concerns\GeneratesApprovalSteps;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
-use App\Models\LeaveRequest;
+use App\Services\AnnualLeaveService;
 use Carbon\Carbon;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Validation\ValidationException;
@@ -43,38 +43,9 @@ class CreateLeaveRequest extends CreateRecord
 
         $daysCount = $startDate->diffInDays($endDate) + 1;
 
-        // Quota check: applies to employees AND interns (both use company policy)
-        // Freelancers are exempt from quota — they can only submit permission/sick, not annual_leave
-        if ($data['leave_type'] === 'annual_leave') {
-            if ($freelancer) {
-                throw ValidationException::withMessages([
-                    'data.leave_type' => 'Freelancer tidak dapat mengajukan cuti tahunan. Gunakan jenis Izin Tidak Masuk.',
-                ]);
-            }
-
-            $policy = $workerProfile->company?->policy;
-            $maxQuota = $policy?->annual_leave_quota ?? 12;
-
-            // Build quota query per worker type
-            $usedQuota = LeaveRequest::where('leave_type', 'annual_leave')
-                ->where('status', 'approved')
-                ->whereYear('start_date', now()->year)
-                ->where(function ($q) use ($employee, $intern) {
-                    if ($employee) {
-                        $q->where('employee_id', $employee->id);
-                    } elseif ($intern) {
-                        $q->where('intern_id', $intern->id);
-                    }
-                })
-                ->sum('days_count');
-
-            $remaining = $maxQuota - $usedQuota;
-
-            if ($daysCount > $remaining) {
-                throw ValidationException::withMessages([
-                    'data.leave_type' => "Kuota cuti tahunan Anda tidak mencukupi (Sisa: {$remaining} hari, Pengajuan: {$daysCount} hari).",
-                ]);
-            }
+        // Interns, freelancers and employees without annual leave cannot file it; others must fit their quota.
+        if ($error = app(AnnualLeaveService::class)->validationError($workerProfile, $data['leave_type'] ?? null, $daysCount)) {
+            throw ValidationException::withMessages(['data.leave_type' => $error]);
         }
 
         // Assign exactly one FK

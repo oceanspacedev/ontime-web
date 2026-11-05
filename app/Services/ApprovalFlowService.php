@@ -270,6 +270,14 @@ class ApprovalFlowService
         }
 
         $currentStepOrder = (int) ($requestModel->current_step ?? 1);
+        $maxSteps = (int) $requestModel->approvalSteps()->max('step_order');
+
+        // The final approval turns annual leave into used quota, so the worker must still be entitled.
+        if ($requestModel instanceof LeaveRequest && $currentStepOrder >= $maxSteps
+            && $error = app(AnnualLeaveService::class)->approvalError($requestModel)) {
+            throw ValidationException::withMessages(['approve' => $error]);
+        }
+
         $step = $requestModel->approvalSteps()
             ->where('step_order', $currentStepOrder)
             ->first();
@@ -282,8 +290,6 @@ class ApprovalFlowService
                 'notes' => $notes,
             ]);
         }
-
-        $maxSteps = (int) $requestModel->approvalSteps()->max('step_order');
 
         if ($currentStepOrder < $maxSteps) {
             $requestModel->update([

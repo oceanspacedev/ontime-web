@@ -165,7 +165,9 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
       },
       "division": {"id": 3, "name": "Operasional"},
       "job_title": {"id": 5, "name": "Staf Administrasi"},
-      "job_level": {"id": 2, "name": "Staff"}
+      "job_level": {"id": 2, "name": "Staff"},
+      "has_annual_leave": true,
+      "annual_leave_quota": 12
     },
     "intern": null,
     "freelancer": null
@@ -175,6 +177,7 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
 
 - `intern` berisi `id, full_name, institution, master_face_photo, master_face_verified_at, company, division, mentor {id, full_name}`.
 - `freelancer` berisi `id, full_name, institution, master_face_photo, master_face_verified_at, company, division, supervisor {id, full_name}`.
+- `employee.has_annual_leave` bernilai `true` bila HR memberi karyawan ini cuti tahunan, dan `employee.annual_leave_quota` berisi kuota per tahun yang berlaku (0 tanpa cuti tahunan). Tampilkan jenis Cuti Tahunan dan kartu kuota hanya bila `has_annual_leave` bernilai `true`. Objek `intern` dan `freelancer` tidak punya field ini karena keduanya tidak pernah mendapat cuti tahunan.
 - `GET /auth/me` membalas `{"user": {...}}` dengan isi yang sama. `data_scope` tidak ikut dikirim.
 - Logout membalas `{"message": "Logged out successfully"}`.
 - Akun nonaktif (`is_active = false`, misalnya setelah resign disetujui) ditolak saat login dengan 403 `Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.` Token yang sudah ada langsung tidak berlaku dan membalas 401.
@@ -301,8 +304,17 @@ Nilai `status` presensi: `on_time` (Tepat Waktu), `late` (Terlambat), `absent` (
 | `attachment` | opsional, jpeg/png/jpg/pdf/doc/docx, maks 5 MB |
 
 - `days_count` = jumlah hari kalender dari `start_date` sampai `end_date` (termasuk akhir pekan).
-- `annual_leave` dicek terhadap kuota `annual_leave_quota` kebijakan perusahaan (bawaan 12) dikurangi cuti tahunan yang sudah `approved` tahun ini, baik yang diajukan dari panel maupun API. Kurang: 422 dengan `errors.leave_type` `Kuota cuti tahunan Anda tidak mencukupi (Sisa: 2 hari, Pengajuan: 3 hari).`
-- Freelancer tidak bisa mengajukan `annual_leave` (422 `errors.leave_type`), sama seperti di panel.
+- Cuti tahunan diberikan per karyawan. HR menyalakannya di data karyawan (bagian Cuti Tahunan, atau aksi massal Atur Cuti Tahunan); karyawan baru tidak berhak sampai dinyalakan. Peserta magang dan freelancer tidak pernah berhak.
+- Kuota per tahun memakai kuota karyawan itu sendiri bila diisi, selain itu `annual_leave_quota` kebijakan badan usaha (bawaan 12). Sisa = kuota dikurangi cuti tahunan `approved` yang dimulai tahun ini, baik dari panel maupun API.
+- `annual_leave` ditolak dengan 422 dan `errors.leave_type`:
+
+| Kondisi | Pesan |
+| :--- | :--- |
+| Karyawan tanpa hak cuti tahunan | `Anda belum memiliki jatah cuti tahunan. Hubungi HR atau gunakan jenis Izin.` |
+| Peserta magang | `Peserta magang tidak memiliki jatah cuti tahunan. Gunakan jenis Izin.` |
+| Freelancer | `Freelancer tidak memiliki jatah cuti tahunan. Gunakan jenis Izin.` |
+| Sisa kuota kurang | `Kuota cuti tahunan Anda tidak mencukupi (Sisa: 2 hari, Pengajuan: 3 hari).` |
+
 - PUT menerima field yang sama (semua opsional), menghitung ulang `days_count`, dan memeriksa kuota lagi.
 
 Respons 201:
@@ -323,10 +335,10 @@ Respons 201:
 }
 ```
 
-`GET /leave-requests` menambahkan `quota_summary`:
+`GET /leave-requests` menambahkan `quota_summary`. `eligible` bernilai `false` untuk peserta magang, freelancer, dan karyawan tanpa hak cuti tahunan; kuota dan sisanya lalu 0.
 
 ```json
-{"quota_summary": {"annual_leave_quota": 12, "used_days": 3, "remaining_days": 9}, "data": [], "pagination": {"current_page": 1, "last_page": 1, "total": 0}}
+{"quota_summary": {"eligible": true, "annual_leave_quota": 12, "used_days": 3, "remaining_days": 9}, "data": [], "pagination": {"current_page": 1, "last_page": 1, "total": 0}}
 ```
 
 Pesan lain: PUT `Pengajuan cuti berhasil diperbarui`, DELETE `Pengajuan cuti berhasil dibatalkan.`, status bukan pending 422 `Pengajuan yang sudah diproses tidak dapat diubah.`, bukan milik sendiri 404.
@@ -604,7 +616,7 @@ Keterangan: **Ya** tampilkan; **Tidak** sembunyikan; **Profil** tampilkan bila a
 | Presensi hari ini, masuk/keluar | `/attendance/*` | `View:AbsenHariIni` | Tidak | Profil | Profil | Profil | Ya | Ya | Ya |
 | Foto master wajah | `/attendance/master-face` | `View:AbsenHariIni` | Tidak | Profil | Profil | Profil | Ya | Ya | Ya |
 | Riwayat presensi, laporan | `/attendances`, `/laporan-absensi` | `View:LaporanAbsensi` | Ya (semua) | Profil | Profil | Profil | Ya | Ya | Ya |
-| Cuti/izin + kuota | `/leave-requests` | `Create:LeaveRequest` | Profil | Izin | Izin | Izin | Ya | Ya | Ya (izin/sakit) |
+| Cuti/izin + kuota | `/leave-requests` | `Create:LeaveRequest` | Profil | Izin | Izin | Izin | Ya | Ya (tanpa cuti tahunan) | Ya (izin/sakit) |
 | Lembur | `/overtime-requests` | `Create:OvertimeRequest` | Profil | Izin | Izin | Izin | Ya | Ya | Ya |
 | Koreksi absensi | `/attendance-corrections` | `Create:AttendanceCorrection` | Profil | Izin | Izin | Izin | Ya | Ya | Ya |
 | Form resign | `/resignations` | `Create:Resignation` | Profil | Izin | Izin | Izin | Ya | Tidak | Tidak |
@@ -614,6 +626,7 @@ Keterangan: **Ya** tampilkan; **Tidak** sembunyikan; **Profil** tampilkan bila a
 
 Catatan:
 - Freelancer tidak punya cuti tahunan. Tampilkan pilihan `permission` dan `sick` saja, seperti form di panel.
+- Cuti tahunan dan kartu kuotanya hanya untuk karyawan dengan `employee.has_annual_leave` bernilai `true`. Peserta magang dan karyawan lain tetap bisa memilih jenis cuti lainnya.
 - Inbox persetujuan Admin hanya berisi pekerja dalam data aksesnya. Approver/BOD dengan akses `own` akan selalu kosong.
 - Riwayat presensi dan laporan berisi data milik sendiri ditambah pekerja dalam data akses. Superadmin melihat seluruh pekerja.
 

@@ -50,7 +50,7 @@ export default function RequestsScreen() {
     <Screen onRefresh={() => active.refetch()}>
       <Choice options={kinds.map((value) => ({ value, label: REQUEST_KIND_LABEL[value] }))} value={activeKind} onChange={setKind} />
 
-      {quota && access.profileKind !== 'freelancer' ? (
+      {quota && access.hasAnnualLeave && quota.eligible !== false ? (
         <View style={styles.quota}>
           <Ionicons name="sunny-outline" size={18} color={colors.primary} />
           <Text style={styles.quotaText}>
