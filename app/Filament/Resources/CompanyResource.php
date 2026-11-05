@@ -6,7 +6,9 @@ use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MapPickerField;
 use App\Filament\Resources\CompanyResource\Pages;
 use App\Models\Company;
+use App\Services\GeofenceService;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -190,6 +192,7 @@ class CompanyResource extends Resource
                                                     TextInput::make('radius_meters')
                                                         ->label('Radius Geofence (Meter)')
                                                         ->numeric()
+                                                        ->minValue(1)
                                                         ->placeholder('Opsional (Ikuti kebijakan)')
                                                         ->columnSpan(1),
 
@@ -272,15 +275,31 @@ class CompanyResource extends Resource
 
                         Toggle::make('require_photo')
                             ->label('Wajib Foto Absensi')
+                            ->disabled(fn (Get $get) => (bool) $get('require_face_recognition'))
+                            ->dehydrated()
+                            ->helperText(fn (Get $get) => $get('require_face_recognition')
+                                ? 'Otomatis wajib karena Face Recognition aktif.'
+                                : null)
                             ->default(false),
 
                         Toggle::make('require_gps')
                             ->label('Wajib Lokasi GPS')
                             ->live()
+                            ->rules([
+                                fn (?Company $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
+                                    if ($value && $record && ! GeofenceService::hasConfiguredLocations($record)) {
+                                        $fail('Wajib Lokasi GPS membutuhkan Koordinat GPS Utama atau minimal satu cabang aktif.');
+                                    }
+                                },
+                            ])
+                            ->helperText(fn (?Company $record) => $record === null || GeofenceService::hasConfiguredLocations($record)
+                                ? null
+                                : 'Isi Koordinat GPS Utama atau tambahkan cabang aktif terlebih dahulu; tanpa itu geofence tidak bisa diperiksa.')
                             ->default(false),
 
                         Toggle::make('require_face_recognition')
-                            ->label('Wajib Face Recognition (Anti-Spoofing)')
+                            ->label('Wajib Face Recognition')
+                            ->helperText('Pencocokan kemiripan foto selfie dengan Foto Master Wajah, bukan deteksi wajah biometrik.')
                             ->live()
                             ->afterStateUpdated(function (Set $set, bool $state) {
                                 if ($state) {
@@ -311,6 +330,7 @@ class CompanyResource extends Resource
                         TextInput::make('geofence_radius_meters')
                             ->label('Radius Geofence (Meter)')
                             ->numeric()
+                            ->minValue(1)
                             ->placeholder('Contoh: 100')
                             ->visible(fn (Get $get) => (bool) $get('require_gps'))
                             ->required(fn (Get $get) => (bool) $get('require_gps')),
@@ -330,7 +350,7 @@ class CompanyResource extends Resource
                     ->action(function (Company $record, array $data): void {
                         $record->policy()->updateOrCreate(
                             ['company_id' => $record->id],
-                            $data
+                            static::normalizeAttendancePolicy($data)
                         );
                     }),
 
@@ -342,6 +362,21 @@ class CompanyResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * Face recognition always needs a selfie, so the photo rule follows it regardless of the toggle.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function normalizeAttendancePolicy(array $data): array
+    {
+        if (! empty($data['require_face_recognition'])) {
+            $data['require_photo'] = true;
+        }
+
+        return $data;
     }
 
     public static function getPages(): array

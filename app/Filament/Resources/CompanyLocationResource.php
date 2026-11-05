@@ -87,6 +87,7 @@ class CompanyLocationResource extends Resource
                             TextInput::make('radius_meters')
                                 ->label('Radius Geofence (Meter)')
                                 ->numeric()
+                                ->minValue(1)
                                 ->placeholder('Kosongkan untuk ikuti Kebijakan Perusahaan'),
 
                             Toggle::make('is_active')

@@ -125,13 +125,18 @@ class ApprovalFlowService
             }
         }
 
+        // A request that already went through a round (for example a geofence check-in that was
+        // approved, then a check-out outside the geofence) keeps its history: the new steps continue
+        // the numbering so the approver acts on the new round, not on an already actioned step.
+        $stepOrderOffset = (int) $requestModel->approvalSteps()->max('step_order');
+
         $generatedSteps = [];
 
         foreach ($flows as $flow) {
             $step = ApprovalRequestStep::create([
                 'approvable_type' => $requestModel->getMorphClass(),
                 'approvable_id' => $requestModel->id,
-                'step_order' => $flow->step_order,
+                'step_order' => $stepOrderOffset + $flow->step_order,
                 'step_name' => $flow->name,
                 'approver_type' => $flow->approver_type,
                 'approver_role' => $flow->approver_role,
@@ -143,7 +148,7 @@ class ApprovalFlowService
         }
 
         $requestModel->update([
-            'current_step' => 1,
+            'current_step' => $stepOrderOffset + 1,
             'status' => $requestModel instanceof Attendance ? AttendanceStatus::PendingApproval : 'pending',
         ]);
 

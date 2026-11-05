@@ -119,6 +119,15 @@ class Attendance extends Model
         ]);
     }
 
+    /**
+     * A new approval round is needed when no step is still waiting for an approver
+     * (none generated yet, or the previous round was already approved or rejected).
+     */
+    public function needsNewApprovalRound(): bool
+    {
+        return $this->approvalSteps()->where('status', 'pending')->doesntExist();
+    }
+
     public function applyGeofenceRejection(?string $reason = null): void
     {
         $this->update([

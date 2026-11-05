@@ -53,13 +53,28 @@ class GeofenceService
         return static::isWithinGeofence($centerLat, $centerLon, $userLat, $userLon, $maxRadiusMeters);
     }
 
+    public const DEFAULT_RADIUS_METERS = 100;
+
+    /**
+     * Whether the company has at least one coordinate a geofence can be checked against
+     * (HQ coordinates or an active branch location).
+     */
+    public static function hasConfiguredLocations(Company $company): bool
+    {
+        if ($company->latitude && $company->longitude) {
+            return true;
+        }
+
+        return $company->locations()->where('is_active', true)->exists();
+    }
+
     /**
      * Validate user GPS against all active branch/office locations of a Company.
      */
     public static function validateCompanyGeofence(Company $company, float $userLat, float $userLng): array
     {
         $policy = $company->policy;
-        $defaultRadius = (int) ($policy?->geofence_radius_meters ?? 100);
+        $defaultRadius = max(1, (int) ($policy?->geofence_radius_meters ?: static::DEFAULT_RADIUS_METERS));
 
         $locations = $company->locations()->where('is_active', true)->get();
 
@@ -82,7 +97,7 @@ class GeofenceService
                     'name' => $loc->name,
                     'lat' => (float) $loc->latitude,
                     'lng' => (float) $loc->longitude,
-                    'radius' => (int) ($loc->radius_meters ?: $defaultRadius),
+                    'radius' => max(1, (int) ($loc->radius_meters ?: $defaultRadius)),
                 ];
             }
         }
