@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\ApprovalApiController;
 use App\Http\Controllers\Api\V1\AttendanceApiController;
 use App\Http\Controllers\Api\V1\AttendanceCorrectionApiController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\DeviceApiController;
 use App\Http\Controllers\Api\V1\LeaveRequestApiController;
 use App\Http\Controllers\Api\V1\MasterDataApiController;
 use App\Http\Controllers\Api\V1\OvertimeRequestApiController;
@@ -23,6 +24,10 @@ Route::prefix('v1')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
+
+        // Push notification devices (Expo push tokens)
+        Route::post('/devices', [DeviceApiController::class, 'store']);
+        Route::delete('/devices', [DeviceApiController::class, 'destroy']);
 
         // Shield Permissions & Roles Inspection
         Route::get('/shield/roles', [ShieldApiController::class, 'indexRoles'])->middleware('can:ViewAny:Role');

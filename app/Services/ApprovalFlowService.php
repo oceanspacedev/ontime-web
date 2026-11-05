@@ -6,8 +6,14 @@ use App\Enums\AttendanceStatus;
 use App\Models\ApprovalFlow;
 use App\Models\ApprovalRequestStep;
 use App\Models\Attendance;
+use App\Models\AttendanceCorrection;
 use App\Models\Company;
+use App\Models\LeaveRequest;
+use App\Models\OvertimeRequest;
+use App\Models\Resignation;
 use App\Models\User;
+use App\Notifications\ApprovalRequestedNotification;
+use App\Notifications\ApprovalResolvedNotification;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
@@ -15,6 +21,24 @@ use Illuminate\Validation\ValidationException;
 
 class ApprovalFlowService
 {
+    /**
+     * Request type keys with the labels used in notifications and default flow names.
+     *
+     * @var array<string, string>
+     */
+    public const REQUEST_TYPE_LABELS = [
+        'leave' => 'Cuti / Izin',
+        'overtime' => 'Lembur',
+        'correction' => 'Koreksi Absensi',
+        'resignation' => 'Pengunduran Diri',
+        'geofence' => 'Presensi Luar Geofence',
+    ];
+
+    public static function requestTypeLabel(string $requestType): string
+    {
+        return self::REQUEST_TYPE_LABELS[$requestType] ?? $requestType;
+    }
+
     /**
      * Reusable query method to retrieve pending requests requiring action from the given User.
      */
@@ -43,7 +67,7 @@ class ApprovalFlowService
             return;
         }
 
-        $labels = ['leave' => 'Cuti / Izin', 'overtime' => 'Lembur', 'correction' => 'Koreksi Absensi', 'resignation' => 'Pengunduran Diri'];
+        $labels = collect(self::REQUEST_TYPE_LABELS)->except('geofence')->all();
         $stages = [['Approver', 'Persetujuan Approver'], ['BOD', 'Persetujuan BOD'], ['Superadmin', 'Persetujuan Akhir Superadmin']];
 
         foreach ($labels as $requestType => $label) {
@@ -164,6 +188,8 @@ class ApprovalFlowService
                 ->icon('heroicon-o-bell')
                 ->color('warning')
                 ->sendToDatabase($approverUser);
+
+            $approverUser->notify(new ApprovalRequestedNotification($requestModel, $requestType, $workerName, (int) $requestModel->current_step, isNewRequest: true));
         }
 
         return $generatedSteps;
@@ -269,6 +295,8 @@ class ApprovalFlowService
                 ? ($requestModel->getWorkerProfile()?->full_name ?? 'Pengguna')
                 : ($requestModel->employee?->full_name ?? 'Pengguna');
 
+            $requestType = $this->requestTypeOf($requestModel);
+
             foreach ($this->getUsersAuthorizedForCurrentStep($requestModel) as $nextApprover) {
                 Notification::make()
                     ->title("Pengajuan Membutuhkan Persetujuan Tahap {$requestModel->current_step}")
@@ -276,6 +304,8 @@ class ApprovalFlowService
                     ->icon('heroicon-o-bell')
                     ->color('info')
                     ->sendToDatabase($nextApprover);
+
+                $nextApprover->notify(new ApprovalRequestedNotification($requestModel, $requestType, $workerNameNext, (int) $requestModel->current_step));
             }
         } else {
             if (method_exists($requestModel, 'applyGeofenceApproval')) {
@@ -297,6 +327,8 @@ class ApprovalFlowService
             if (method_exists($requestModel, 'applyResignation')) {
                 $requestModel->applyResignation();
             }
+
+            $this->notifyRequester($requestModel, 'approved');
         }
     }
 
@@ -333,6 +365,41 @@ class ApprovalFlowService
                 'rejection_reason' => $reason,
             ]);
         }
+
+        $this->notifyRequester($requestModel, 'rejected', $reason);
+    }
+
+    /**
+     * Push the final outcome to the account of the worker who submitted the request.
+     */
+    private function notifyRequester(Model $requestModel, string $status, ?string $reason = null): void
+    {
+        $workerProfile = method_exists($requestModel, 'getWorkerProfile')
+            ? $requestModel->getWorkerProfile()
+            : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
+
+        $requester = $workerProfile?->user;
+
+        if (! $requester instanceof User) {
+            return;
+        }
+
+        $requester->notify(new ApprovalResolvedNotification($requestModel, $this->requestTypeOf($requestModel), $status, $reason));
+    }
+
+    /**
+     * The request type key (as used by approval flows and the mobile app) of a request model.
+     */
+    public function requestTypeOf(Model $requestModel): string
+    {
+        return match (true) {
+            $requestModel instanceof LeaveRequest => 'leave',
+            $requestModel instanceof OvertimeRequest => 'overtime',
+            $requestModel instanceof AttendanceCorrection => 'correction',
+            $requestModel instanceof Resignation => 'resignation',
+            $requestModel instanceof Attendance => 'geofence',
+            default => 'request',
+        };
     }
 
     /**

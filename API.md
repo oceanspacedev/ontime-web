@@ -518,6 +518,43 @@ Semua `GET`, read-only, dengan pola `GET /master/<resource>` (daftar) dan `GET /
 - Body: `action` (wajib), `employee.id` (wajib, integer), `employee.name` (wajib), `employee.email`, `employee.phone`, `employee.status` (wajib).
 - `created`/`updated` hanya memperbarui karyawan yang sudah ada (`full_name`, `email`, `phone`, `status`); `deleted` menghapus karyawan. Respons `{"status": "success"}`.
 
+### 3.12 Perangkat dan push notification
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| POST | `/devices` | Token | Daftarkan atau perbarui Expo push token perangkat ini |
+| DELETE | `/devices` | Token | Hapus token perangkat ini; panggil sebelum `POST /auth/logout` |
+
+**POST /devices** (JSON)
+
+| Field | Aturan |
+| :--- | :--- |
+| `token` | wajib, Expo push token berbentuk `ExponentPushToken[...]`, maks 255 |
+| `platform` | wajib: `ios` atau `android` |
+
+```json
+{"message": "Perangkat terdaftar untuk notifikasi.", "device": {"token": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]", "platform": "ios", "last_seen_at": "2026-11-05T09:30:00+07:00"}}
+```
+
+- 201 saat token baru, 200 saat token yang sama dikirim ulang (`last_seen_at` diperbarui). Kirim ulang setiap kali aplikasi dibuka dalam keadaan masuk.
+- Satu token hanya milik satu akun: bila akun lain masuk di perangkat yang sama, token berpindah ke akun itu.
+- Token bukan format Expo atau `platform` di luar daftar: 422 dengan `errors.token` / `errors.platform`.
+
+**DELETE /devices** (JSON): `token` (wajib). Membalas `{"message": "Perangkat dihapus dari notifikasi."}` walau token tidak ditemukan; token milik akun lain tidak tersentuh. Token juga ikut terhapus saat akun dihapus atau saat Expo melaporkan `DeviceNotRegistered`.
+
+**Isi notifikasi**
+
+Notifikasi dikirim dari antrean (Horizon) ke Expo Push API `https://exp.host/--/api/v2/push/send` (`EXPO_PUSH_URL`; `EXPO_ACCESS_TOKEN` hanya bila *enhanced push security* diaktifkan di proyek Expo). Semua notifikasi memakai `sound: default`, `channelId: default`, `priority: high`, dan `data` berikut:
+
+| `data.kind` | Penerima | Kapan | Field lain |
+| :--- | :--- | :--- | :--- |
+| `approval_requested` | User yang berhak memproses tahap aktif (aturan 2.4) | Pengajuan baru dibuat, atau tahap sebelumnya disetujui sehingga pengajuan masuk ke tahap user | `request_type`, `request_id`, `step_order` |
+| `approval_resolved` | Akun pengaju | Tahap terakhir disetujui (`status: approved`) atau pengajuan ditolak (`status: rejected`) | `request_type`, `request_id`, `status` |
+
+`request_type` salah satu `leave`, `overtime`, `correction`, `resignation`, `geofence`; `request_id` adalah id pengajuan (untuk `geofence`: id presensi). Judul dan isi berbahasa Indonesia, misalnya `Pengajuan baru menunggu persetujuan Anda` / `Pengajuan Cuti / Izin dari Nama Pekerja menunggu persetujuan Anda.` dan `Pengajuan Cuti / Izin ditolak` / `Pengajuan Cuti / Izin Anda ditolak: <alasan>`.
+
+Aplikasi mobile: saat notifikasi ditekan, `approval_requested` membuka `/approval/{request_type}/{request_id}` (inbox persetujuan bila halaman tidak dikenal), `approval_resolved` membuka `/request/{request_type}/{request_id}` atau `/attendance/{request_id}` untuk `geofence`. Push hanya berjalan di development build / build EAS (bukan Expo Go) dan memerlukan `extra.eas.projectId` di `app.json` untuk mendapatkan token.
+
 ---
 
 ## 4. Halaman mobile per role
@@ -563,6 +600,7 @@ Catatan:
 | Kalender cuti | `GET /kalender-cuti` | Grid bulanan cuti rekan |
 | Laporan presensi | `GET /laporan-absensi` | Kartu hadir, terlambat, cuti, tidak hadir |
 | Profil | `GET /auth/me`, `POST /auth/logout` | Biodata, badan usaha, divisi, jabatan, pembimbing, pengaturan base URL |
+| Push notification | `POST /devices` setelah login dan tiap aplikasi dibuka, `DELETE /devices` sebelum logout | Minta izin notifikasi, daftarkan Expo push token; tekan notifikasi membuka detail pengajuan (3.12) |
 
 Label status pengajuan: `pending` Menunggu Persetujuan, `approved` Disetujui, `rejected` Ditolak.
 
@@ -584,3 +622,4 @@ Label status pengajuan: `pending` Menunggu Persetujuan, `approved` Disetujui, `r
 | `rejection_reason` dikirim di cuti, lembur, dan koreksi | `rejection_note` masih ada dengan isi yang sama untuk aplikasi versi lama. |
 | Akun nonaktif ditolak | Tangani 403 saat login dan 401 pada token lama dengan mengarahkan ke layar login. |
 | Pengajuan tanpa alur persetujuan | Respons 422 `errors.approval_flow` tidak lagi meninggalkan pengajuan setengah jadi, jadi aman untuk dikirim ulang setelah alur dibuat. |
+| Push notification (`/devices`) | Opsional. Klien yang tidak mendaftarkan token tidak menerima push; notifikasi panel web tetap berjalan seperti sebelumnya. |
