@@ -19,6 +19,8 @@ Route::prefix('v1')->group(function () {
 
     // Auth Routes
     Route::post('/auth/login', [AuthController::class, 'login']);
+    Route::post('/auth/otp/request', [AuthController::class, 'requestOtp'])->middleware('throttle:api-otp-request');
+    Route::post('/auth/otp/verify', [AuthController::class, 'verifyOtp'])->middleware('throttle:api-otp-verify');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);

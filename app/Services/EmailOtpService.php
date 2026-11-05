@@ -46,8 +46,9 @@ class EmailOtpService
 
     /**
      * The active account that owns this email. An email shared by more than one account cannot log in.
+     * With $includeInactive the inactive owner is returned too, for callers that refuse it themselves.
      */
-    public function findUser(string $email): ?User
+    public function findUser(string $email, bool $includeInactive = false): ?User
     {
         $matches = User::query()
             ->whereRaw('LOWER(TRIM(email)) = ?', [$email])
@@ -56,7 +57,7 @@ class EmailOtpService
 
         $user = $matches->count() === 1 ? $matches->first() : null;
 
-        return $user?->is_active ? $user : null;
+        return $user?->is_active || ($user && $includeInactive) ? $user : null;
     }
 
     /**
@@ -115,9 +116,10 @@ class EmailOtpService
 
     /**
      * Check the code against the latest request for this email. A wrong code counts an attempt; after
-     * MAX_ATTEMPTS the record, magic link included, stops working.
+     * MAX_ATTEMPTS the record, magic link included, stops working. With $allowInactive a correct code
+     * also returns an inactive account, for callers that refuse it with their own message.
      */
-    public function verify(string $email, string $purpose, string $otp): ?User
+    public function verify(string $email, string $purpose, string $otp, bool $allowInactive = false): ?User
     {
         $candidate = EmailOtp::query()
             ->where('email', $email)
@@ -126,7 +128,7 @@ class EmailOtpService
             ->latest('id')
             ->first(['id', 'user_id']);
 
-        return $candidate ? $this->redeem($candidate, $otp) : null;
+        return $candidate ? $this->redeem($candidate, $otp, $allowInactive) : null;
     }
 
     public function consumeMagicLink(string $token, string $purpose): ?User
@@ -152,13 +154,13 @@ class EmailOtpService
      * The user row is locked before the code row, in the same order for code and magic link, so a
      * change of the user's email cannot race a login in progress.
      */
-    private function redeem(EmailOtp $candidate, ?string $otp): ?User
+    private function redeem(EmailOtp $candidate, ?string $otp, bool $allowInactive = false): ?User
     {
         if ($candidate->user_id === null) {
             return null;
         }
 
-        return DB::transaction(function () use ($candidate, $otp): ?User {
+        return DB::transaction(function () use ($candidate, $otp, $allowInactive): ?User {
             $user = User::query()->whereKey($candidate->user_id)->lockForUpdate()->first();
             $record = EmailOtp::query()
                 ->whereKey($candidate->getKey())
@@ -166,7 +168,7 @@ class EmailOtpService
                 ->lockForUpdate()
                 ->first();
 
-            if (! $user || ! $record || ! $user->is_active || ! $this->isUsable($record)
+            if (! $user || ! $record || (! $user->is_active && ! $allowInactive) || ! $this->isUsable($record)
                 || self::normalizeEmail($user->email) !== $record->email) {
                 return null;
             }
