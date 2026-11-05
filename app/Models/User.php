@@ -90,6 +90,24 @@ class User extends Authenticatable implements FilamentUser
     }
 
     /**
+     * Mobile app installs that receive this user's push notifications.
+     */
+    public function deviceTokens(): HasMany
+    {
+        return $this->hasMany(DeviceToken::class);
+    }
+
+    /**
+     * Expo push tokens for the "expo" notification channel.
+     *
+     * @return list<string>
+     */
+    public function routeNotificationForExpo(): array
+    {
+        return $this->deviceTokens()->pluck('token')->all();
+    }
+
+    /**
      * Companies in this user's data access (used when data_scope is "companies").
      */
     public function accessibleCompanies(): BelongsToMany

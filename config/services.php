@@ -53,6 +53,15 @@ return [
         'expires_in' => (int) env('EMAIL_LOGIN_EXPIRES_IN', 600),
     ],
 
+    // Expo Push API for the mobile app. EXPO_ACCESS_TOKEN is only needed once "enhanced push
+    // security" is enabled for the Expo project.
+    'expo' => [
+        'push_url' => env('EXPO_PUSH_URL') ?: 'https://exp.host/--/api/v2/push/send',
+        'access_token' => env('EXPO_ACCESS_TOKEN'),
+        'connect_timeout' => (float) env('EXPO_CONNECT_TIMEOUT', 5),
+        'timeout' => (float) env('EXPO_API_TIMEOUT', 15),
+    ],
+
     'google' => [
         'maps_key' => env('GOOGLE_MAPS_API_KEY', ''),
     ],
