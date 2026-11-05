@@ -3,17 +3,20 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { router, useLocalSearchParams } from 'expo-router';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, Notice } from '@/components/ui';
+import { Button, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { attendanceApi, errorMessage, type Company } from '@/lib/api';
 import { formatDistance, nearestLocation, type NearestLocation } from '@/lib/geo';
 import { prepareUpload } from '@/lib/image';
-import { colors, fontSize, radius, spacing } from '@/theme';
+import { BRAND_GLOSS, BRAND_GRADIENT, elevation, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
+
+/** The camera frame stays black in both color schemes, so its text and guide are light on dark. */
+const ON_CAMERA = 'rgba(255, 255, 255, 0.78)';
 
 class LocationDeniedError extends Error {
   constructor() {
@@ -46,6 +49,9 @@ interface Shot {
 }
 
 export default function AttendanceCheckScreen() {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   const isCheckIn = mode !== 'out';
   const access = useAccess();
@@ -115,154 +121,238 @@ export default function AttendanceCheckScreen() {
   const photoBlocked = needsPhoto && !shot;
   const canSubmit = !locationBlocked && !photoBlocked && !submit.isPending;
   const title = isCheckIn ? 'Absen Masuk' : 'Absen Pulang';
+  const shutterDisabled = !cameraReady || capturing || !cameraPermission?.granted;
 
   return (
-    <SafeAreaView style={styles.root} edges={['bottom']}>
-      <Stack.Screen
-        options={{
-          title,
-          headerLeft: () => (
-            <Pressable onPress={() => router.back()} hitSlop={12} disabled={submit.isPending} accessibilityLabel="Tutup">
-              <Ionicons name="close" size={26} color={colors.textOnPrimary} />
-            </Pressable>
-          ),
-        }}
-      />
+    <View style={styles.root}>
+      <View style={[styles.topBar, { paddingTop: insets.top + spacing.sm }]}>
+        <IconButton icon="close" onPress={() => router.back()} disabled={submit.isPending} accessibilityLabel="Tutup" />
+        <View style={styles.titlePill}>
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
+      </View>
 
-      <View style={styles.cameraArea}>
+      <View style={[styles.cameraArea, !needsPhoto && styles.cameraAreaIdle]}>
         {!needsPhoto ? (
           <View style={styles.noPhoto}>
-            <Ionicons name="location" size={64} color={colors.primarySoft} />
-            <Text style={styles.noPhotoText}>Perusahaan tidak mewajibkan foto selfie. Pastikan lokasi sudah terbaca lalu kirim.</Text>
+            <View style={styles.noPhotoIcon}>
+              <Ionicons name="location" size={40} color={colors.onPrimary} />
+            </View>
+            <Text style={[styles.noPhotoText, styles.idleText]}>Perusahaan tidak mewajibkan foto selfie. Pastikan lokasi sudah terbaca lalu kirim.</Text>
           </View>
         ) : shot ? (
           <Image source={{ uri: shot.uri }} style={styles.preview} contentFit="cover" />
         ) : !cameraPermission ? (
-          <ActivityIndicator color={colors.textOnPrimary} />
+          <ActivityIndicator color={ON_CAMERA} />
         ) : !cameraPermission.granted ? (
           <View style={styles.noPhoto}>
-            <Ionicons name="camera-outline" size={64} color={colors.primarySoft} />
+            <Ionicons name="camera-outline" size={56} color={ON_CAMERA} />
             <Text style={styles.noPhotoText}>Izin kamera dibutuhkan untuk foto selfie presensi.</Text>
-            <Button title="Izinkan kamera" variant="secondary" onPress={() => requestCameraPermission()} />
+            <Button title="Izinkan kamera" variant="primary" onPress={() => requestCameraPermission()} />
           </View>
         ) : (
-          <CameraView ref={cameraRef} style={styles.camera} facing="front" mirror onCameraReady={() => setCameraReady(true)} />
+          <>
+            <CameraView ref={cameraRef} style={styles.camera} facing="front" mirror onCameraReady={() => setCameraReady(true)} />
+            <View style={styles.guideLayer} pointerEvents="none">
+              <View style={styles.faceGuide} />
+              <Text style={styles.guideText}>Posisikan wajah di dalam lingkaran</Text>
+            </View>
+          </>
         )}
       </View>
 
-      <View style={styles.panel}>
-        <LocationStatus location={location} required={needsGps} />
+      <View style={[styles.panel, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+        <Group title="Lokasi">
+          <LocationStatus location={location} required={needsGps} />
+        </Group>
 
         {submit.isError ? <Notice tone="danger" message={errorMessage(submit.error)} /> : null}
 
         {needsPhoto && !shot ? (
           <Pressable
             onPress={capture}
-            disabled={!cameraReady || capturing || !cameraPermission?.granted}
-            style={({ pressed }) => [styles.shutter, (pressed || capturing || !cameraReady) && styles.shutterPressed]}>
-            {capturing ? <ActivityIndicator color={colors.primary} /> : <Ionicons name="camera" size={30} color={colors.primary} />}
+            disabled={shutterDisabled}
+            accessibilityRole="button"
+            accessibilityLabel="Ambil foto"
+            accessibilityState={{ disabled: shutterDisabled, busy: capturing }}
+            style={({ pressed }) => [styles.shutter, pressed && styles.shutterPressed, (capturing || !cameraReady) && styles.shutterDisabled]}>
+            <View style={styles.shutterInner}>
+              {capturing ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons name="camera" size={28} color={colors.onPrimary} />}
+            </View>
           </Pressable>
         ) : (
           <View style={styles.actions}>
             {needsPhoto ? (
-              <Button title="Ulangi foto" variant="secondary" icon="refresh" onPress={() => setShot(null)} disabled={submit.isPending} style={styles.action} />
+              <Button title="Ulangi foto" variant="secondary" icon="refresh" onPress={() => setShot(null)} disabled={submit.isPending} />
             ) : null}
-            <Button title={`Kirim ${title}`} icon="send" onPress={() => submit.mutate()} disabled={!canSubmit} loading={submit.isPending} style={styles.action} />
+            <Button title={`Kirim ${title}`} icon="send" size="lg" onPress={() => submit.mutate()} disabled={!canSubmit} loading={submit.isPending} />
           </View>
         )}
       </View>
-    </SafeAreaView>
+    </View>
+  );
+}
+
+/** One line inside the location group: a tinted status icon, the message and an optional action. */
+function LocationLine({ icon, tint, background, message, loading, right }: {
+  icon?: IconName;
+  tint: string;
+  background: string;
+  message: string;
+  loading?: boolean;
+  right?: ReactNode;
+}) {
+  const styles = useStyles();
+  return (
+    <View style={styles.locationRow}>
+      <View style={[styles.locationIcon, { backgroundColor: background }]}>
+        {loading ? <ActivityIndicator color={tint} /> : icon ? <Ionicons name={icon} size={22} color={tint} /> : null}
+      </View>
+      <Text style={styles.locationText} numberOfLines={3}>
+        {message}
+      </Text>
+      {right}
+    </View>
   );
 }
 
 function LocationStatus({ location, required }: { location: UseQueryResult<DeviceLocation>; required: boolean }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+
   if (location.isPending) {
-    return (
-      <View style={styles.locationRow}>
-        <ActivityIndicator color={colors.primary} />
-        <Text style={styles.locationText}>Membaca lokasi…</Text>
-      </View>
-    );
+    return <LocationLine loading tint={colors.primary} background={colors.primarySoft} message="Membaca lokasi…" />;
   }
   if (location.isError) {
     if (location.error instanceof LocationDeniedError) {
       return (
-        <Notice
-          tone={required ? 'danger' : 'warning'}
+        <LocationLine
           icon="location-outline"
+          tint={required ? colors.danger : colors.warning}
+          background={required ? colors.dangerSoft : colors.warningSoft}
           message={required ? 'Izin lokasi ditolak. Presensi butuh lokasi, aktifkan izin lokasi di pengaturan HP.' : 'Izin lokasi ditolak. Presensi tetap bisa dikirim tanpa lokasi.'}
         />
       );
     }
     return (
-      <View style={styles.locationRow}>
-        <Ionicons name="alert-circle" size={20} color={colors.danger} />
-        <Text style={[styles.locationText, { color: colors.danger }]} numberOfLines={2}>
-          Lokasi gagal dibaca. {errorMessage(location.error)}
-        </Text>
-        <Pressable onPress={() => location.refetch()} hitSlop={8}>
-          <Text style={styles.retry}>Ulangi</Text>
-        </Pressable>
-      </View>
+      <LocationLine
+        icon="alert-circle"
+        tint={colors.danger}
+        background={colors.dangerSoft}
+        message={`Lokasi gagal dibaca. ${errorMessage(location.error)}`}
+        right={
+          <Pressable onPress={() => location.refetch()} hitSlop={8} accessibilityRole="button" style={({ pressed }) => [styles.retry, pressed && styles.retryPressed]}>
+            <Text style={styles.retryText}>Ulangi</Text>
+          </Pressable>
+        }
+      />
     );
   }
   const nearest = location.data.nearest;
   if (!nearest) {
-    return (
-      <View style={styles.locationRow}>
-        <Ionicons name="location" size={20} color={colors.success} />
-        <Text style={styles.locationText}>Lokasi terbaca.</Text>
-      </View>
-    );
+    return <LocationLine icon="location" tint={colors.success} background={colors.successSoft} message="Lokasi terbaca." />;
   }
   return (
-    <View style={[styles.locationRow, { backgroundColor: nearest.inside ? colors.successSoft : colors.warningSoft }]}>
-      <Ionicons name={nearest.inside ? 'checkmark-circle' : 'warning'} size={20} color={nearest.inside ? colors.success : colors.warning} />
-      <Text style={[styles.locationText, { color: nearest.inside ? colors.success : colors.warning }]} numberOfLines={3}>
-        {nearest.inside
+    <LocationLine
+      icon={nearest.inside ? 'checkmark-circle' : 'warning'}
+      tint={nearest.inside ? colors.success : colors.warning}
+      background={nearest.inside ? colors.successSoft : colors.warningSoft}
+      message={
+        nearest.inside
           ? `Di area ${nearest.name} (${formatDistance(nearest.distance)} dari titik kantor).`
-          : `${formatDistance(nearest.distance)} dari ${nearest.name}, di luar radius ${nearest.radius} m. Presensi akan menunggu persetujuan atasan.`}
-      </Text>
-    </View>
+          : `${formatDistance(nearest.distance)} dari ${nearest.name}, di luar radius ${nearest.radius} m. Presensi akan menunggu persetujuan atasan.`
+      }
+    />
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.primaryDark },
-  cameraArea: { flex: 1, margin: spacing.lg, borderRadius: radius.lg, overflow: 'hidden', backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+const SHUTTER_SIZE = 84;
+const FACE_GUIDE_SIZE = 232;
+
+const useStyles = makeStyles((c, dark) => ({
+  root: { flex: 1, backgroundColor: c.background },
+  topBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  titlePill: { flex: 1, height: 46, borderRadius: radius.pill, backgroundColor: c.fill, justifyContent: 'center', paddingHorizontal: 20 },
+  title: { fontSize: fontSize.md, color: c.textMuted, fontWeight: '500' },
+
+  cameraArea: {
+    flex: 1,
+    marginHorizontal: spacing.lg,
+    borderRadius: 32,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: elevation(c, 2),
+  },
+  /** Without a camera the frame takes the themed group tint instead of black. */
+  cameraAreaIdle: { backgroundColor: c.group, boxShadow: [] },
   camera: { flex: 1, width: '100%' },
   preview: { flex: 1, width: '100%' },
-  noPhoto: { alignItems: 'center', gap: spacing.md, padding: spacing.xl },
-  noPhotoText: { color: colors.primarySoft, textAlign: 'center', fontSize: fontSize.md, lineHeight: 22 },
-  panel: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    padding: spacing.lg,
-    gap: spacing.md,
+  guideLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center', gap: spacing.lg },
+  faceGuide: {
+    width: FACE_GUIDE_SIZE,
+    height: FACE_GUIDE_SIZE,
+    borderRadius: FACE_GUIDE_SIZE / 2,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.7)',
+    borderStyle: 'dashed',
   },
-  locationRow: {
-    flexDirection: 'row',
+  guideText: {
+    fontSize: fontSize.sm,
+    color: '#FFFFFF',
+    fontWeight: '500',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    overflow: 'hidden',
+  },
+  noPhoto: { alignItems: 'center', gap: spacing.lg, padding: spacing.xl },
+  noPhotoIcon: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: c.primary,
     alignItems: 'center',
-    gap: spacing.sm,
-    padding: spacing.md,
-    borderRadius: radius.md,
-    backgroundColor: colors.background,
+    justifyContent: 'center',
+    boxShadow: '0px 8px 24px rgba(242, 41, 41, 0.45)',
   },
-  locationText: { flex: 1, fontSize: fontSize.sm, color: colors.text, lineHeight: 20 },
-  retry: { color: colors.primary, fontWeight: '700', fontSize: fontSize.sm },
+  noPhotoText: { color: ON_CAMERA, textAlign: 'center', fontSize: fontSize.md, lineHeight: 22 },
+  idleText: { color: c.textMuted },
+
+  panel: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.lg },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 64, paddingHorizontal: 14, paddingVertical: 12 },
+  locationIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  locationText: { flex: 1, fontSize: fontSize.sm, color: c.text, lineHeight: 20, fontWeight: '500' },
+  retry: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: c.primarySoft },
+  retryPressed: { opacity: 0.7 },
+  retryText: { color: c.primary, fontWeight: '700', fontSize: fontSize.sm },
+
   shutter: {
     alignSelf: 'center',
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: colors.primarySoft,
-    borderWidth: 4,
-    borderColor: colors.primary,
+    width: SHUTTER_SIZE,
+    height: SHUTTER_SIZE,
+    borderRadius: SHUTTER_SIZE / 2,
+    padding: 6,
+    backgroundColor: dark ? c.inverse : c.card,
+    borderWidth: dark ? 0 : 1,
+    borderColor: c.border,
+    boxShadow: elevation(c, 2),
+  },
+  shutterPressed: { transform: [{ scale: 0.95 }] },
+  shutterDisabled: { opacity: 0.55 },
+  shutterInner: {
+    flex: 1,
+    borderRadius: SHUTTER_SIZE / 2,
+    backgroundColor: c.primary,
+    backgroundImage: BRAND_GRADIENT,
+    boxShadow: BRAND_GLOSS,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  shutterPressed: { opacity: 0.6 },
-  actions: { flexDirection: 'row', gap: spacing.sm },
-  action: { flex: 1 },
-});
+
+  actions: { gap: spacing.sm },
+}));

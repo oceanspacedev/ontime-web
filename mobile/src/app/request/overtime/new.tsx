@@ -1,15 +1,15 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, View } from 'react-native';
 
 import { DateTimeField } from '@/components/DateTimeField';
-import { Button, Card, Field, Notice, Screen } from '@/components/ui';
+import { Button, Field, Group, Notice, Screen } from '@/components/ui';
 import { ApiError, errorMessage, requestsApi } from '@/lib/api';
 import { formatMinutes } from '@/lib/format';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { queryKeys } from '@/lib/queryClient';
-import { spacing } from '@/theme';
+import { makeStyles, spacing } from '@/theme';
 
 function durationMinutes(start: string | null, end: string | null): number | null {
   if (!start || !end) {
@@ -25,6 +25,7 @@ function durationMinutes(start: string | null, end: string | null): number | nul
 }
 
 export default function NewOvertimeScreen() {
+  const styles = useStyles();
   const queryClient = useQueryClient();
   const [date, setDate] = useState<string | null>(null);
   const [startTime, setStartTime] = useState<string | null>(null);
@@ -63,11 +64,18 @@ export default function NewOvertimeScreen() {
   };
 
   const duration = durationMinutes(startTime, endTime);
+  const crossesMidnight = Boolean(endTime && startTime && endTime < startTime);
   const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
 
   return (
-    <Screen>
-      <Card>
+    <Screen
+      footer={
+        <>
+          {generalError ? <Notice tone="danger" message={generalError} /> : null}
+          <Button title="Kirim pengajuan" icon="send" size="lg" onPress={() => validate() && submit.mutate()} loading={submit.isPending} />
+        </>
+      }>
+      <Group title="Waktu lembur" padded>
         <DateTimeField label="Tanggal lembur" mode="date" value={date} onChange={setDate} error={errors.date} />
         <View style={styles.row}>
           <View style={styles.flex}>
@@ -77,16 +85,18 @@ export default function NewOvertimeScreen() {
             <DateTimeField label="Jam selesai" mode="time" value={endTime} onChange={setEndTime} error={errors.end_time} />
           </View>
         </View>
-        {duration !== null && duration > 0 ? <Notice tone="info" icon="time-outline" message={`Durasi ${formatMinutes(duration)}${endTime && startTime && endTime < startTime ? ' (melewati tengah malam)' : ''}.`} /> : null}
+        {duration !== null && duration > 0 ? (
+          <Notice tone="info" icon="time-outline" message={`Durasi ${formatMinutes(duration)}${crossesMidnight ? ' (melewati tengah malam)' : ''}.`} />
+        ) : null}
+      </Group>
+      <Group title="Keterangan" padded>
         <Field label="Alasan" value={reason} onChangeText={setReason} multiline placeholder="Pekerjaan yang dilakukan saat lembur" error={errors.reason} maxLength={1000} />
-      </Card>
-      {generalError ? <Notice tone="danger" message={generalError} /> : null}
-      <Button title="Kirim pengajuan" icon="send" size="lg" onPress={() => validate() && submit.mutate()} loading={submit.isPending} />
+      </Group>
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(() => ({
   row: { flexDirection: 'row', gap: spacing.sm },
   flex: { flex: 1 },
-});
+}));

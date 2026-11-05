@@ -5,7 +5,7 @@ import { Alert } from 'react-native';
 
 import { DateTimeField } from '@/components/DateTimeField';
 import { RequestRow } from '@/components/RequestRow';
-import { Button, Card, Field, LoadingView, Notice, Screen } from '@/components/ui';
+import { Button, Field, Group, LoadingView, Notice, Screen } from '@/components/ui';
 import { ApiError, errorMessage, requestsApi } from '@/lib/api';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { queryKeys } from '@/lib/queryClient';
@@ -72,8 +72,13 @@ export default function NewResignationScreen() {
   if (own) {
     return (
       <Screen>
-        <Notice tone={own.status === 'approved' ? 'success' : 'warning'} message={own.status === 'approved' ? 'Pengunduran diri Anda sudah disetujui.' : 'Anda sudah punya pengajuan resign yang sedang diproses.'} />
-        <RequestRow item={{ kind: 'resignation', data: own }} />
+        <Notice
+          tone={own.status === 'approved' ? 'success' : 'warning'}
+          message={own.status === 'approved' ? 'Pengunduran diri Anda sudah disetujui.' : 'Anda sudah punya pengajuan resign yang sedang diproses.'}
+        />
+        <Group title="Pengajuan Anda">
+          <RequestRow item={{ kind: 'resignation', data: own }} />
+        </Group>
       </Screen>
     );
   }
@@ -81,16 +86,36 @@ export default function NewResignationScreen() {
   const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
 
   return (
-    <Screen>
+    <Screen
+      footer={
+        <>
+          {generalError ? <Notice tone="danger" message={generalError} /> : null}
+          <Button title="Kirim pengajuan resign" icon="send" size="lg" onPress={confirm} loading={submit.isPending} />
+        </>
+      }>
       <Notice tone="warning" message="Pengajuan ini melewati tahap persetujuan atasan. Pastikan sudah berdiskusi dengan atasan sebelum mengirim." />
-      <Card>
+      <Group title="Tanggal" padded>
         <DateTimeField label="Tanggal pengajuan" mode="date" value={resignationDate} onChange={setResignationDate} error={errors.resignation_date} />
-        <DateTimeField label="Hari kerja terakhir" mode="date" value={lastWorkingDay} onChange={setLastWorkingDay} error={errors.last_working_day} minimumDate={resignationDate ? new Date(resignationDate) : undefined} />
+        <DateTimeField
+          label="Hari kerja terakhir"
+          mode="date"
+          value={lastWorkingDay}
+          onChange={setLastWorkingDay}
+          error={errors.last_working_day}
+          minimumDate={resignationDate ? new Date(resignationDate) : undefined}
+        />
+      </Group>
+      <Group title="Keterangan" padded>
         <Field label="Alasan" value={reason} onChangeText={setReason} multiline placeholder="Alasan pengunduran diri" error={errors.reason} />
-        <Field label="Catatan serah terima (opsional)" value={handover} onChangeText={setHandover} multiline placeholder="Pekerjaan dan dokumen yang diserahkan" error={errors.handover_notes} />
-      </Card>
-      {generalError ? <Notice tone="danger" message={generalError} /> : null}
-      <Button title="Kirim pengajuan resign" icon="send" size="lg" variant="danger" onPress={confirm} loading={submit.isPending} />
+        <Field
+          label="Catatan serah terima (opsional)"
+          value={handover}
+          onChangeText={setHandover}
+          multiline
+          placeholder="Pekerjaan dan dokumen yang diserahkan"
+          error={errors.handover_notes}
+        />
+      </Group>
     </Screen>
   );
 }

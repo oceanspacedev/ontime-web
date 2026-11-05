@@ -1,20 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, View } from 'react-native';
 
-import { Avatar, Button, Card, InfoRow, ListRow, Screen, text } from '@/components/ui';
+import { Avatar, Badge, Button, Group, InfoRow, Pill, Row, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { authApi } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { useSession } from '@/lib/session';
-import { spacing } from '@/theme';
+import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance, useTheme } from '@/theme';
+
+const APPEARANCE_LABELS: Record<AppearancePreference, string> = {
+  system: 'Ikuti sistem',
+  light: 'Terang',
+  dark: 'Gelap',
+};
 
 export default function ProfileScreen() {
+  const styles = useStyles();
+  const { colors } = useTheme();
   const user = useSession((state) => state.user);
   const baseUrl = useSession((state) => state.baseUrl);
   const signOut = useSession((state) => state.signOut);
+  const appearance = useAppearance((state) => state.preference);
   const access = useAccess();
   const refreshUser = useRefreshUser();
 
@@ -41,21 +50,25 @@ export default function ProfileScreen() {
   const freelancer = user?.freelancer;
   const division = employee?.division ?? intern?.division ?? freelancer?.division;
   const policy = access.company?.policy;
+  const displayName = access.profileName || user?.name || '';
+  const serverHost = baseUrl.replace(/^https?:\/\//, '').replace(/\/api\/v1$/, '');
+
+  const yesNo = (value: boolean) =>
+    value ? <Badge label="Ya" tone="success" dot style={styles.badge} /> : <Badge label="Tidak" tone="gray" dot style={styles.badge} />;
 
   return (
-    <Screen onRefresh={() => refreshUser.mutate()}>
-      <Card style={styles.identity}>
-        <Avatar name={access.profileName || user?.name || ''} uri={access.masterFacePhoto} size={72} />
-        <View style={styles.identityText}>
-          <Text style={text.title}>{access.profileName || user?.name}</Text>
-          <Text style={text.subtitle}>{user?.email}</Text>
-          <Text style={text.muted}>{access.roles.join(', ')}</Text>
-        </View>
-      </Card>
+    <Screen title="Profil" onRefresh={() => refreshUser.mutate()}>
+      <Group title="Profil Anda">
+        <Row
+          left={<Avatar name={displayName} uri={access.masterFacePhoto} size={52} />}
+          title={displayName}
+          subtitle={user?.email}
+          right={access.roles.length > 0 ? <Pill label={access.roles.join(', ')} style={styles.roles} /> : null}
+        />
+      </Group>
 
       {employee || intern || freelancer ? (
-        <Card>
-          <Text style={text.strong}>Data pekerja</Text>
+        <Group title="Data pekerja">
           {employee?.nip ? <InfoRow label="NIP" value={employee.nip} /> : null}
           <InfoRow label="Badan usaha" value={access.company?.name ?? '-'} />
           <InfoRow label="Divisi" value={division?.name ?? '-'} />
@@ -65,47 +78,48 @@ export default function ProfileScreen() {
           {intern?.mentor ? <InfoRow label="Mentor" value={intern.mentor.full_name} /> : null}
           {freelancer ? <InfoRow label="Instansi" value={freelancer.institution} /> : null}
           {freelancer?.supervisor ? <InfoRow label="Supervisor" value={freelancer.supervisor.full_name} /> : null}
-        </Card>
+        </Group>
       ) : null}
 
       {policy ? (
-        <Card>
-          <Text style={text.strong}>Aturan presensi</Text>
+        <Group title="Aturan presensi">
           <InfoRow label="Jam kerja" value={`${policy.work_start_time?.slice(0, 5) ?? '-'} – ${policy.work_end_time?.slice(0, 5) ?? '-'}`} />
           <InfoRow label="Toleransi terlambat" value={`${policy.late_tolerance_minutes} menit`} />
-          <InfoRow label="Wajib GPS" value={policy.require_gps ? 'Ya' : 'Tidak'} />
-          <InfoRow label="Wajib foto" value={policy.require_photo ? 'Ya' : 'Tidak'} />
-          <InfoRow label="Verifikasi wajah" value={policy.require_face_recognition ? 'Ya' : 'Tidak'} />
-        </Card>
+          <InfoRow label="Wajib GPS" value={yesNo(policy.require_gps)} />
+          <InfoRow label="Wajib foto" value={yesNo(policy.require_photo)} />
+          <InfoRow label="Verifikasi wajah" value={yesNo(policy.require_face_recognition)} />
+        </Group>
       ) : null}
 
-      <View style={styles.list}>
+      <Group title="Pengaturan">
         {access.canUseAttendance ? (
-          <ListRow
+          <Row
             icon="scan-outline"
             title="Foto master wajah"
-            subtitle={access.masterFaceVerifiedAt ? `Didaftarkan ${formatDateTime(access.masterFaceVerifiedAt)}` : 'Belum didaftarkan'}
+            subtitle={access.masterFaceVerifiedAt ? `Didaftarkan ${formatDateTime(access.masterFaceVerifiedAt)}` : undefined}
+            value={access.masterFaceVerifiedAt ? 'Terdaftar' : 'Belum'}
             onPress={() => router.push('/attendance/master-face')}
           />
         ) : null}
         {access.canResign ? (
-          <ListRow icon="exit-outline" title="Pengunduran diri" subtitle="Ajukan atau lihat status resign" onPress={() => router.push('/request/resignation/new')} />
+          <Row icon="exit-outline" title="Pengunduran diri" subtitle="Ajukan atau lihat status resign" onPress={() => router.push('/request/resignation/new')} />
         ) : null}
-        <ListRow icon="server-outline" title="Alamat server" subtitle={baseUrl} onPress={() => router.push('/settings/server')} />
-      </View>
+        <Row icon="contrast-outline" title="Tampilan" value={APPEARANCE_LABELS[appearance]} onPress={() => router.push('/settings/appearance')} />
+        <Row icon="server-outline" title="Alamat server" value={serverHost} onPress={() => router.push('/settings/server')} />
+      </Group>
 
-      <Button title="Keluar" variant="danger" icon="log-out-outline" onPress={confirmLogout} loading={logout.isPending} />
+      <Button title="Keluar" variant="danger" size="lg" icon="log-out-outline" onPress={confirmLogout} loading={logout.isPending} />
       <View style={styles.footer}>
-        <Ionicons name="time-outline" size={14} color="#94A3B8" />
-        <Text style={text.muted}>OnTime Mobile</Text>
+        <Ionicons name="time-outline" size={14} color={colors.textMuted} />
+        <Text style={styles.footerText}>OnTime Mobile</Text>
       </View>
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  identity: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
-  identityText: { flex: 1, gap: 2 },
-  list: { gap: spacing.sm },
-  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: spacing.md },
-});
+const useStyles = makeStyles((c) => ({
+  roles: { maxWidth: 140 },
+  badge: { alignSelf: 'flex-end' },
+  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: spacing.sm },
+  footerText: { fontSize: fontSize.xs, color: c.textMuted },
+}));

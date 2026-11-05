@@ -1,7 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
 
-import { colors, fontSize, radius, spacing } from '@/theme';
+import { IconButton, Text } from '@/components/ui';
+import { fontSize, makeStyles, radius, spacing } from '@/theme';
 
 export interface MonthValue {
   month: number;
@@ -31,35 +31,39 @@ export function monthRange(value: MonthValue): { start: string; end: string } {
   };
 }
 
+/** Pill row for stepping through months: back, the month name in a pill, forward (stops at this month). */
 export function MonthSwitcher({ value, onChange }: { value: MonthValue; onChange: (value: MonthValue) => void }) {
+  const styles = useStyles();
   const now = currentMonth();
   const isCurrent = value.month === now.month && value.year === now.year;
   return (
     <View style={styles.row}>
-      <Pressable onPress={() => onChange(shiftMonth(value, -1))} style={styles.arrow} hitSlop={8}>
-        <Ionicons name="chevron-back" size={20} color={colors.primary} />
-      </Pressable>
-      <Text style={styles.label}>{monthLabel(value)}</Text>
-      <Pressable onPress={() => onChange(shiftMonth(value, 1))} style={[styles.arrow, isCurrent && styles.arrowDisabled]} hitSlop={8} disabled={isCurrent}>
-        <Ionicons name="chevron-forward" size={20} color={colors.primary} />
-      </Pressable>
+      <IconButton icon="chevron-back" onPress={() => onChange(shiftMonth(value, -1))} accessibilityLabel="Bulan sebelumnya" />
+      <View style={styles.labelPill}>
+        <Text style={styles.label} numberOfLines={1}>
+          {monthLabel(value)}
+        </Text>
+      </View>
+      <IconButton
+        icon="chevron-forward"
+        onPress={() => onChange(shiftMonth(value, 1))}
+        disabled={isCurrent}
+        accessibilityLabel="Bulan berikutnya"
+      />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
+const useStyles = makeStyles((c) => ({
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  labelPill: {
+    flex: 1,
+    height: 46,
+    borderRadius: radius.pill,
+    backgroundColor: c.fill,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
   },
-  arrow: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  arrowDisabled: { opacity: 0.3 },
-  label: { fontSize: fontSize.md, fontWeight: '600', color: colors.text, textTransform: 'capitalize' },
-});
+  label: { fontSize: fontSize.md, fontWeight: '600', color: c.text, textTransform: 'capitalize' },
+}));

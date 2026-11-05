@@ -1,10 +1,10 @@
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, View } from 'react-native';
 
-import { PickerField } from '@/components/ui';
+import { Button, PickerField, Sheet } from '@/components/ui';
 import { formatDate, toDateString, toTimeString } from '@/lib/format';
-import { colors, fontSize, radius, spacing } from '@/theme';
+import { makeStyles, spacing, useTheme } from '@/theme';
 
 interface Props {
   label: string;
@@ -34,9 +34,11 @@ function parseValue(mode: 'date' | 'time', value: string | null): Date {
 
 /**
  * Date or time input that works the same on both platforms: Android opens the system dialog,
- * iOS shows the spinner in a bottom sheet with a done button.
+ * iOS shows the spinner in a bottom sheet with cancel and done buttons.
  */
 export function DateTimeField({ label, mode, value, onChange, error, minimumDate, hint }: Props) {
+  const styles = useStyles();
+  const { colors, dark } = useTheme();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Date>(() => parseValue(mode, value));
 
@@ -64,6 +66,8 @@ export function DateTimeField({ label, mode, value, onChange, error, minimumDate
     setOpen(true);
   };
 
+  const close = () => setOpen(false);
+
   return (
     <>
       <PickerField
@@ -79,57 +83,38 @@ export function DateTimeField({ label, mode, value, onChange, error, minimumDate
         <DateTimePicker value={draft} mode={mode} is24Hour onChange={handleChange} minimumDate={minimumDate} />
       ) : null}
       {Platform.OS === 'ios' ? (
-        <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-          <Pressable style={styles.backdrop} onPress={() => setOpen(false)} />
-          <View style={styles.sheet}>
-            <View style={styles.sheetHeader}>
-              <Pressable onPress={() => setOpen(false)} hitSlop={8}>
-                <Text style={styles.sheetCancel}>Batal</Text>
-              </Pressable>
-              <Text style={styles.sheetTitle}>{label}</Text>
-              <Pressable
-                onPress={() => {
-                  commit(draft);
-                  setOpen(false);
-                }}
-                hitSlop={8}>
-                <Text style={styles.sheetDone}>Selesai</Text>
-              </Pressable>
-            </View>
-            <DateTimePicker
-              value={draft}
-              mode={mode}
-              display="spinner"
-              locale="id-ID"
-              onChange={handleChange}
-              minimumDate={minimumDate}
-              style={styles.spinner}
+        <Sheet visible={open} onClose={close} title={label}>
+          <DateTimePicker
+            value={draft}
+            mode={mode}
+            display="spinner"
+            locale="id-ID"
+            onChange={handleChange}
+            minimumDate={minimumDate}
+            themeVariant={dark ? 'dark' : 'light'}
+            textColor={colors.text}
+            accentColor={colors.primary}
+            style={styles.spinner}
+          />
+          <View style={styles.actions}>
+            <Button title="Batal" variant="secondary" onPress={close} style={styles.action} />
+            <Button
+              title="Selesai"
+              onPress={() => {
+                commit(draft);
+                close();
+              }}
+              style={styles.action}
             />
           </View>
-        </Modal>
+        </Sheet>
       ) : null}
     </>
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.4)' },
-  sheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingBottom: spacing.xl,
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: spacing.lg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  sheetTitle: { fontSize: fontSize.md, fontWeight: '600', color: colors.text },
-  sheetCancel: { fontSize: fontSize.md, color: colors.textMuted },
-  sheetDone: { fontSize: fontSize.md, color: colors.primary, fontWeight: '700' },
+const useStyles = makeStyles(() => ({
   spinner: { alignSelf: 'center' },
-});
+  actions: { flexDirection: 'row', gap: spacing.md },
+  action: { flex: 1 },
+}));

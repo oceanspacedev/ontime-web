@@ -1,19 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
 
-import { Badge, Button, Card, Notice } from '@/components/ui';
+import { Badge, Button, Group, Notice, Text } from '@/components/ui';
 import type { Access } from '@/lib/access';
 import type { TodayAttendance } from '@/lib/api';
 import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatTime } from '@/lib/format';
-import { colors, fontSize, spacing } from '@/theme';
+import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface Props {
   today: TodayAttendance;
   access: Access;
 }
 
+/** Group title shared with the home screen's loading state, so both render the same frame. */
+export const TODAY_GROUP_TITLE = 'Presensi Hari Ini';
+
 export function TodayCard({ today, access }: Props) {
+  const styles = useStyles();
+  const { colors } = useTheme();
   const attendance = today.attendance;
   const policy = access.company?.policy ?? null;
   const needsMasterFace = policy?.require_face_recognition && !access.masterFacePhoto;
@@ -23,35 +28,39 @@ export function TodayCard({ today, access }: Props) {
   const workEnd = schedule?.end_time ?? policy?.work_end_time ?? null;
 
   return (
-    <Card style={styles.card}>
+    <Group title={TODAY_GROUP_TITLE} padded cardStyle={styles.card}>
       <View style={styles.header}>
-        <Text style={styles.date}>{formatDate(today.date, 'weekday')}</Text>
+        <View style={styles.headerText}>
+          <Text style={styles.date} numberOfLines={1}>
+            {formatDate(today.date, 'weekday')}
+          </Text>
+          {schedule?.is_day_off ? (
+            <View style={styles.scheduleRow}>
+              <Ionicons name="calendar-outline" size={14} color={colors.textMuted} />
+              <Text style={styles.schedule}>Hari ini dijadwalkan libur</Text>
+            </View>
+          ) : workStart ? (
+            <View style={styles.scheduleRow}>
+              <Ionicons name="time-outline" size={14} color={colors.textMuted} />
+              <Text style={styles.schedule} numberOfLines={1}>
+                {schedule?.shift ? `Shift ${schedule.shift.name} · ` : 'Jam kerja '}
+                {formatTime(workStart)}
+                {workEnd ? ` – ${formatTime(workEnd)}` : ''}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         {attendance ? <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} /> : null}
       </View>
 
-      {schedule?.is_day_off ? (
-        <View style={styles.scheduleRow}>
-          <Ionicons name="calendar-outline" size={14} color={colors.textMuted} />
-          <Text style={styles.schedule}>Hari ini dijadwalkan libur</Text>
-        </View>
-      ) : workStart ? (
-        <View style={styles.scheduleRow}>
-          <Ionicons name="time-outline" size={14} color={colors.textMuted} />
-          <Text style={styles.schedule}>
-            {schedule?.shift ? `Shift ${schedule.shift.name} · ` : 'Jam kerja '}
-            {formatTime(workStart)}
-            {workEnd ? ` – ${formatTime(workEnd)}` : ''}
-          </Text>
-        </View>
-      ) : null}
-
       <View style={styles.times}>
-        <TimeBox label="Masuk" value={formatTime(attendance?.check_in)} icon="log-in-outline" />
+        <TimeHalf label="Masuk" value={attendance?.check_in} icon="log-in-outline" />
         <View style={styles.divider} />
-        <TimeBox label="Pulang" value={formatTime(attendance?.check_out)} icon="log-out-outline" />
+        <TimeHalf label="Pulang" value={attendance?.check_out} icon="log-out-outline" />
       </View>
 
-      {attendance?.late_minutes ? <Text style={styles.late}>Terlambat {attendance.late_minutes} menit</Text> : null}
+      {attendance?.late_minutes ? <Badge label={`Terlambat ${attendance.late_minutes} menit`} tone="warning" dot /> : null}
+
       {attendance?.status === 'pending_approval' ? (
         <Notice tone="warning" message="Presensi hari ini menunggu persetujuan atasan karena di luar area kantor atau verifikasi wajah tidak cocok." />
       ) : null}
@@ -67,35 +76,54 @@ export function TodayCard({ today, access }: Props) {
       ) : !today.has_checked_in ? (
         <Button title="Absen Masuk" icon="log-in-outline" size="lg" onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'in' } })} />
       ) : (
-        <Button title="Absen Pulang" icon="log-out-outline" size="lg" variant="secondary" onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'out' } })} />
+        <Button
+          title="Absen Pulang"
+          icon="log-out-outline"
+          size="lg"
+          variant="inverse"
+          onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'out' } })}
+        />
       )}
-    </Card>
+    </Group>
   );
 }
 
-function TimeBox({ label, value, icon }: { label: string; value: string; icon: 'log-in-outline' | 'log-out-outline' }) {
+/** One half of the Masuk | Pulang overview: a small label and a large tabular time. */
+function TimeHalf({ label, value, icon }: { label: string; value: string | null | undefined; icon: 'log-in-outline' | 'log-out-outline' }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
   return (
-    <View style={styles.timeBox}>
-      <View style={styles.timeLabelRow}>
-        <Ionicons name={icon} size={14} color={colors.textMuted} />
-        <Text style={styles.timeLabel}>{label}</Text>
+    <View style={styles.half}>
+      <View style={styles.halfLabelRow}>
+        <Ionicons name={icon} size={16} color={colors.textMuted} />
+        <Text style={styles.halfLabel}>{label}</Text>
       </View>
-      <Text style={styles.timeValue}>{value}</Text>
+      <Text style={[styles.halfValue, !value && styles.halfValueEmpty]} numberOfLines={1} adjustsFontSizeToFit>
+        {formatTime(value)}
+      </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  card: { gap: spacing.md },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
-  date: { fontSize: fontSize.sm, color: colors.textMuted, flex: 1 },
+const useStyles = makeStyles((c) => ({
+  card: { gap: spacing.lg },
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  headerText: { flex: 1, gap: 4 },
+  date: { fontSize: fontSize.lg, fontWeight: '600', color: c.text },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  schedule: { fontSize: fontSize.sm, color: colors.textMuted },
-  times: { flexDirection: 'row', alignItems: 'center' },
-  timeBox: { flex: 1, alignItems: 'center', gap: 4 },
-  timeLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  timeLabel: { fontSize: fontSize.xs, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
-  timeValue: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.text, fontVariant: ['tabular-nums'] },
-  divider: { width: 1, height: 40, backgroundColor: colors.border },
-  late: { fontSize: fontSize.sm, color: colors.warning, textAlign: 'center', fontWeight: '600' },
-});
+  schedule: { flexShrink: 1, fontSize: fontSize.sm, color: c.textMuted },
+  times: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    paddingVertical: spacing.md,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: c.separator,
+  },
+  half: { flex: 1, gap: 6, paddingHorizontal: spacing.xs },
+  halfLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  halfLabel: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },
+  halfValue: { fontSize: 34, fontWeight: '700', color: c.text, letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  halfValueEmpty: { color: c.textSubtle },
+  divider: { width: 1, backgroundColor: c.separator, marginHorizontal: spacing.lg },
+}));

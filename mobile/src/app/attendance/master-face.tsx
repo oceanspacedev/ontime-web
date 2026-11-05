@@ -3,15 +3,15 @@ import { useMutation } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, View } from 'react-native';
 
-import { Button, Card, Notice, Screen, text } from '@/components/ui';
+import { Button, Group, Notice, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { attendanceApi, errorMessage } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { prepareUpload } from '@/lib/image';
-import { colors, fontSize, radius, spacing } from '@/theme';
+import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface Picked {
   uri: string;
@@ -20,6 +20,8 @@ interface Picked {
 }
 
 export default function MasterFaceScreen() {
+  const styles = useStyles();
+  const { colors } = useTheme();
   const access = useAccess();
   const refreshUser = useRefreshUser();
   const [picked, setPicked] = useState<Picked | null>(null);
@@ -86,19 +88,24 @@ export default function MasterFaceScreen() {
         }
       />
 
-      <Card style={styles.photoCard}>
-        <Text style={text.strong}>{picked ? 'Foto baru' : 'Foto terdaftar'}</Text>
+      <Group title={picked ? 'Foto baru' : 'Foto terdaftar'} padded cardStyle={styles.photoCard}>
         {picked || current ? (
           <Image source={{ uri: picked?.uri ?? current ?? undefined }} style={styles.photo} contentFit="cover" />
         ) : (
           <View style={styles.placeholder}>
-            <Ionicons name="person-circle-outline" size={96} color={colors.textMuted} />
-            <Text style={text.muted}>Belum ada foto master wajah.</Text>
+            <View style={styles.placeholderIcon}>
+              <Ionicons name="person-outline" size={56} color={colors.textMuted} />
+            </View>
+            <Text style={styles.muted}>Belum ada foto master wajah.</Text>
           </View>
         )}
-        {!picked && access.masterFaceVerifiedAt ? <Text style={text.muted}>Didaftarkan {formatDateTime(access.masterFaceVerifiedAt)}</Text> : null}
-        {upload.isError ? <Notice tone="danger" message={errorMessage(upload.error)} /> : null}
-      </Card>
+        {!picked && access.masterFaceVerifiedAt ? <Text style={styles.muted}>Didaftarkan {formatDateTime(access.masterFaceVerifiedAt)}</Text> : null}
+        {upload.isError ? (
+          <View style={styles.fullWidth}>
+            <Notice tone="danger" message={errorMessage(upload.error)} />
+          </View>
+        ) : null}
+      </Group>
 
       <Text style={styles.tips}>Gunakan wajah menghadap depan, pencahayaan cukup, tanpa masker atau kacamata hitam.</Text>
 
@@ -108,21 +115,25 @@ export default function MasterFaceScreen() {
           <Button title="Simpan foto" icon="cloud-upload-outline" onPress={() => upload.mutate()} loading={upload.isPending} style={styles.flex} />
         </View>
       ) : (
-        <>
-          <Button title="Ambil dengan kamera" icon="camera-outline" onPress={() => pick('camera')} />
+        <View style={styles.actions}>
+          <Button title="Ambil dengan kamera" icon="camera-outline" size="lg" onPress={() => pick('camera')} />
           <Button title="Pilih dari galeri" icon="images-outline" variant="secondary" onPress={() => pick('library')} />
           {current ? <Button title="Hapus foto master wajah" icon="trash-outline" variant="danger" onPress={confirmRemove} loading={remove.isPending} /> : null}
-        </>
+        </View>
       )}
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  photoCard: { alignItems: 'center' },
-  photo: { width: 220, height: 220, borderRadius: radius.lg, backgroundColor: colors.graySoft },
-  placeholder: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.lg },
-  tips: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
+const useStyles = makeStyles((c) => ({
+  photoCard: { alignItems: 'center', gap: spacing.lg, paddingVertical: spacing.xl },
+  photo: { width: 220, height: 220, borderRadius: 28, backgroundColor: c.fill },
+  placeholder: { alignItems: 'center', gap: spacing.md, paddingVertical: spacing.lg },
+  placeholderIcon: { width: 112, height: 112, borderRadius: 56, backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center' },
+  muted: { fontSize: fontSize.sm, color: c.textMuted, textAlign: 'center' },
+  fullWidth: { alignSelf: 'stretch' },
+  tips: { fontSize: fontSize.sm, color: c.textMuted, textAlign: 'center', lineHeight: 20, paddingHorizontal: spacing.lg },
   row: { flexDirection: 'row', gap: spacing.sm },
   flex: { flex: 1 },
-});
+  actions: { gap: spacing.sm },
+}));

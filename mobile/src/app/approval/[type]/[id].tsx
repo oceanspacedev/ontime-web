@@ -1,15 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, View } from 'react-native';
 
 import { AttendanceDetail } from '@/components/AttendanceDetail';
 import { RequestDetail } from '@/components/RequestDetail';
 import type { AnyRequest } from '@/components/RequestRow';
-import { Button, Card, ErrorBanner, Field, LoadingView, Notice, Screen } from '@/components/ui';
+import { Button, ErrorBanner, Field, Group, LoadingView, Notice, Screen } from '@/components/ui';
 import { approvalsApi, attendanceApi, errorMessage, requestsApi, type ApprovalType, type Attendance } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
-import { spacing } from '@/theme';
+import { makeStyles, spacing } from '@/theme';
 
 const TYPES: ApprovalType[] = ['leave', 'overtime', 'correction', 'geofence', 'resignation'];
 
@@ -31,6 +31,7 @@ async function load(type: ApprovalType, id: number): Promise<Loaded> {
 }
 
 export default function ApprovalDetailScreen() {
+  const styles = useStyles();
   const params = useLocalSearchParams<{ type: string; id: string }>();
   const type = TYPES.find((value) => value === params.type) ?? null;
   const id = Number(params.id);
@@ -98,8 +99,15 @@ export default function ApprovalDetailScreen() {
   const status = item.data.status;
   const isPending = status === 'pending' || status === 'pending_approval';
 
+  const decisionActions = isPending ? (
+    <View style={styles.actions}>
+      <Button title="Tolak" variant="danger" icon="close" size="lg" onPress={reject} disabled={process.isPending} style={styles.action} />
+      <Button title="Setujui" icon="checkmark" size="lg" onPress={approve} loading={process.isPending} style={styles.action} />
+    </View>
+  ) : undefined;
+
   return (
-    <Screen onRefresh={() => query.refetch()}>
+    <Screen onRefresh={() => query.refetch()} footer={decisionActions}>
       {item.kind === 'geofence' ? (
         <>
           <Notice tone="warning" message="Presensi ini dilakukan di luar area kantor atau verifikasi wajahnya tidak cocok. Periksa foto dan lokasinya sebelum memutuskan." />
@@ -110,7 +118,7 @@ export default function ApprovalDetailScreen() {
       )}
 
       {isPending ? (
-        <Card>
+        <Group title="Keputusan" padded>
           <Field
             label="Catatan"
             value={note}
@@ -125,11 +133,7 @@ export default function ApprovalDetailScreen() {
             error={noteError}
             maxLength={1000}
           />
-          <View style={styles.actions}>
-            <Button title="Tolak" variant="danger" icon="close" onPress={reject} disabled={process.isPending} style={styles.action} />
-            <Button title="Setujui" icon="checkmark" onPress={approve} loading={process.isPending} style={styles.action} />
-          </View>
-        </Card>
+        </Group>
       ) : (
         <Notice tone="info" message="Pengajuan ini sudah tidak menunggu persetujuan." />
       )}
@@ -137,7 +141,7 @@ export default function ApprovalDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+const useStyles = makeStyles(() => ({
+  actions: { flexDirection: 'row', gap: spacing.sm },
   action: { flex: 1 },
-});
+}));

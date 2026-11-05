@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView } from 'react-native';
 
 import { AttendanceRow } from '@/components/AttendanceRow';
 import { type AnyRequest, RequestRow } from '@/components/RequestRow';
-import { Choice, EmptyState, ErrorBanner, LoadingView, Screen, SectionTitle } from '@/components/ui';
+import { Choice, EmptyState, ErrorBanner, Group, LoadingView, Screen } from '@/components/ui';
 import { approvalsApi, errorMessage, type ApprovalType } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
 import { queryKeys } from '@/lib/queryClient';
-import { spacing } from '@/theme';
+import { makeStyles, spacing } from '@/theme';
 
 type Filter = 'all' | ApprovalType;
 
@@ -22,16 +22,27 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: 'resignation', label: 'Resign' },
 ];
 
+const TITLE = 'Persetujuan';
+
+function pendingSubtitle(total: number): string {
+  return total === 0 ? 'Tidak ada yang menunggu' : `${total} pengajuan menunggu keputusan`;
+}
+
 export default function ApprovalsScreen() {
+  const styles = useStyles();
   const [filter, setFilter] = useState<Filter>('all');
   const pending = useQuery({ queryKey: queryKeys.approvals, queryFn: approvalsApi.pending });
 
   if (pending.isPending) {
-    return <LoadingView />;
+    return (
+      <Screen title={TITLE} scroll={false} style={styles.loading}>
+        <LoadingView />
+      </Screen>
+    );
   }
   if (pending.isError) {
     return (
-      <Screen>
+      <Screen title={TITLE} onRefresh={() => pending.refetch()}>
         <ErrorBanner message={errorMessage(pending.error)} onRetry={() => pending.refetch()} />
       </Screen>
     );
@@ -51,8 +62,11 @@ export default function ApprovalsScreen() {
     (show('geofence') ? data.geofence_attendances.length : 0);
 
   return (
-    <Screen onRefresh={() => pending.refetch()}>
-      <Choice options={FILTERS} value={filter} onChange={setFilter} />
+    <Screen title={TITLE} subtitle={pendingSubtitle(total)} onRefresh={() => pending.refetch()}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters} contentContainerStyle={styles.filtersContent}>
+        <Choice options={FILTERS} value={filter} onChange={setFilter} />
+      </ScrollView>
+
       {total === 0 ? (
         <EmptyState icon="checkmark-done-circle-outline" title="Tidak ada antrean" message="Semua pengajuan yang menjadi wewenang Anda sudah diproses." />
       ) : visibleCount === 0 ? (
@@ -61,18 +75,16 @@ export default function ApprovalsScreen() {
 
       {sections.map((section) =>
         show(section.type) && section.items.length > 0 ? (
-          <View key={section.type} style={styles.section}>
-            <SectionTitle title={`${section.title} (${section.items.length})`} />
+          <Group key={section.type} title={`${section.title} · ${section.items.length}`}>
             {section.items.map((item) => (
               <RequestRow key={item.data.id} item={item} showWorker href={{ pathname: '/approval/[type]/[id]' }} />
             ))}
-          </View>
+          </Group>
         ) : null,
       )}
 
       {show('geofence') && data.geofence_attendances.length > 0 ? (
-        <View style={styles.section}>
-          <SectionTitle title={`Presensi Luar Area (${data.geofence_attendances.length})`} />
+        <Group title={`Presensi Luar Area · ${data.geofence_attendances.length}`}>
           {data.geofence_attendances.map((attendance) => (
             <AttendanceRow
               key={attendance.id}
@@ -81,12 +93,16 @@ export default function ApprovalsScreen() {
               onPress={() => router.push({ pathname: '/approval/[type]/[id]', params: { type: 'geofence', id: String(attendance.id) } })}
             />
           ))}
-        </View>
+        </Group>
       ) : null}
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  section: { gap: spacing.sm },
-});
+const useStyles = makeStyles(() => ({
+  /** Lets the spinner centre in the space under the large title. */
+  loading: { flex: 1 },
+  /** Bleeds the chip strip to the screen edges so chips scroll under the padding. */
+  filters: { marginHorizontal: -spacing.lg, flexGrow: 0 },
+  filtersContent: { paddingHorizontal: spacing.lg },
+}));
