@@ -1,0 +1,58 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
+import { Tabs } from 'expo-router/js-tabs';
+import type { ColorValue } from 'react-native';
+
+import type { IconName } from '@/components/ui';
+import { useAccess } from '@/hooks/useAccess';
+import { approvalsApi } from '@/lib/api';
+import { countPending } from '@/lib/approvals';
+import { queryKeys } from '@/lib/queryClient';
+import { colors } from '@/theme';
+
+function tabIcon(active: IconName, inactive: IconName) {
+  const TabIcon = ({ color, focused }: { color: ColorValue; focused: boolean }) => (
+    <Ionicons name={focused ? active : inactive} size={22} color={typeof color === 'string' ? color : colors.textMuted} />
+  );
+  TabIcon.displayName = `TabIcon(${active})`;
+  return TabIcon;
+}
+
+export default function AppTabsLayout() {
+  const access = useAccess();
+  const pending = useQuery({
+    queryKey: queryKeys.approvals,
+    queryFn: approvalsApi.pending,
+    enabled: access.canApprove,
+    refetchInterval: 60 * 1000,
+  });
+  const pendingCount = countPending(pending.data);
+
+  return (
+    <Tabs
+      screenOptions={{
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+        headerStyle: { backgroundColor: colors.surface },
+        headerShadowVisible: false,
+        headerTitleStyle: { color: colors.text, fontWeight: '600' },
+        sceneStyle: { backgroundColor: colors.background },
+      }}>
+      <Tabs.Screen name="index" options={{ title: 'Beranda', headerShown: false, tabBarIcon: tabIcon('home', 'home-outline') }} />
+      <Tabs.Screen name="history" options={{ title: 'Riwayat', tabBarIcon: tabIcon('calendar', 'calendar-outline') }} />
+      <Tabs.Screen name="requests" options={{ title: 'Pengajuan', tabBarIcon: tabIcon('document-text', 'document-text-outline') }} />
+      <Tabs.Protected guard={access.canApprove}>
+        <Tabs.Screen
+          name="approvals"
+          options={{
+            title: 'Persetujuan',
+            tabBarIcon: tabIcon('checkmark-done-circle', 'checkmark-done-circle-outline'),
+            tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
+          }}
+        />
+      </Tabs.Protected>
+      <Tabs.Screen name="profile" options={{ title: 'Profil', tabBarIcon: tabIcon('person', 'person-outline') }} />
+    </Tabs>
+  );
+}
