@@ -15,6 +15,7 @@ use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Enums\Size;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class ApprovalSaya extends Page
@@ -148,7 +149,17 @@ class ApprovalSaya extends Page
         };
 
         if ($item) {
-            $service->approveStep($item, $user);
+            try {
+                $service->approveStep($item, $user);
+            } catch (ValidationException $exception) {
+                Notification::make()
+                    ->title('Pengajuan tidak bisa disetujui')
+                    ->body(collect($exception->errors())->flatten()->first())
+                    ->danger()
+                    ->send();
+
+                return;
+            }
 
             Notification::make()
                 ->title('Pengajuan Berhasil Disetujui')

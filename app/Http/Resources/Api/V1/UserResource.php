@@ -3,6 +3,7 @@
 namespace App\Http\Resources\Api\V1;
 
 use App\Models\Company;
+use App\Services\AnnualLeaveService;
 use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -12,6 +13,7 @@ class UserResource extends JsonResource
     public function toArray(Request $request): array
     {
         $profile = $this->employee ?? $this->intern ?? $this->freelancer;
+        $annualLeave = app(AnnualLeaveService::class);
         $masterFacePhoto = $profile?->master_face_photo ? $this->formatStorageUrl($profile->master_face_photo) : null;
         $masterFaceVerifiedAt = $profile?->master_face_verified_at?->toISOString();
 
@@ -42,6 +44,8 @@ class UserResource extends JsonResource
                     'id' => $this->employee->jobLevel->id,
                     'name' => $this->employee->jobLevel->name,
                 ] : null,
+                'has_annual_leave' => $annualLeave->isEligible($this->employee),
+                'annual_leave_quota' => $annualLeave->quota($this->employee),
             ] : null,
             'intern' => $this->intern ? [
                 'id' => $this->intern->id,

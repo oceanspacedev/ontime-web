@@ -6,7 +6,11 @@ use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\LeaveRequests\Pages\CreateLeaveRequest;
 use App\Filament\Resources\LeaveRequests\Pages\EditLeaveRequest;
 use App\Filament\Resources\LeaveRequests\Pages\ListLeaveRequests;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\LeaveRequest;
+use App\Services\AnnualLeaveService;
 use App\Services\ApprovalFlowService;
 use App\Services\FileNamingService;
 use BackedEnum;
@@ -30,6 +34,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\ValidationException;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use UnitEnum;
 
@@ -59,6 +64,20 @@ class LeaveRequestResource extends Resource
     public static function canViewAny(): bool
     {
         return true;
+    }
+
+    /**
+     * The worker the form is filed for: the record's worker when editing, otherwise the signed-in user.
+     */
+    public static function leaveWorker(?LeaveRequest $record): Employee|Intern|Freelancer|null
+    {
+        if ($record) {
+            return $record->getWorkerProfile();
+        }
+
+        $user = auth()->user();
+
+        return $user?->employee ?? $user?->intern ?? $user?->freelancer;
     }
 
     public static function canCreate(): bool
@@ -109,17 +128,16 @@ class LeaveRequestResource extends Resource
                             Select::make('leave_type')
                                 ->label('Jenis Pengajuan')
                                 ->options(function (?LeaveRequest $record): array {
-                                    $user = auth()->user();
-                                    $options = ($user?->freelancer || $user?->hasRole('Freelancer'))
-                                        ? [
-                                            'permission' => 'Izin Tidak Masuk',
-                                            'sick' => 'Sakit (Dengan/Tanpa Surat Dokter)',
-                                        ]
-                                        : [
-                                            LeaveRequest::TYPE_ANNUAL => 'Cuti Tahunan (Potong Kuota)',
-                                            'permission' => 'Izin Tidak Masuk',
-                                            'sick' => 'Sakit (Dengan/Tanpa Surat Dokter)',
-                                        ];
+                                    $options = [
+                                        LeaveRequest::TYPE_ANNUAL => 'Cuti Tahunan (Potong Kuota)',
+                                        'permission' => 'Izin Tidak Masuk',
+                                        'sick' => 'Sakit (Dengan/Tanpa Surat Dokter)',
+                                    ];
+
+                                    // Only employees HR gave annual leave see it; interns and freelancers never do.
+                                    if (! app(AnnualLeaveService::class)->isEligible(static::leaveWorker($record))) {
+                                        unset($options[LeaveRequest::TYPE_ANNUAL]);
+                                    }
 
                                     // Keep a type filed from the mobile app (e.g. maternity) selectable on edit.
                                     if ($record?->leave_type && ! isset($options[$record->leave_type])) {
@@ -128,11 +146,7 @@ class LeaveRequestResource extends Resource
 
                                     return $options;
                                 })
-                                ->default(function () {
-                                    $user = auth()->user();
-
-                                    return ($user?->freelancer || $user?->hasRole('Freelancer')) ? 'permission' : 'annual_leave';
-                                })
+                                ->default(fn (): string => app(AnnualLeaveService::class)->isEligible(static::leaveWorker(null)) ? LeaveRequest::TYPE_ANNUAL : 'permission')
                                 ->required()
                                 ->live(),
 
@@ -287,7 +301,17 @@ class LeaveRequestResource extends Resource
                     ->visible(fn (LeaveRequest $record) => $service->isUserAuthorizedToApprove($record, auth()->user()))
                     ->requiresConfirmation()
                     ->action(function (LeaveRequest $record) use ($service): void {
-                        $service->approveStep($record, auth()->user());
+                        try {
+                            $service->approveStep($record, auth()->user());
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa disetujui')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Approval Cuti Berhasil!')

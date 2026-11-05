@@ -30,6 +30,8 @@ class Employee extends Model
         'tax_status',
         'avatar_url',
         'join_date',
+        'has_annual_leave',
+        'annual_leave_quota',
         'status',
         'master_face_photo',
         'master_face_verified_at',
@@ -39,6 +41,8 @@ class Employee extends Model
     {
         return [
             'join_date' => 'date',
+            'has_annual_leave' => 'boolean',
+            'annual_leave_quota' => 'integer',
             'birth_date' => 'date',
             'master_face_verified_at' => 'datetime',
         ];

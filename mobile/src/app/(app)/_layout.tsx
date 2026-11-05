@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Tabs } from 'expo-router/js-tabs';
+import { useEffect } from 'react';
 import type { ColorValue } from 'react-native';
 
 import { FloatingTabBar } from '@/components/navigation';
 import { FloatingTabBarContext, type IconName } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
+import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { approvalsApi } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
 import { queryKeys } from '@/lib/queryClient';
@@ -22,6 +24,13 @@ function tabIcon(active: IconName, inactive: IconName) {
 export default function AppTabsLayout() {
   const access = useAccess();
   const { colors } = useTheme();
+  const { mutate: refreshUser } = useRefreshUser();
+
+  // The stored profile can be stale: HR may have changed roles, annual leave or attendance rules.
+  useEffect(() => {
+    refreshUser();
+  }, [refreshUser]);
+
   const pending = useQuery({
     queryKey: queryKeys.approvals,
     queryFn: approvalsApi.pending,

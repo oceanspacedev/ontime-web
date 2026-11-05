@@ -63,7 +63,7 @@ export default function RequestsScreen() {
         )
       ) : null}
 
-      {quota && access.profileKind !== 'freelancer' ? <LeaveQuota quota={quota} /> : null}
+      {quota && access.hasAnnualLeave && quota.eligible !== false ? <LeaveQuota quota={quota} /> : null}
 
       <Button title={`Ajukan ${REQUEST_KIND_LABEL[activeKind]}`} icon="add" size="lg" onPress={() => router.push(NEW_ROUTE[activeKind])} />
 

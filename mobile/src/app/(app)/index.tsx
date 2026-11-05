@@ -53,7 +53,7 @@ export default function HomeScreen() {
   const leaves = useQuery({
     queryKey: queryKeys.leaves,
     queryFn: () => requestsApi.leave.list(1),
-    enabled: access.canRequestLeave && access.profileKind !== 'freelancer',
+    enabled: access.canRequestLeave && access.hasAnnualLeave,
   });
   const pending = useQuery({
     queryKey: queryKeys.approvals,
@@ -84,7 +84,7 @@ export default function HomeScreen() {
   const mentor = user?.intern?.mentor ?? null;
   const supervisor = user?.freelancer?.supervisor ?? null;
   const guide = mentor ?? supervisor;
-  const quota = leaves.data?.quota_summary;
+  const quota = access.hasAnnualLeave && leaves.data?.quota_summary.eligible !== false ? leaves.data?.quota_summary : undefined;
   const quotaRatio = quota && quota.annual_leave_quota > 0 ? quota.remaining_days / quota.annual_leave_quota : 0;
 
   return (

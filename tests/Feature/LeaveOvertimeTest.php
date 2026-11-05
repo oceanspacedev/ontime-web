@@ -50,6 +50,7 @@ class LeaveOvertimeTest extends TestCase
             'nip' => 'EMP'.rand(100, 999),
             'full_name' => 'Test Employee',
             'join_date' => now(),
+            'has_annual_leave' => true,
             'status' => 'permanent',
         ]);
     }

@@ -85,6 +85,7 @@ class ApiEndpointsExtensionTest extends TestCase
             'nip' => 'EMP.EXT.001',
             'full_name' => 'Employee Extension Test',
             'join_date' => now()->toDateString(),
+            'has_annual_leave' => true,
             'status' => 'permanent',
         ]);
 

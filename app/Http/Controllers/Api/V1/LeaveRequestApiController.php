@@ -6,20 +6,18 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\StoreLeaveRequest;
 use App\Http\Requests\Api\V1\UpdateLeaveRequest;
 use App\Http\Resources\Api\V1\LeaveRequestResource;
-use App\Models\Freelancer;
-use App\Models\Intern;
 use App\Models\LeaveRequest;
+use App\Services\AnnualLeaveService;
 use App\Services\ApprovalFlowService;
 use App\Services\FileNamingService;
 use Carbon\Carbon;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class LeaveRequestApiController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(Request $request, AnnualLeaveService $annualLeave): JsonResponse
     {
         $user = $request->user();
         $employee = $user->employee;
@@ -30,11 +28,7 @@ class LeaveRequestApiController extends Controller
 
         if (! $profile) {
             return response()->json([
-                'quota_summary' => [
-                    'annual_leave_quota' => 0,
-                    'used_days' => 0,
-                    'remaining_days' => 0,
-                ],
+                'quota_summary' => $annualLeave->summary(null),
                 'data' => [],
                 'pagination' => [
                     'current_page' => 1,
@@ -43,9 +37,6 @@ class LeaveRequestApiController extends Controller
                 ],
             ]);
         }
-
-        $policy = $profile->company?->policy;
-        $maxQuota = $policy?->annual_leave_quota ?? 12;
 
         $query = LeaveRequest::query()->with(LeaveRequest::workerEagerLoads());
         if ($employee) {
@@ -56,22 +47,10 @@ class LeaveRequestApiController extends Controller
             $query->where('freelancer_id', $freelancer->id);
         }
 
-        $usedQuota = (int) (clone $query)
-            ->where('leave_type', LeaveRequest::TYPE_ANNUAL)
-            ->where('status', 'approved')
-            ->whereYear('start_date', now()->year)
-            ->sum('days_count');
-
-        $remaining = max(0, $maxQuota - $usedQuota);
-
         $requests = $query->withCount('approvalSteps')->latest()->paginate(15);
 
         return response()->json([
-            'quota_summary' => [
-                'annual_leave_quota' => $maxQuota,
-                'used_days' => $usedQuota,
-                'remaining_days' => $remaining,
-            ],
+            'quota_summary' => $annualLeave->summary($profile),
             'data' => LeaveRequestResource::collection($requests),
             'pagination' => [
                 'current_page' => $requests->currentPage(),
@@ -97,7 +76,7 @@ class LeaveRequestApiController extends Controller
         $endDate = Carbon::parse($request->input('end_date'));
         $daysCount = (int) $startDate->diffInDays($endDate) + 1;
 
-        if ($error = $this->annualLeaveError($profile, $request->input('leave_type'), $daysCount)) {
+        if ($error = app(AnnualLeaveService::class)->validationError($profile, $request->input('leave_type'), $daysCount)) {
             return response()->json(['message' => $error, 'errors' => ['leave_type' => [$error]]], 422);
         }
 
@@ -194,7 +173,7 @@ class LeaveRequestApiController extends Controller
             $data['days_count'] = (int) $start->diffInDays($end) + 1;
         }
 
-        if ($error = $this->annualLeaveError($profile, $data['leave_type'] ?? $leaveRequest->leave_type, (int) ($data['days_count'] ?? $leaveRequest->days_count))) {
+        if ($error = app(AnnualLeaveService::class)->updateError($leaveRequest, $data['leave_type'] ?? null, (int) ($data['days_count'] ?? $leaveRequest->days_count))) {
             return response()->json(['message' => $error, 'errors' => ['leave_type' => [$error]]], 422);
         }
 
@@ -257,34 +236,5 @@ class LeaveRequestApiController extends Controller
         return response()->json([
             'message' => 'Pengajuan cuti berhasil dibatalkan.',
         ]);
-    }
-
-    /**
-     * Why an annual leave cannot be filed, or null. Same rules as the panel: freelancers have no
-     * annual leave, and approved annual leave this year plus this request must fit the company quota.
-     */
-    private function annualLeaveError(Model $profile, ?string $leaveType, int $daysCount): ?string
-    {
-        if ($leaveType !== LeaveRequest::TYPE_ANNUAL) {
-            return null;
-        }
-
-        if ($profile instanceof Freelancer) {
-            return 'Freelancer tidak dapat mengajukan cuti tahunan. Gunakan jenis Izin.';
-        }
-
-        $column = $profile instanceof Intern ? 'intern_id' : 'employee_id';
-        $maxQuota = $profile->company?->policy?->annual_leave_quota ?? 12;
-        $usedQuota = (int) LeaveRequest::query()
-            ->where($column, $profile->getKey())
-            ->where('leave_type', LeaveRequest::TYPE_ANNUAL)
-            ->where('status', 'approved')
-            ->whereYear('start_date', now()->year)
-            ->sum('days_count');
-        $remaining = $maxQuota - $usedQuota;
-
-        return $daysCount > $remaining
-            ? "Kuota cuti tahunan Anda tidak mencukupi (Sisa: {$remaining} hari, Pengajuan: {$daysCount} hari)."
-            : null;
     }
 }
