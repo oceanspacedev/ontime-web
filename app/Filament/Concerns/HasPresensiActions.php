@@ -347,7 +347,7 @@ trait HasPresensiActions
         $attendance->update($updateData);
 
         if ($requiresApproval) {
-            if ($attendance->approvalSteps()->count() === 0) {
+            if ($attendance->needsNewApprovalRound()) {
                 app(ApprovalFlowService::class)->generateSteps($attendance, 'geofence');
             }
 

@@ -46,7 +46,7 @@ class AttendanceApiController extends Controller
 
         $isOutOfBounds = false;
         if ($policy?->require_gps) {
-            if (! $lat || ! $lng) {
+            if ($lat === null || $lng === null) {
                 return response()->json(['message' => 'Lokasi GPS wajib diisi.'], 422);
             }
 
@@ -59,7 +59,9 @@ class AttendanceApiController extends Controller
             }
         }
 
-        if ($policy?->require_photo && ! $request->hasFile('photo')) {
+        $isPhotoNeeded = ($policy?->require_photo || $policy?->require_face_recognition);
+
+        if ($isPhotoNeeded && ! $request->hasFile('photo')) {
             return response()->json(['message' => 'Foto selfie absensi wajib diunggah.'], 422);
         }
 
@@ -85,9 +87,13 @@ class AttendanceApiController extends Controller
         $faceFailedAndRequiresApproval = false;
 
         if ($policy?->require_face_recognition) {
+            if (empty($profile->master_face_photo)) {
+                return response()->json(['message' => 'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.'], 422);
+            }
+
             $faceResult = app(FaceRecognitionService::class)->verifyFace(
                 $photoPath,
-                $profile->master_face_photo ?? null,
+                $profile->master_face_photo,
                 $policy
             );
 
@@ -100,9 +106,9 @@ class AttendanceApiController extends Controller
                     return response()->json([
                         'message' => 'Verifikasi Face Recognition Gagal: '.$faceVerificationNotes,
                     ], 422);
-                } else {
-                    $faceFailedAndRequiresApproval = true;
                 }
+
+                $faceFailedAndRequiresApproval = true;
             }
         }
 
@@ -184,7 +190,7 @@ class AttendanceApiController extends Controller
 
         $isOutOfBounds = false;
         if ($policy?->require_gps) {
-            if (! $lat || ! $lng) {
+            if ($lat === null || $lng === null) {
                 return response()->json(['message' => 'Lokasi GPS wajib diisi.'], 422);
             }
 
@@ -197,7 +203,9 @@ class AttendanceApiController extends Controller
             }
         }
 
-        if ($policy?->require_photo && ! $request->hasFile('photo')) {
+        $isPhotoNeeded = ($policy?->require_photo || $policy?->require_face_recognition);
+
+        if ($isPhotoNeeded && ! $request->hasFile('photo')) {
             return response()->json(['message' => 'Foto selfie absensi wajib diunggah.'], 422);
         }
 
@@ -217,31 +225,69 @@ class AttendanceApiController extends Controller
             );
         }
 
+        $isFaceVerified = null;
+        $faceMatchScore = null;
+        $faceVerificationNotes = null;
+        $faceFailedAndRequiresApproval = false;
+
+        if ($policy?->require_face_recognition) {
+            if (empty($profile->master_face_photo)) {
+                return response()->json(['message' => 'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.'], 422);
+            }
+
+            $faceResult = app(FaceRecognitionService::class)->verifyFace(
+                $photoPath,
+                $profile->master_face_photo,
+                $policy
+            );
+
+            $isFaceVerified = $faceResult['is_matched'];
+            $faceMatchScore = $faceResult['score'];
+            $faceVerificationNotes = $faceResult['notes'];
+
+            if (! $isFaceVerified) {
+                if ($policy->face_fail_action === 'reject') {
+                    return response()->json([
+                        'message' => 'Verifikasi Face Recognition Gagal: '.$faceVerificationNotes,
+                    ], 422);
+                }
+
+                $faceFailedAndRequiresApproval = true;
+            }
+        }
+
+        $requiresApproval = $isOutOfBounds || $faceFailedAndRequiresApproval;
+
         $updateData = [
             'check_out' => now()->toTimeString(),
             'check_out_lat' => $lat,
             'check_out_lng' => $lng,
             'check_out_photo' => $photoPath,
+            'is_face_verified' => $isFaceVerified ?? $attendance->is_face_verified,
+            'face_match_score' => $faceMatchScore ?? $attendance->face_match_score,
+            'face_verification_notes' => $faceVerificationNotes ?? $attendance->face_verification_notes,
         ];
 
-        if ($isOutOfBounds) {
-            $updateData['is_out_of_bounds'] = true;
+        if ($requiresApproval) {
+            $updateData['is_out_of_bounds'] = $isOutOfBounds || $attendance->is_out_of_bounds;
             $updateData['status'] = AttendanceStatus::PendingApproval;
         }
 
         $attendance->update($updateData);
 
-        if ($isOutOfBounds) {
-            if ($attendance->approvalSteps()->count() === 0) {
-                app(ApprovalFlowService::class)->generateSteps($attendance, 'geofence');
-            }
+        if ($requiresApproval && $attendance->needsNewApprovalRound()) {
+            app(ApprovalFlowService::class)->generateSteps($attendance, 'geofence');
         }
 
+        $pendingReason = $faceFailedAndRequiresApproval
+            ? 'karena verifikasi wajah tidak cocok'
+            : 'karena di luar geofence';
+
         return response()->json([
-            'message' => $isOutOfBounds
-                ? 'Check out berhasil dicatat dan sedang menunggu persetujuan atasan karena di luar geofence.'
+            'message' => $requiresApproval
+                ? "Check out berhasil dicatat dan sedang menunggu persetujuan atasan {$pendingReason}."
                 : 'Check out berhasil',
-            'attendance' => new AttendanceResource($attendance),
+            'attendance' => new AttendanceResource($attendance->fresh()),
         ]);
     }
 
