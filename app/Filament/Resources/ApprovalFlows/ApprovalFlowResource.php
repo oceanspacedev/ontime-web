@@ -171,16 +171,6 @@ class ApprovalFlowResource extends Resource
                     'approver_type' => 'role',
                     'approver_role' => 'Approver',
                 ],
-                [
-                    'name' => 'Persetujuan BOD',
-                    'approver_type' => 'role',
-                    'approver_role' => 'BOD',
-                ],
-                [
-                    'name' => 'Persetujuan Akhir Superadmin',
-                    'approver_type' => 'role',
-                    'approver_role' => 'Superadmin',
-                ],
             ])
             ->minItems(1)
             ->validationMessages([

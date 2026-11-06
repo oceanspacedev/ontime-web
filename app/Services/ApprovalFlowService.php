@@ -82,8 +82,9 @@ class ApprovalFlowService
     }
 
     /**
-     * Give a company without any approval flow the default stages: Approver, BOD, then Superadmin
-     * for leave, overtime, correction and resignation, and a single Approver stage for geofence.
+     * Give a company without any approval flow the default: one Approver stage per request type, the
+     * person responsible for the worker's division. Companies that need BOD or more stages add them
+     * in Alur Persetujuan.
      */
     public function createDefaultFlows(Company $company): void
     {
@@ -91,32 +92,17 @@ class ApprovalFlowService
             return;
         }
 
-        $labels = collect(self::REQUEST_TYPE_LABELS)->except('geofence')->all();
-        $stages = [['Approver', 'Persetujuan Approver'], ['BOD', 'Persetujuan BOD'], ['Superadmin', 'Persetujuan Akhir Superadmin']];
-
-        foreach ($labels as $requestType => $label) {
-            foreach ($stages as $index => [$role, $stageName]) {
-                ApprovalFlow::create([
-                    'company_id' => $company->id,
-                    'request_type' => $requestType,
-                    'step_number' => $index + 1,
-                    'step_order' => $index + 1,
-                    'name' => "{$stageName} {$label}",
-                    'approver_type' => 'role',
-                    'approver_role' => $role,
-                ]);
-            }
+        foreach (self::REQUEST_TYPE_LABELS as $requestType => $label) {
+            ApprovalFlow::create([
+                'company_id' => $company->id,
+                'request_type' => $requestType,
+                'step_number' => 1,
+                'step_order' => 1,
+                'name' => "Persetujuan {$label}",
+                'approver_type' => 'role',
+                'approver_role' => 'Approver',
+            ]);
         }
-
-        ApprovalFlow::create([
-            'company_id' => $company->id,
-            'request_type' => 'geofence',
-            'step_number' => 1,
-            'step_order' => 1,
-            'name' => 'Persetujuan Presensi Luar Geofence',
-            'approver_type' => 'role',
-            'approver_role' => 'Approver',
-        ]);
     }
 
     /**

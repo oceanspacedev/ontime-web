@@ -89,7 +89,7 @@ class CompanyAdminAccessTest extends TestCase
         $this->assertFalse($service->isUserAuthorizedToApprove($leaveCs, $this->admin));
 
         $service->approveStep($leaveTop, $this->admin);
-        $this->assertSame(2, $leaveTop->fresh()->current_step);
+        $this->assertSame('approved', $leaveTop->fresh()->status, 'The default flow has a single stage.');
     }
 
     public function test_company_admin_cannot_hand_out_superadmin_or_admin_roles(): void

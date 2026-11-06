@@ -33,9 +33,8 @@ class CompanyDefaultApprovalFlowTest extends TestCase
 
         $flows = ApprovalFlow::where('company_id', Company::where('code', 'BARU')->value('id'))->get();
 
-        $this->assertSame(13, $flows->count());
-        $this->assertSame(['Approver', 'BOD', 'Superadmin'], $flows->where('request_type', 'leave')->sortBy('step_order')->pluck('approver_role')->values()->all());
-        $this->assertSame(['Approver'], $flows->where('request_type', 'geofence')->pluck('approver_role')->values()->all());
+        $this->assertSame(['correction', 'geofence', 'leave', 'overtime', 'resignation'], $flows->pluck('request_type')->sort()->values()->all(), 'One stage per request type.');
+        $this->assertSame(['Approver'], $flows->pluck('approver_role')->unique()->values()->all());
     }
 
     public function test_workers_of_a_company_with_default_flows_can_file_requests(): void
@@ -62,6 +61,27 @@ class CompanyDefaultApprovalFlowTest extends TestCase
         ])->assertCreated();
     }
 
+    public function test_companies_on_the_old_three_stage_default_are_trimmed_to_one_stage(): void
+    {
+        $company = Company::create(['name' => 'PT Lama', 'code' => 'LAMA', 'is_active' => true]);
+        foreach (['leave', 'overtime'] as $type) {
+            foreach (['Approver', 'BOD', 'Superadmin'] as $index => $role) {
+                ApprovalFlow::create(['company_id' => $company->id, 'request_type' => $type, 'step_number' => $index + 1, 'step_order' => $index + 1, 'name' => "{$role} {$type}", 'approver_type' => 'role', 'approver_role' => $role]);
+            }
+        }
+        foreach (['Approver', 'BOD'] as $index => $role) {
+            ApprovalFlow::create(['company_id' => $company->id, 'request_type' => 'correction', 'step_number' => $index + 1, 'step_order' => $index + 1, 'name' => "Custom {$role}", 'approver_type' => 'role', 'approver_role' => $role]);
+        }
+
+        (require database_path('migrations/2026_11_06_161246_trim_default_approval_flows_to_a_single_approver_stage.php'))->up();
+
+        $roles = fn (string $type): array => ApprovalFlow::where('company_id', $company->id)->where('request_type', $type)->orderBy('step_order')->pluck('approver_role')->all();
+        $this->assertSame(['Approver'], $roles('leave'));
+        $this->assertSame(['Approver'], $roles('overtime'));
+        $this->assertSame('Persetujuan Cuti / Izin', ApprovalFlow::where('company_id', $company->id)->where('request_type', 'leave')->value('name'));
+        $this->assertSame(['Approver', 'BOD'], $roles('correction'), 'A customised flow is left alone.');
+    }
+
     public function test_existing_flows_are_never_duplicated(): void
     {
         $company = Company::create(['name' => 'PT Baru', 'code' => 'BARU', 'is_active' => true]);
@@ -70,6 +90,6 @@ class CompanyDefaultApprovalFlowTest extends TestCase
         $service->createDefaultFlows($company);
         $service->createDefaultFlows($company);
 
-        $this->assertSame(13, ApprovalFlow::where('company_id', $company->id)->count());
+        $this->assertSame(5, ApprovalFlow::where('company_id', $company->id)->count());
     }
 }

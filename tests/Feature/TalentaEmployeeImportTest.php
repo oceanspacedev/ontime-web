@@ -76,7 +76,7 @@ class TalentaEmployeeImportTest extends TestCase
         $this->assertSame('TOKO MAS AN AN', $newcomer->division->name);
         $this->assertSame('SALES TOKO', $newcomer->jobTitle->name);
         $this->assertSame('TEAM LEADER', $newcomer->jobLevel->name);
-        $this->assertSame(13, ApprovalFlow::where('company_id', $company->id)->count(), 'New companies get the default approval flows.');
+        $this->assertSame(5, ApprovalFlow::where('company_id', $company->id)->count(), 'New companies get the default approval flows.');
     }
 
     public function test_dry_run_changes_nothing(): void

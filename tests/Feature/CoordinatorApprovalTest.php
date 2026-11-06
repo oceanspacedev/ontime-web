@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\DataScope;
+use App\Models\ApprovalFlow;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Freelancer;
@@ -36,7 +37,9 @@ class CoordinatorApprovalTest extends TestCase
 
         $this->service = app(ApprovalFlowService::class);
         $this->company = Company::create(['name' => 'PT Franchise', 'code' => 'PFC', 'is_active' => true]);
-        $this->service->createDefaultFlows($this->company);
+        foreach (['Approver', 'BOD', 'Superadmin'] as $index => $role) {
+            ApprovalFlow::create(['company_id' => $this->company->id, 'request_type' => 'leave', 'step_number' => $index + 1, 'step_order' => $index + 1, 'name' => $role, 'approver_type' => 'role', 'approver_role' => $role]);
+        }
         $this->jchicken = Division::create(['company_id' => $this->company->id, 'name' => 'JCHICKEN', 'is_active' => true]);
         $this->momoyo = Division::create(['company_id' => $this->company->id, 'name' => 'MOMOYO', 'is_active' => true]);
     }
