@@ -46,7 +46,7 @@ final class OutletRosterService
      *     counts: array<string, int>,
      *     entries: list<array{
      *         schedule_id: int,
-     *         worker: array{type: string, id: int, number: string, name: string},
+     *         worker: array{type: string, id: int, company_id: int, number: string, name: string},
      *         shift: array{id: int, name: string, code: string|null, label: string, start_time: string, end_time: string}|null,
      *         section: string|null,
      *         state: string,
@@ -133,7 +133,7 @@ final class OutletRosterService
 
         return [
             'schedule_id' => (int) $schedule->id,
-            'worker' => ['type' => $type, 'id' => (int) $worker->getKey(), 'number' => (string) $number, 'name' => (string) $worker->full_name],
+            'worker' => ['type' => $type, 'id' => (int) $worker->getKey(), 'company_id' => (int) $worker->company_id, 'number' => (string) $number, 'name' => (string) $worker->full_name],
             'shift' => $shift ? [
                 'id' => (int) $shift->id,
                 'name' => $shift->name,
@@ -142,6 +142,7 @@ final class OutletRosterService
                 'start_time' => substr((string) $shift->start_time, 0, 5),
                 'end_time' => substr((string) $shift->end_time, 0, 5),
             ] : null,
+            'location_id' => $schedule->company_location_id,
             'section' => $schedule->section,
             'state' => $this->state($schedule, $attendance),
             'check_in' => $attendance?->check_in?->format('H:i'),

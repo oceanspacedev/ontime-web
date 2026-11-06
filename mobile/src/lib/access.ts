@@ -31,6 +31,8 @@ export interface Access {
   canResign: boolean;
   canSeeLeaveCalendar: boolean;
   canApprove: boolean;
+  /** Runs a team from the Tim tab: roster per outlet, schedules and freelancers. */
+  canManageTeam: boolean;
   isSuperadmin: boolean;
   /** HR gave this employee annual leave; never true for interns and freelancers. */
   hasAnnualLeave: boolean;
@@ -51,7 +53,7 @@ export function deriveAccess(user: User | null): Access {
 
   const isSuperadmin = hasRole('Superadmin');
   const isWorkerRole = hasRole('Employee') || hasRole('Intern') || hasRole('Freelancer');
-  const isApproverRole = hasRole('Approver') || hasRole('BOD') || hasRole('Admin') || isSuperadmin;
+  const isApproverRole = hasRole('Approver') || hasRole('BOD') || hasRole('Admin') || hasRole('Koordinator') || isSuperadmin;
 
   const profile = user?.employee ?? user?.intern ?? user?.freelancer ?? null;
   const profileKind: ProfileKind | null = user?.employee ? 'employee' : user?.intern ? 'intern' : user?.freelancer ? 'freelancer' : null;
@@ -80,6 +82,7 @@ export function deriveAccess(user: User | null): Access {
     canResign: profileKind === 'employee' && requestAllowed('Create:Resignation'),
     canSeeLeaveCalendar: !hasRole('Intern') || isApproverRole,
     canApprove: isApproverRole,
+    canManageTeam: user?.access?.can_manage_team === true,
     isSuperadmin,
     hasAnnualLeave,
     leaveTypes,

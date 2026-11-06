@@ -1,6 +1,7 @@
 export type RoleName =
   | 'Superadmin'
   | 'Admin'
+  | 'Koordinator'
   | 'BOD'
   | 'Approver'
   | 'Employee'
@@ -122,6 +123,8 @@ export interface User {
   master_face_verified_at: string | null;
   roles: RoleName[];
   permissions: string[];
+  /** Missing on servers older than the team feature. */
+  access?: UserAccess;
   employee: EmployeeProfile | null;
   intern: InternProfile | null;
   freelancer: FreelancerProfile | null;
@@ -374,4 +377,111 @@ export interface UploadFile {
   uri: string;
   name: string;
   type: string;
+}
+
+export interface UserAccess {
+  /** Runs a team: roster, schedules and freelancers (Koordinator, Admin, Superadmin). */
+  can_manage_team: boolean;
+  is_coordinator: boolean;
+}
+
+export type WorkerType = 'employee' | 'intern' | 'freelancer';
+
+export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum' | 'libur';
+
+export interface RosterEntry {
+  schedule_id: number;
+  worker: { type: WorkerType; id: number; company_id: number; number: string; name: string };
+  shift: { id: number; name: string; code: string | null; label: string; start_time: string; end_time: string } | null;
+  location_id: number | null;
+  section: string | null;
+  state: RosterState;
+  check_in: string | null;
+  check_out: string | null;
+  late_minutes: number;
+}
+
+export interface RosterOutlet {
+  location: { id: number; name: string } | null;
+  counts: { scheduled: number } & Record<RosterState, number>;
+  entries: RosterEntry[];
+}
+
+export interface TeamRoster {
+  date: string;
+  outlets: RosterOutlet[];
+}
+
+export interface TeamShift {
+  id: number;
+  name: string;
+  code: string | null;
+  brand: string | null;
+  label: string;
+  start_time: string;
+  end_time: string;
+}
+
+export interface TeamOutlet {
+  id: number;
+  name: string;
+  brand: string | null;
+}
+
+export interface TeamCompany {
+  id: number;
+  name: string;
+  outlets: TeamOutlet[];
+  shifts: TeamShift[];
+  sections: string[];
+}
+
+export interface TeamOptions {
+  companies: TeamCompany[];
+}
+
+export interface TeamWorker {
+  type: WorkerType;
+  id: number;
+  company_id: number;
+  number: string;
+  name: string;
+}
+
+export type ScheduleMode = 'shift' | 'off' | 'clear';
+
+export interface ScheduleChange {
+  worker_type: WorkerType;
+  worker_id: number;
+  date: string;
+  mode: ScheduleMode;
+  shift_id?: number | null;
+  company_location_id?: number | null;
+  section?: string | null;
+}
+
+export interface TeamFreelancer {
+  id: number;
+  number: string;
+  name: string;
+  phone: string | null;
+  brand: string | null;
+  status: string;
+  is_active: boolean;
+  has_account: boolean;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+export interface NewFreelancer {
+  full_name: string;
+  phone: string;
+  company_location_id: number | null;
+  start_date: string;
+}
+
+export interface NewFreelancerResponse {
+  message: string;
+  data: TeamFreelancer;
+  account: { email: string; password: string; whatsapp_sent: boolean; whatsapp_url: string | null } | null;
 }

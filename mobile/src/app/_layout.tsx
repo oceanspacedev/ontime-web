@@ -114,6 +114,9 @@ export default function RootLayout() {
             <Stack.Screen name="request/resignation/new" options={{ title: 'Pengunduran Diri' }} />
             <Stack.Screen name="request/[type]/[id]" options={{ title: 'Detail Pengajuan' }} />
             <Stack.Screen name="approval/[type]/[id]" options={{ title: 'Proses Persetujuan' }} />
+            <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />
+            <Stack.Screen name="team/freelancers" options={{ title: 'Freelancer' }} />
+            <Stack.Screen name="team/freelancer/new" options={{ title: 'Tambah Freelancer' }} />
             <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
           </Stack.Protected>
 

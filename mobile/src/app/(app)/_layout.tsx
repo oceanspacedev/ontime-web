@@ -60,6 +60,9 @@ export default function AppTabsLayout() {
             }}
           />
         </Tabs.Protected>
+        <Tabs.Protected guard={access.canManageTeam}>
+          <Tabs.Screen name="team" options={{ title: 'Tim', tabBarIcon: tabIcon('people', 'people-outline') }} />
+        </Tabs.Protected>
         <Tabs.Screen name="profile" options={{ title: 'Profil', tabBarIcon: tabIcon('person-circle', 'person-circle-outline') }} />
       </Tabs>
     </FloatingTabBarContext.Provider>
