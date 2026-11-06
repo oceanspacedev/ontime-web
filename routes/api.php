@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\OvertimeRequestApiController;
 use App\Http\Controllers\Api\V1\ReportAndCalendarApiController;
 use App\Http\Controllers\Api\V1\ResignationApiController;
 use App\Http\Controllers\Api\V1\ShieldApiController;
+use App\Http\Controllers\Api\V1\TeamApiController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/webhooks/employees', [EmployeeWebhookController::class, 'handle']);
@@ -78,6 +79,16 @@ Route::prefix('v1')->group(function () {
         // Approval Actions
         Route::get('/approvals/pending', [ApprovalApiController::class, 'pending']);
         Route::put('/approvals/{type}/{id}/process', [ApprovalApiController::class, 'process']);
+
+        // Team (Koordinator / Admin): roster per outlet, schedules and freelancers
+        Route::get('/team/roster', [TeamApiController::class, 'roster']);
+        Route::get('/team/options', [TeamApiController::class, 'options']);
+        Route::get('/team/workers', [TeamApiController::class, 'workers']);
+        Route::put('/team/schedules', [TeamApiController::class, 'updateSchedule']);
+        Route::get('/team/freelancers', [TeamApiController::class, 'freelancers']);
+        Route::post('/team/freelancers', [TeamApiController::class, 'storeFreelancer']);
+        Route::post('/team/freelancers/{id}/end', [TeamApiController::class, 'endFreelancer'])->whereNumber('id');
+        Route::post('/team/freelancers/{id}/reactivate', [TeamApiController::class, 'reactivateFreelancer'])->whereNumber('id');
 
         // Master Data APIs
         Route::get('/master/companies', [MasterDataApiController::class, 'companies'])->middleware('can:ViewAny:Company');

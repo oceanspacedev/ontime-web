@@ -1,0 +1,267 @@
+<?php
+
+namespace App\Http\Controllers\Api\V1;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\StoreTeamFreelancerRequest;
+use App\Http\Requests\Api\V1\UpdateTeamScheduleRequest;
+use App\Models\CompanyLocation;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
+use App\Models\Shift;
+use App\Models\User;
+use App\Services\DataAccessService;
+use App\Services\OutletRosterService;
+use App\Services\SchedulingOptions;
+use App\Services\ShiftAssignmentService;
+use App\Services\WorkerAccountService;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
+
+/**
+ * The coordinator's day in the app: today's roster per outlet, changing one schedule, and taking
+ * freelancers on or letting them go. Everything stays inside the user's data access and brands.
+ */
+class TeamApiController extends Controller
+{
+    /** @var array<string, array{model: class-string, code: string}> */
+    private const WORKER_TYPES = [
+        'employee' => ['model' => Employee::class, 'code' => 'nip'],
+        'intern' => ['model' => Intern::class, 'code' => 'nis'],
+        'freelancer' => ['model' => Freelancer::class, 'code' => 'freelancer_number'],
+    ];
+
+    public function __construct(
+        private readonly SchedulingOptions $options,
+        private readonly WorkerAccountService $accounts,
+    ) {}
+
+    public function roster(Request $request, OutletRosterService $roster): JsonResponse
+    {
+        $user = $this->manager($request);
+        $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']]);
+        $date = Carbon::parse($validated['date'] ?? today()->toDateString());
+
+        return response()->json([
+            'date' => $date->toDateString(),
+            'outlets' => $roster->roster($user, $date),
+        ]);
+    }
+
+    public function options(Request $request): JsonResponse
+    {
+        $user = $this->manager($request);
+
+        return response()->json([
+            'companies' => $this->options->companies($user)->map(fn ($company): array => [
+                'id' => (int) $company->id,
+                'name' => $company->name,
+                'outlets' => $this->options->locations($user, $company->id)->map(fn (CompanyLocation $location): array => [
+                    'id' => (int) $location->id,
+                    'name' => $location->name,
+                    'brand' => $location->division?->name,
+                ])->values(),
+                'shifts' => $this->options->shifts($user, $company->id)->map(fn (Shift $shift): array => [
+                    'id' => (int) $shift->id,
+                    'name' => $shift->name,
+                    'code' => $shift->code,
+                    'brand' => $shift->division?->name,
+                    'label' => $shift->label(),
+                    'start_time' => substr((string) $shift->start_time, 0, 5),
+                    'end_time' => substr((string) $shift->end_time, 0, 5),
+                ])->values(),
+                'sections' => $this->options->sections($user, $company->id),
+            ])->values(),
+        ]);
+    }
+
+    /**
+     * Active workers in the user's data access, for picking someone to schedule.
+     */
+    public function workers(Request $request): JsonResponse
+    {
+        $user = $this->manager($request);
+        $search = trim((string) $request->query('search', ''));
+        $workers = collect();
+
+        foreach (self::WORKER_TYPES as $type => $definition) {
+            DataAccessService::scopeWorkers($definition['model']::query(), $user, includeOwn: false)
+                ->whereNotIn('status', WorkerAccountService::ENDED_STATUSES)
+                ->when($search !== '', fn (Builder $query) => $query->where(fn (Builder $match) => $match
+                    ->where('full_name', 'like', "%{$search}%")
+                    ->orWhere($definition['code'], 'like', "%{$search}%")))
+                ->orderBy('full_name')
+                ->limit(50)
+                ->get(['id', 'company_id', 'full_name', $definition['code']])
+                ->each(fn ($worker) => $workers->push([
+                    'type' => $type,
+                    'id' => (int) $worker->id,
+                    'company_id' => (int) $worker->company_id,
+                    'number' => (string) $worker->{$definition['code']},
+                    'name' => $worker->full_name,
+                ]));
+        }
+
+        return response()->json(['data' => $workers->sortBy('name')->values()->take(50)]);
+    }
+
+    public function updateSchedule(UpdateTeamScheduleRequest $request, ShiftAssignmentService $assignments): JsonResponse
+    {
+        $data = $request->validated();
+        $worker = $this->findWorker($request->user(), $data['worker_type'], (int) $data['worker_id']);
+
+        $schedule = $assignments->assignDay(
+            $request->user(),
+            $worker,
+            $data['date'],
+            $data['mode'],
+            isset($data['shift_id']) ? (int) $data['shift_id'] : null,
+            isset($data['company_location_id']) ? (int) $data['company_location_id'] : null,
+            $data['section'] ?? null,
+        );
+
+        return response()->json([
+            'message' => $schedule ? 'Jadwal disimpan.' : 'Jadwal dihapus.',
+            'data' => $schedule ? [
+                'id' => (int) $schedule->id,
+                'date' => $schedule->date->toDateString(),
+                'is_day_off' => $schedule->is_day_off,
+                'shift_id' => $schedule->shift_id,
+                'company_location_id' => $schedule->company_location_id,
+                'section' => $schedule->section,
+            ] : null,
+        ]);
+    }
+
+    public function freelancers(Request $request): JsonResponse
+    {
+        $user = $this->manager($request);
+        $status = $request->query('status', 'active');
+        $search = trim((string) $request->query('search', ''));
+
+        $freelancers = DataAccessService::scopeWorkers(Freelancer::query()->with('division'), $user, includeOwn: false)
+            ->when($status === 'ended', fn (Builder $query) => $query->whereIn('status', WorkerAccountService::ENDED_STATUSES))
+            ->when($status !== 'ended', fn (Builder $query) => $query->whereNotIn('status', WorkerAccountService::ENDED_STATUSES))
+            ->when($search !== '', fn (Builder $query) => $query->where(fn (Builder $match) => $match
+                ->where('full_name', 'like', "%{$search}%")
+                ->orWhere('freelancer_number', 'like', "%{$search}%")
+                ->orWhere('phone', 'like', "%{$search}%")))
+            ->orderBy('full_name')
+            ->paginate(30);
+
+        return response()->json([
+            'data' => collect($freelancers->items())->map(fn (Freelancer $freelancer): array => $this->freelancerData($freelancer))->values(),
+            'pagination' => [
+                'current_page' => $freelancers->currentPage(),
+                'last_page' => $freelancers->lastPage(),
+                'total' => $freelancers->total(),
+            ],
+        ]);
+    }
+
+    public function storeFreelancer(StoreTeamFreelancerRequest $request): JsonResponse
+    {
+        $user = $request->user();
+        $data = $request->validated();
+        $outlet = CompanyLocation::query()->find($data['company_location_id']);
+
+        if (! $outlet || ! $this->options->locations($user, $outlet->company_id)->contains('id', $outlet->id)) {
+            return $this->fieldError('company_location_id', 'Outlet ini tidak bisa dipilih.');
+        }
+
+        if (! $outlet->division_id || ! $user->canManagePlacement($outlet->company_id, $outlet->division_id)) {
+            return $this->fieldError('company_location_id', 'Outlet ini belum punya brand. Minta admin mengisinya di Lokasi & Cabang.');
+        }
+
+        $freelancer = DB::transaction(fn (): Freelancer => Freelancer::create([
+            'company_id' => $outlet->company_id,
+            'division_id' => $outlet->division_id,
+            'full_name' => $data['full_name'],
+            'phone' => $data['phone'],
+            'start_date' => $data['start_date'] ?? today()->toDateString(),
+            'status' => 'active',
+        ]));
+
+        try {
+            $account = $this->accounts->createAccount($freelancer);
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => "Freelancer disimpan, tapi akun belum dibuat: {$exception->getMessage()}",
+                'data' => $this->freelancerData($freelancer->fresh(['division'])),
+                'account' => null,
+            ], 201);
+        }
+
+        return response()->json([
+            'message' => $account['whatsapp']['api_sent'] ? 'Freelancer ditambahkan. Akun terkirim lewat WhatsApp.' : 'Freelancer ditambahkan. Kirim akun ini ke freelancer.',
+            'data' => $this->freelancerData($freelancer->fresh(['division'])),
+            'account' => [
+                'email' => $account['email'],
+                'password' => $account['password'],
+                'whatsapp_sent' => (bool) $account['whatsapp']['api_sent'],
+                'whatsapp_url' => $account['whatsapp']['wa_url'] ?? null,
+            ],
+        ], 201);
+    }
+
+    public function endFreelancer(Request $request, int $id): JsonResponse
+    {
+        $freelancer = $this->findWorker($this->manager($request), 'freelancer', $id);
+        $this->accounts->endContract($freelancer);
+
+        return response()->json(['message' => 'Kontrak diakhiri.', 'data' => $this->freelancerData($freelancer->fresh(['division']))]);
+    }
+
+    public function reactivateFreelancer(Request $request, int $id): JsonResponse
+    {
+        $freelancer = $this->findWorker($this->manager($request), 'freelancer', $id);
+        $this->accounts->reactivate($freelancer);
+
+        return response()->json(['message' => 'Freelancer aktif lagi.', 'data' => $this->freelancerData($freelancer->fresh(['division']))]);
+    }
+
+    private function manager(Request $request): User
+    {
+        $user = $request->user();
+        abort_unless($user?->canManageWorkers(), 403, 'Fitur tim hanya untuk koordinator.');
+
+        return $user;
+    }
+
+    private function findWorker(User $user, string $type, int $id): Employee|Intern|Freelancer
+    {
+        $worker = self::WORKER_TYPES[$type]['model']::query()->find($id);
+        abort_unless($worker && $user->canManageWorker($worker), 404, 'Pekerja tidak ditemukan.');
+
+        return $worker;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function freelancerData(Freelancer $freelancer): array
+    {
+        return [
+            'id' => (int) $freelancer->id,
+            'number' => $freelancer->freelancer_number,
+            'name' => $freelancer->full_name,
+            'phone' => $freelancer->phone,
+            'brand' => $freelancer->division?->name,
+            'status' => $freelancer->status,
+            'is_active' => $this->accounts->isActive($freelancer),
+            'has_account' => $freelancer->user_id !== null,
+            'start_date' => $freelancer->start_date?->toDateString(),
+            'end_date' => $freelancer->end_date?->toDateString(),
+        ];
+    }
+
+    private function fieldError(string $field, string $message): JsonResponse
+    {
+        return response()->json(['message' => $message, 'errors' => [$field => [$message]]], 422);
+    }
+}

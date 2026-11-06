@@ -4,13 +4,12 @@ namespace App\Filament\Resources\ShiftSchedules;
 
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\ShiftSchedules\Pages\ManageShiftSchedules;
-use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
-use App\Services\DataAccessService;
+use App\Services\SchedulingOptions;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -207,22 +206,11 @@ class ShiftScheduleResource extends Resource
      */
     public static function shiftOptions(int|string|null $companyId): array
     {
-        if (! static::canPlaceInCompany($companyId)) {
-            return [];
-        }
+        $user = auth()->user();
 
-        $brandIds = DataAccessService::coordinatedDivisionIds(auth()->user());
-
-        return Shift::query()
-            ->with('division')
-            ->active()
-            ->where('company_id', $companyId)
-            ->when($brandIds !== null, fn (Builder $shifts) => $shifts->where(fn (Builder $own) => $own->whereIn('division_id', $brandIds)->orWhereNull('division_id')))
-            ->orderBy('start_time')
-            ->get()
-            ->sortBy(fn (Shift $shift): string => ($shift->division?->name ?? '').'|'.$shift->start_time)
-            ->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])
-            ->all();
+        return $user
+            ? app(SchedulingOptions::class)->shifts($user, $companyId)->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])->all()
+            : [];
     }
 
     /**
@@ -232,19 +220,9 @@ class ShiftScheduleResource extends Resource
      */
     public static function locationOptions(int|string|null $companyId): array
     {
-        if (! static::canPlaceInCompany($companyId)) {
-            return [];
-        }
+        $user = auth()->user();
 
-        $brandIds = DataAccessService::coordinatedDivisionIds(auth()->user());
-
-        return CompanyLocation::query()
-            ->where('company_id', $companyId)
-            ->where('is_active', true)
-            ->when($brandIds !== null, fn (Builder $outlets) => $outlets->whereIn('division_id', $brandIds))
-            ->orderBy('name')
-            ->pluck('name', 'id')
-            ->all();
+        return $user ? app(SchedulingOptions::class)->locations($user, $companyId)->pluck('name', 'id')->all() : [];
     }
 
     /**
@@ -254,18 +232,9 @@ class ShiftScheduleResource extends Resource
      */
     public static function sectionSuggestions(int|string|null $companyId): array
     {
-        if (! static::canPlaceInCompany($companyId)) {
-            return [];
-        }
+        $user = auth()->user();
 
-        return ShiftSchedule::query()
-            ->whereNotNull('section')
-            ->whereWorkerInCompanies([(int) $companyId])
-            ->distinct()
-            ->orderBy('section')
-            ->limit(50)
-            ->pluck('section')
-            ->all();
+        return $user ? app(SchedulingOptions::class)->sections($user, $companyId) : [];
     }
 
     /**

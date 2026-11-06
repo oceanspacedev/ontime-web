@@ -4,6 +4,7 @@ namespace App\Http\Resources\Api\V1;
 
 use App\Models\Company;
 use App\Services\AnnualLeaveService;
+use App\Services\DataAccessService;
 use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -25,6 +26,10 @@ class UserResource extends JsonResource
             'master_face_verified_at' => $masterFaceVerifiedAt,
             'roles' => $this->getRoleNames(),
             'permissions' => $this->getAllPermissions()->pluck('name')->values(),
+            'access' => [
+                'can_manage_team' => $this->resource->canManageWorkers(),
+                'is_coordinator' => DataAccessService::isCoordinator($this->resource),
+            ],
             'employee' => $this->employee ? [
                 'id' => $this->employee->id,
                 'nip' => $this->employee->nip,
