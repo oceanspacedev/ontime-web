@@ -16,6 +16,7 @@ use App\Models\JobTitle;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
 use App\Models\User;
+use App\Services\ApprovalFlowService;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use RuntimeException;
@@ -119,6 +120,7 @@ class CoordinatorDemoSeeder extends Seeder
             ['code' => 'FCD'],
             ['name' => 'PT Franchise Ciledug (Demo)', 'is_active' => true],
         );
+        app(ApprovalFlowService::class)->createDefaultFlows($company);
         $company->policy()->update(['require_gps' => false, 'require_photo' => false, 'require_face_recognition' => false, 'require_liveness' => false]);
 
         $brands = [];

@@ -19,6 +19,7 @@ use RuntimeException;
  *
  * | Email                        | Role       | Akses Data             | Data pekerja           |
  * |------------------------------|------------|------------------------|------------------------|
+ * | uat.superadmin@ontime.test   | Superadmin | Semua                  | -                      |
  * | uat.admin.top@ontime.test    | Admin      | Badan Usaha: TOP       | -                      |
  * | uat.admin.realme@ontime.test | Admin      | Divisi: REALME         | -                      |
  * | uat.bod@ontime.test          | BOD        | Badan Usaha: TOP       | -                      |
@@ -46,6 +47,7 @@ class UatAccountSeeder extends Seeder
         $bandung = $this->division($company, 'DEPO BANDUNG', $realme);
         $cirebon = $this->division($company, 'DEPO CIREBON', $realme);
 
+        $this->account('uat.superadmin@ontime.test', 'UAT Superadmin', 'Superadmin');
         $this->account('uat.admin.top@ontime.test', 'UAT Admin TOP', 'Admin')
             ->grantDataAccess(DataScope::Companies, companyIds: [$company->id]);
         $this->account('uat.admin.realme@ontime.test', 'UAT Admin REALME', 'Admin')
