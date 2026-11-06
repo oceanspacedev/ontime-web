@@ -8,6 +8,7 @@ use App\Filament\Resources\ApprovalFlows\Pages\EditApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\ListApprovalFlows;
 use App\Models\Company;
 use App\Models\User;
+use App\Services\ApprovalFlowService;
 use BackedEnum;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Radio;
@@ -108,6 +109,16 @@ class ApprovalFlowResource extends Resource
             ]);
     }
 
+    /**
+     * Only roles that can act on a stage; any other role would leave requests stuck there.
+     *
+     * @return array<string, string>
+     */
+    public static function approverRoleOptions(): array
+    {
+        return Role::query()->whereIn('name', ApprovalFlowService::APPROVER_ROLES)->pluck('name', 'name')->all();
+    }
+
     public static function getStepRepeaterSchema(string $name, string $label): Repeater
     {
         return Repeater::make($name)
@@ -130,10 +141,12 @@ class ApprovalFlowResource extends Resource
 
                     Select::make('approver_role')
                         ->label('Role Approver')
-                        ->options(function () {
-                            return Role::query()->pluck('name', 'name');
-                        })
+                        ->options(fn (): array => static::approverRoleOptions())
                         ->default('Approver')
+                        ->live()
+                        ->helperText(fn (Get $get, ?string $state): ?string => filled($state) && ! ApprovalFlowService::hasHolderForRole($state, $get('../../company_id'))
+                            ? "Belum ada pengguna aktif dengan role {$state} di badan usaha ini. Pengajuan akan tertahan di tahap ini."
+                            : null)
                         ->visible(fn (Get $get) => $get('approver_type') === 'role')
                         ->required(fn (Get $get) => $get('approver_type') === 'role'),
 
@@ -141,7 +154,8 @@ class ApprovalFlowResource extends Resource
                         ->label('Pilih User Spesifik')
                         ->options(function () {
                             return User::query()
-                                ->whereHas('roles', fn ($q) => $q->whereIn('name', ['Approver', 'BOD', 'Superadmin']))
+                                ->where('is_active', true)
+                                ->whereHas('roles', fn ($q) => $q->whereIn('name', ApprovalFlowService::APPROVER_ROLES))
                                 ->pluck('name', 'id');
                         })
                         ->searchable()

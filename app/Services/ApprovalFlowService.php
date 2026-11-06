@@ -34,6 +34,30 @@ class ApprovalFlowService
         'geofence' => 'Presensi Luar Geofence',
     ];
 
+    /**
+     * Roles that can act on an approval stage; a stage set to any other role could never be approved.
+     *
+     * @var list<string>
+     */
+    public const APPROVER_ROLES = ['Approver', 'BOD', 'Superadmin', 'Admin', 'Koordinator'];
+
+    /**
+     * Active users holding $role whose data access reaches $companyId, so a stage set to that role
+     * has someone to act on it.
+     */
+    public static function hasHolderForRole(string $role, int|string|null $companyId): bool
+    {
+        if ($companyId === null || $companyId === '') {
+            return true;
+        }
+
+        return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId): bool {
+            $companyIds = DataAccessService::placeableCompanyIds($user);
+
+            return $companyIds === null || in_array((int) $companyId, $companyIds, true);
+        });
+    }
+
     public static function requestTypeLabel(string $requestType): string
     {
         return self::REQUEST_TYPE_LABELS[$requestType] ?? $requestType;
@@ -426,8 +450,21 @@ class ApprovalFlowService
      */
     private function getUsersAuthorizedForCurrentStep(Model $requestModel): Collection
     {
+        $step = $requestModel->approvalSteps()->where('step_order', (int) ($requestModel->current_step ?? 1))->first();
+
+        // Coordinators decide for the crew of their brands, so they hear about every request there.
+        // Admins act on any stage too, but only hear about the stages set to them, to keep the noise down.
+        $roles = ['Approver', 'BOD', 'Superadmin', 'Koordinator'];
+
+        if ($step?->approver_type === 'role' && filled($step->approver_role)) {
+            $roles[] = $step->approver_role;
+        }
+
         return User::query()
-            ->whereHas('roles', fn ($query) => $query->whereIn('name', ['Approver', 'BOD', 'Superadmin']))
+            ->where('is_active', true)
+            ->where(fn ($query) => $query
+                ->whereHas('roles', fn ($roleQuery) => $roleQuery->whereIn('name', array_unique($roles)))
+                ->when($step?->approver_type === 'user' && $step->user_id, fn ($byUser) => $byUser->orWhere('id', $step->user_id)))
             ->get()
             ->filter(fn (User $user) => $this->isUserAuthorizedToApprove($requestModel, $user));
     }
