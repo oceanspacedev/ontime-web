@@ -1,7 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { Alert, View } from 'react-native';
+import { Alert, Image, View } from 'react-native';
 
 import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { Avatar, Badge, Button, Group, InfoRow, Pill, Row, Screen, Text } from '@/components/ui';
@@ -10,7 +9,10 @@ import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { attendanceApi, type PolicyFailAction, type SelfieMode } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { useSession } from '@/lib/session';
-import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance, useTheme } from '@/theme';
+import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance } from '@/theme';
+
+/** The OnTime logo tile, the same one the web panel shows (public/images/icon.svg). */
+const BRAND_TILE = require('../../../assets/brand-tile.png');
 
 const SELFIE_MODE_LABELS: Record<SelfieMode, string> = {
   none: 'Tanpa foto',
@@ -32,7 +34,6 @@ const APPEARANCE_LABELS: Record<AppearancePreference, string> = {
 
 export default function ProfileScreen() {
   const styles = useStyles();
-  const { colors } = useTheme();
   const user = useSession((state) => state.user);
   const baseUrl = useSession((state) => state.baseUrl);
   const signOut = useSession((state) => state.signOut);
@@ -119,7 +120,7 @@ export default function ProfileScreen() {
 
       <Button title="Keluar" variant="danger" size="lg" icon="log-out-outline" onPress={confirmLogout} loading={logout.isPending} />
       <View style={styles.footer}>
-        <Ionicons name="time-outline" size={14} color={colors.textMuted} />
+        <Image source={BRAND_TILE} style={styles.footerLogo} accessibilityIgnoresInvertColors />
         <Text style={styles.footerText}>OnTime Mobile</Text>
       </View>
     </Screen>
@@ -130,6 +131,7 @@ const useStyles = makeStyles((c) => ({
   roles: { maxWidth: 140 },
   badge: { alignSelf: 'flex-end' },
   chips: { justifyContent: 'flex-end' },
-  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: spacing.sm },
+  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: spacing.sm },
+  footerLogo: { width: 18, height: 18 },
   footerText: { fontSize: fontSize.xs, color: c.textMuted },
 }));

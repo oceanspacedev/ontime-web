@@ -2,13 +2,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useIsMutating, useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 
 import { Button, ErrorBanner, Field, Notice, Screen, Text } from '@/components/ui';
 import { authApi, errorMessage } from '@/lib/api';
 import { clearPendingMagicLink, savePendingMagicLink } from '@/lib/magicLink';
 import { useSession } from '@/lib/session';
 import { BRAND_GLOSS, BRAND_GRADIENT, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
+
+/** The white mark of the OnTime logo, the same one the web panel shows (public/images/icon.svg). */
+const BRAND_MARK = require('../../assets/brand-mark.png');
 
 /** Email and password by default; WhatsApp code and email link are the alternatives below it. */
 type Mode = 'password' | 'whatsapp' | 'emailLink';
@@ -35,7 +38,7 @@ export default function LoginScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
         <View style={styles.hero}>
           <View style={styles.logo}>
-            <Ionicons name="time" size={42} color={colors.onPrimary} />
+            <Image source={BRAND_MARK} style={styles.logoMark} accessibilityIgnoresInvertColors />
           </View>
           <Text style={styles.title}>OnTime</Text>
           <Text style={styles.subtitle}>Presensi dan pengajuan harian</Text>
@@ -339,6 +342,7 @@ const useStyles = makeStyles((c, dark) => ({
     justifyContent: 'center',
     marginBottom: spacing.md,
   },
+  logoMark: { width: 40, height: 48 },
   title: { fontSize: 32, fontWeight: '800', color: c.text, letterSpacing: -0.6 },
   subtitle: { fontSize: fontSize.md, color: c.textMuted },
   form: { gap: spacing.lg },
