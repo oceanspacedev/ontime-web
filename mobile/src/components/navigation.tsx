@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import type { Tabs } from 'expo-router/js-tabs';
 import type { ComponentProps, ReactNode } from 'react';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconButton, Text } from '@/components/ui';
@@ -82,6 +82,14 @@ const useHeaderStyles = makeStyles((c) => ({
 type TabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>['tabBar']>>[0];
 
 /**
+ * Space under the floating tab bar. iOS can tuck it slightly into the home indicator area; Android's
+ * navigation buttons cannot be overlapped, so the bar sits fully above them with a small gap.
+ */
+function tabBarBottomGap(bottomInset: number): number {
+  return Platform.OS === 'android' ? bottomInset + spacing.sm : Math.max(bottomInset - 6, spacing.md);
+}
+
+/**
  * Pill-shaped tab bar floating above the content, icons only. The active tab sits on a soft red
  * pill. Screens inside the tabs add bottom space through FloatingTabBarContext.
  */
@@ -91,7 +99,7 @@ export function FloatingTabBar({ state, descriptors, navigateToTab, emitter }: T
   const insets = useSafeAreaInsets();
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: Math.max(insets.bottom - 6, spacing.md) }]}>
+    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: tabBarBottomGap(insets.bottom) }]}>
       <View style={styles.bar}>
         {state.routes.map((route, index) => {
           const descriptor = descriptors[route.key];
