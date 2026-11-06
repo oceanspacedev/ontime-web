@@ -469,6 +469,8 @@ export function Button({ title, variant = 'primary', loading = false, icon, disa
   );
 }
 
+const WHATSAPP_GREEN = '#1DAA61';
+
 function buttonForeground(c: Palette, variant: ButtonVariant): string {
   switch (variant) {
     case 'primary':
@@ -480,7 +482,7 @@ function buttonForeground(c: Palette, variant: ButtonVariant): string {
     case 'ghost':
       return c.primary;
     case 'whatsapp':
-      return c.success;
+      return '#FFFFFF';
     default:
       return c.text;
   }
@@ -519,9 +521,9 @@ const useButtonStyles = makeStyles((c, dark) => ({
 
   danger: { backgroundColor: c.dangerSoft },
   dangerPressed: { opacity: 0.8 },
-  /** A soft green, so the WhatsApp sign-in reads as WhatsApp without outshining the main button. */
-  whatsapp: { backgroundColor: c.successSoft },
-  whatsappPressed: { opacity: 0.8 },
+  /** WhatsApp's brand green: clearly WhatsApp, deeper than the neon #25D366 so it does not glare. */
+  whatsapp: { backgroundColor: WHATSAPP_GREEN },
+  whatsappPressed: { opacity: 0.85 },
 
   ghost: { backgroundColor: 'transparent' },
   ghostPressed: { backgroundColor: c.fill },
