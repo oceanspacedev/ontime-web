@@ -22,6 +22,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
@@ -65,127 +66,152 @@ class InternResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Informasi Peserta Magang')
+                Grid::make(['default' => 1, 'lg' => 3])
+                    ->columnSpanFull()
                     ->schema([
-                        Grid::make(2)->schema([
-                            TextInput::make('nis')
-                                ->label('NIS / ID Magang')
-                                ->required()
-                                ->unique(ignoreRecord: true)
-                                ->maxLength(50),
+                        Group::make([
+                            Section::make('Data Diri')
+                                ->icon('heroicon-o-user')
+                                ->columns(2)
+                                ->schema([
+                                    TextInput::make('nis')
+                                        ->label('NIS / ID Magang')
+                                        ->required()
+                                        ->unique(ignoreRecord: true)
+                                        ->maxLength(50),
 
-                            TextInput::make('full_name')
-                                ->label('Nama Lengkap')
-                                ->required()
-                                ->maxLength(255),
+                                    TextInput::make('full_name')
+                                        ->label('Nama Lengkap')
+                                        ->required()
+                                        ->maxLength(255),
 
-                            TextInput::make('institution')
-                                ->label('Asal Sekolah / Kampus (Institusi)')
-                                ->required()
-                                ->maxLength(255),
+                                    TextInput::make('email')
+                                        ->label('Email')
+                                        ->email()
+                                        ->maxLength(255),
 
-                            Select::make('company_id')
-                                ->label('Badan Usaha (Company)')
-                                ->options(fn (): array => static::placeableCompanyOptions())
-                                ->helperText('Otomatis terisi jika Mentor Karyawan dipilih.')
-                                ->required()
-                                ->live()
-                                ->afterStateUpdated(function ($set): void {
-                                    $set('division_id', null);
-                                    $set('shift_id', null);
-                                }),
+                                    TextInput::make('phone')
+                                        ->label('Telepon')
+                                        ->tel()
+                                        ->maxLength(50),
 
-                            Select::make('division_id')
-                                ->label('Divisi')
-                                ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
-                                ->helperText('Otomatis terisi jika Mentor Karyawan dipilih.')
-                                ->required(),
+                                    TextInput::make('institution')
+                                        ->label('Asal Sekolah / Kampus')
+                                        ->required()
+                                        ->maxLength(255)
+                                        ->columnSpanFull(),
+                                ]),
 
-                            Select::make('shift_id')
-                                ->label('Shift Default')
-                                ->options(fn (Get $get, ?Intern $record): array => ShiftScheduleResource::shiftOptions($get('company_id')) + ($record?->shift ? [$record->shift_id => $record->shift->label()] : []))
-                                ->placeholder('Ikut jam kerja badan usaha')
-                                ->helperText('Dipakai bila tidak ada jadwal shift pada tanggal tersebut.')
-                                ->nullable(),
+                            Section::make('Penempatan')
+                                ->icon('heroicon-o-building-office-2')
+                                ->columns(2)
+                                ->schema([
+                                    Select::make('mentor_id')
+                                        ->label('Mentor')
+                                        ->relationship('mentor', 'full_name', function ($query, Get $get, ?Intern $record) {
+                                            // Keep the currently assigned person selectable even after they resign,
+                                            // otherwise existing records fail validation on save.
+                                            $query->where(function ($available) use ($record) {
+                                                $available->whereNotIn('status', ['inactive', 'resigned']);
 
-                            Select::make('mentor_id')
-                                ->label('Pembimbing / Mentor (Karyawan)')
-                                ->relationship('mentor', 'full_name', function ($query, Get $get, ?Intern $record) {
-                                    // Keep the currently assigned person selectable even after they resign,
-                                    // otherwise existing records fail validation on save.
-                                    $query->where(function ($available) use ($record) {
-                                        $available->whereNotIn('status', ['inactive', 'resigned']);
+                                                if ($record?->mentor_id) {
+                                                    $available->orWhere('id', $record->mentor_id);
+                                                }
+                                            });
 
-                                        if ($record?->mentor_id) {
-                                            $available->orWhere('id', $record->mentor_id);
-                                        }
-                                    });
+                                            if ($companyId = $get('company_id')) {
+                                                $query->where('company_id', $companyId);
+                                            }
 
-                                    if ($companyId = $get('company_id')) {
-                                        $query->where('company_id', $companyId);
-                                    }
+                                            static::scopeToManagedWorkers($query);
+                                        })
+                                        ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
+                                        ->helperText('Badan usaha dan divisi ikut terisi.')
+                                        ->searchable()
+                                        ->preload()
+                                        ->live()
+                                        ->afterStateUpdated(function (Set $set, ?string $state) {
+                                            if (! $state) {
+                                                return;
+                                            }
 
-                                    static::scopeToManagedWorkers($query);
-                                })
-                                ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
-                                ->helperText('Memilih Mentor akan otomatis mengeset Badan Usaha & Divisi.')
-                                ->searchable()
-                                ->preload()
-                                ->live()
-                                ->afterStateUpdated(function (Set $set, ?string $state) {
-                                    if (! $state) {
-                                        return;
-                                    }
+                                            $employee = Employee::find($state);
+                                            if ($employee) {
+                                                $set('company_id', $employee->company_id);
+                                                $set('division_id', $employee->division_id);
+                                            }
+                                        })
+                                        ->nullable()
+                                        ->columnSpanFull(),
 
-                                    $employee = Employee::find($state);
-                                    if ($employee) {
-                                        $set('company_id', $employee->company_id);
-                                        $set('division_id', $employee->division_id);
-                                    }
-                                })
-                                ->nullable(),
+                                    Select::make('company_id')
+                                        ->label('Badan Usaha')
+                                        ->options(fn (): array => static::placeableCompanyOptions())
+                                        ->required()
+                                        ->live()
+                                        ->afterStateUpdated(function ($set): void {
+                                            $set('division_id', null);
+                                            $set('shift_id', null);
+                                        }),
 
-                            TextInput::make('email')
-                                ->label('Email')
-                                ->email()
-                                ->maxLength(255),
+                                    Select::make('division_id')
+                                        ->label('Divisi')
+                                        ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
+                                        ->required(),
 
-                            TextInput::make('phone')
-                                ->label('Telepon')
-                                ->tel()
-                                ->maxLength(50),
+                                    Select::make('shift_id')
+                                        ->label('Shift Default')
+                                        ->options(fn (Get $get, ?Intern $record): array => ShiftScheduleResource::shiftOptions($get('company_id')) + ($record?->shift ? [$record->shift_id => $record->shift->label()] : []))
+                                        ->placeholder('Ikut jam kerja badan usaha')
+                                        ->nullable()
+                                        ->columnSpanFull(),
+                                ]),
 
-                            DatePicker::make('start_date')
-                                ->label('Tanggal Mulai Magang')
-                                ->native(false),
+                            Section::make('Masa Magang')
+                                ->icon('heroicon-o-calendar-days')
+                                ->columns(3)
+                                ->schema([
+                                    DatePicker::make('start_date')
+                                        ->label('Mulai')
+                                        ->native(false),
 
-                            DatePicker::make('end_date')
-                                ->label('Tanggal Selesai Magang')
-                                ->native(false),
+                                    DatePicker::make('end_date')
+                                        ->label('Selesai')
+                                        ->native(false),
 
-                            Select::make('status')
-                                ->label('Status Magang')
-                                ->options([
-                                    'active' => 'Aktif',
-                                    'completed' => 'Selesai',
-                                    'extended' => 'Diperpanjang',
-                                    'terminated' => 'Berhenti',
-                                ])
-                                ->default('active')
-                                ->required(),
+                                    Select::make('status')
+                                        ->label('Status')
+                                        ->options([
+                                            'active' => 'Aktif',
+                                            'completed' => 'Selesai',
+                                            'extended' => 'Diperpanjang',
+                                            'terminated' => 'Berhenti',
+                                        ])
+                                        ->default('active')
+                                        ->required(),
+                                ]),
+                        ])->columnSpan(['lg' => 2]),
 
-                            Select::make('user_id')
-                                ->label('Akun User Sistem (Opsional)')
-                                ->placeholder('Pilih Akun User')
-                                ->options(fn (?Intern $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
-                                ->searchable()
-                                ->nullable(),
+                        Group::make([
+                            Section::make('Akun')
+                                ->icon('heroicon-o-key')
+                                ->schema([
+                                    Select::make('user_id')
+                                        ->label('Akun User')
+                                        ->placeholder('Belum ada akun')
+                                        ->options(fn (?Intern $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->searchable()
+                                        ->nullable(),
+                                ]),
 
-                            MasterFacePhotoField::make('master_face_photo')
-                                ->label('Foto Master Wajah (Face Recognition)')
-                                ->columnSpanFull()
-                                ->helperText('Pilih foto dari penyimpanan atau ambil foto via kamera langsung sebagai referensi Face Recognition.'),
-                        ]),
+                            Section::make('Foto Master Wajah')
+                                ->icon('heroicon-o-face-smile')
+                                ->schema([
+                                    MasterFacePhotoField::make('master_face_photo')
+                                        ->label('Foto Master Wajah')
+                                        ->hiddenLabel(),
+                                ]),
+                        ])->columnSpan(['lg' => 1]),
                     ]),
             ]);
     }
