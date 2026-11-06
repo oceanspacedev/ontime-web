@@ -29,6 +29,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
@@ -266,6 +267,13 @@ class CompanyResource extends Resource
                     ->label('Kebijakan Absensi')
                     ->icon('heroicon-o-cog-6-tooth')
                     ->color('warning')
+                    ->slideOver()
+                    ->modalWidth(Width::Medium)
+                    ->modalIcon('heroicon-o-shield-check')
+                    ->modalHeading('Kebijakan Absensi')
+                    ->modalDescription(fn (Company $record): string => $record->name)
+                    ->modalSubmitActionLabel('Simpan Kebijakan')
+                    ->successNotificationTitle('Kebijakan absensi disimpan')
                     ->fillForm(fn (Company $record): array => [
                         'late_tolerance_minutes' => $record->policy?->late_tolerance_minutes ?? 15,
                         'require_gps' => $record->policy?->require_gps ?? false,
@@ -278,13 +286,23 @@ class CompanyResource extends Resource
                         'default_approval_stages' => $record->policy?->default_approval_stages ?? 1,
                     ])
                     ->schema([
-                        TextInput::make('late_tolerance_minutes')
-                            ->label('Toleransi Keterlambatan (Menit)')
-                            ->numeric()
-                            ->required()
-                            ->default(15),
+                        Section::make('Jam Masuk')
+                            ->icon('heroicon-o-clock')
+                            ->compact()
+                            ->schema([
+                                TextInput::make('late_tolerance_minutes')
+                                    ->label('Toleransi Keterlambatan')
+                                    ->numeric()
+                                    ->minValue(0)
+                                    ->suffix('menit')
+                                    ->helperText('Check in setelah jam masuk shift ditambah toleransi ini dihitung terlambat.')
+                                    ->required()
+                                    ->default(15),
+                            ]),
 
                         Section::make('Lokasi')
+                            ->icon('heroicon-o-map-pin')
+                            ->compact()
                             ->description('Periksa posisi pekerja terhadap kantor pusat dan cabang aktif saat presensi.')
                             ->schema([
                                 Toggle::make('require_gps')
@@ -303,16 +321,18 @@ class CompanyResource extends Resource
                                     ->default(false),
 
                                 TextInput::make('geofence_radius_meters')
-                                    ->label('Radius Geofence (Meter)')
+                                    ->label('Radius Geofence')
                                     ->numeric()
                                     ->minValue(1)
+                                    ->suffix('meter')
                                     ->placeholder('Contoh: 100')
                                     ->helperText('Presensi di luar radius dialihkan ke persetujuan atasan.')
                                     ->visible(fn (Get $get) => (bool) $get('require_gps'))
                                     ->required(fn (Get $get) => (bool) $get('require_gps')),
 
                                 Select::make('mock_location_action')
-                                    ->label('Tindakan Jika Lokasi Palsu Terdeteksi')
+                                    ->label('Jika Lokasi Palsu Terdeteksi')
+                                    ->native(false)
                                     ->options(static::mockLocationActionOptions())
                                     ->helperText('Aplikasi Android melaporkan lokasi palsu (mock location). Browser tidak bisa mendeteksinya.')
                                     ->default('reject')
@@ -321,12 +341,14 @@ class CompanyResource extends Resource
                             ]),
 
                         Section::make('Verifikasi Selfie')
+                            ->icon('heroicon-o-camera')
+                            ->compact()
                             ->description(fn (): ?string => static::faceVerifier()->isAccurate()
                                 ? null
                                 : 'Layanan wajah saat ini memakai pembanding bawaan (bukan pengenalan wajah sungguhan).')
                             ->schema([
                                 Radio::make('selfie_mode')
-                                    ->label('Mode Selfie')
+                                    ->hiddenLabel()
                                     ->options(static::selfieModeOptions())
                                     ->descriptions(fn (): array => static::selfieModeDescriptions())
                                     ->disableOptionWhen(fn (string $value): bool => $value === 'liveness' && ! static::faceVerifier()->supportsPose())
@@ -356,8 +378,9 @@ class CompanyResource extends Resource
                                     ]),
 
                                 TextInput::make('face_match_threshold')
-                                    ->label('Ambang Batas Kemiripan Wajah (%)')
+                                    ->label('Ambang Kemiripan Wajah')
                                     ->numeric()
+                                    ->suffix('%')
                                     ->minValue(1)
                                     ->maxValue(100)
                                     ->default(60)
@@ -365,7 +388,8 @@ class CompanyResource extends Resource
                                     ->required(fn (Get $get) => static::usesFaceMatch($get('selfie_mode'))),
 
                                 Select::make('face_fail_action')
-                                    ->label('Tindakan Jika Wajah Tidak Cocok')
+                                    ->label('Jika Wajah Tidak Cocok')
+                                    ->native(false)
                                     ->options([
                                         'reject' => 'Tolak Presensi Langsung',
                                         'approval' => 'Alihkan ke Approval Atasan (Pending)',
@@ -378,17 +402,28 @@ class CompanyResource extends Resource
                                     ->required(fn (Get $get) => static::usesFaceMatch($get('selfie_mode'))),
                             ]),
 
-                        TextInput::make('annual_leave_quota')
-                            ->label('Kuota Cuti Tahunan (Hari)')
-                            ->numeric()
-                            ->required()
-                            ->default(12),
+                        Section::make('Cuti & Approval')
+                            ->icon('heroicon-o-calendar-days')
+                            ->compact()
+                            ->columns(2)
+                            ->schema([
+                                TextInput::make('annual_leave_quota')
+                                    ->label('Kuota Cuti Tahunan')
+                                    ->numeric()
+                                    ->minValue(0)
+                                    ->suffix('hari')
+                                    ->required()
+                                    ->default(12),
 
-                        TextInput::make('default_approval_stages')
-                            ->label('Jumlah Tahap Approval Default (Referensi)')
-                            ->numeric()
-                            ->required()
-                            ->default(1),
+                                TextInput::make('default_approval_stages')
+                                    ->label('Tahap Approval')
+                                    ->numeric()
+                                    ->minValue(1)
+                                    ->suffix('tahap')
+                                    ->helperText('Referensi default.')
+                                    ->required()
+                                    ->default(1),
+                            ]),
                     ])
                     ->action(function (Company $record, array $data): void {
                         $record->policy()->updateOrCreate(
