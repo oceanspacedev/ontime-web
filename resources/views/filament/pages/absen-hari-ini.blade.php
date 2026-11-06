@@ -69,6 +69,9 @@
                                 {{ substr($workingHours['start_time'] ?? '08:00', 0, 5) }} - {{ substr($workingHours['end_time'] ?? '17:00', 0, 5) }}
                                 (Toleransi {{ $workingHours['late_tolerance_minutes'] ?? 15 }} menit)
                             </span>
+                            @if($workingHours['location'] ?? null)
+                                <span class="block text-xs text-gray-500">{{ collect([$workingHours['location']->name, $workingHours['section'] ?? null])->filter()->implode(' · ') }}</span>
+                            @endif
                         @endif
                     </div>
                     <div>

@@ -69,6 +69,14 @@ export function TodayCard({ today, access }: Props) {
               </Text>
             </View>
           ) : null}
+          {schedule?.outlet && !schedule.is_day_off ? (
+            <View style={styles.scheduleRow}>
+              <Ionicons name="storefront-outline" size={14} color={colors.textMuted} />
+              <Text style={styles.schedule} numberOfLines={1}>
+                {[schedule.outlet.name, schedule.section].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
+          ) : null}
           {policy ? <AttendanceModeChips policy={policy} style={styles.modeChips} /> : null}
         </View>
         {attendance ? <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} /> : null}

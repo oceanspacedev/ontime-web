@@ -231,6 +231,9 @@ export interface TodaySchedule {
   start_time: string;
   end_time: string;
   late_tolerance_minutes: number;
+  /** Outlet the worker is scheduled at today; check-in is only accepted there. */
+  outlet?: NamedRef | null;
+  section?: string | null;
 }
 
 export interface TodayAttendance {

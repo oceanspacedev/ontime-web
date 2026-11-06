@@ -10,6 +10,7 @@ use App\Models\CompanyLocation;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Shift;
@@ -27,6 +28,9 @@ use Spatie\Permission\Models\Role;
  * | Email                 | Role                    | Akses Data                                    |
  * |-----------------------|-------------------------|-----------------------------------------------|
  * | loocita@ontime.test   | Koordinator + Employee  | Divisi: JCHICKEN, LUUCA, WIZMIE, KOPIULON     |
+ * | karyawan@ontime.test  | Employee (Kasir JChicken) | Pribadi                                     |
+ * | freelance@ontime.test | Freelancer (Bayu, JChicken) | Pribadi                                   |
+ * | magang@ontime.test    | Intern (Luuca)          | Pribadi                                       |
  *
  * MOMOYO is left out of her access on purpose, to show the brand limits. The password is "password".
  * Run with: php artisan db:seed --class=CoordinatorDemoSeeder
@@ -89,6 +93,17 @@ class CoordinatorDemoSeeder extends Seeder
         'MOMOYO' => ['Egi Febyan Dika', 'Camelia Putri'],
     ];
 
+    private function workerAccount(string $email, string $name, string $role): User
+    {
+        $user = User::query()->updateOrCreate(
+            ['email' => $email],
+            ['name' => $name, 'password' => Hash::make(self::PASSWORD), 'is_active' => true],
+        );
+        $user->syncRoles([$role]);
+
+        return $user;
+    }
+
     public function run(): void
     {
         if (app()->isProduction()) {
@@ -96,7 +111,9 @@ class CoordinatorDemoSeeder extends Seeder
         }
 
         Role::findOrCreate('Koordinator', 'web');
-        Role::findOrCreate('Employee', 'web');
+        foreach (['Employee', 'Freelancer', 'Intern'] as $role) {
+            Role::findOrCreate($role, 'web');
+        }
 
         $company = Company::query()->firstOrCreate(
             ['code' => 'FCD'],
@@ -156,6 +173,29 @@ class CoordinatorDemoSeeder extends Seeder
             }
         }
 
+        // Daily users: one employee, one freelancer and one intern with their own logins.
+        $karyawan = $this->workerAccount('karyawan@ontime.test', 'Rizky Kasir JChicken', 'Employee');
+        $karyawanProfile = Employee::query()->updateOrCreate(
+            ['nip' => 'FCD-KS-001'],
+            [
+                'user_id' => $karyawan->id,
+                'company_id' => $company->id,
+                'division_id' => $brands['JCHICKEN']->id,
+                'job_level_id' => JobLevel::query()->firstOrCreate(['name' => 'STAFF'], ['level_order' => 1])->id,
+                'job_title_id' => JobTitle::query()->firstOrCreate(['name' => 'KASIR', 'division_id' => $brands['JCHICKEN']->id])->id,
+                'full_name' => 'Rizky Kasir JChicken',
+                'status' => 'active',
+            ],
+        );
+
+        $freelancers['Bayu Adillah']->update(['user_id' => $this->workerAccount('freelance@ontime.test', 'Bayu Adillah', 'Freelancer')->id]);
+
+        $magang = $this->workerAccount('magang@ontime.test', 'Nadia Magang Luuca', 'Intern');
+        $magangProfile = Intern::query()->updateOrCreate(
+            ['nis' => 'FCD-MG-001'],
+            ['user_id' => $magang->id, 'company_id' => $company->id, 'division_id' => $brands['LUUCA']->id, 'full_name' => 'Nadia Magang Luuca', 'institution' => 'SMK Pariwisata', 'status' => 'active', 'start_date' => today()->subMonth()],
+        );
+
         // One freelancer who already left, to show the "Sudah keluar" list.
         Freelancer::query()->firstOrCreate(
             ['company_id' => $company->id, 'full_name' => 'Neza Ayu Ramadhani'],
@@ -189,13 +229,21 @@ class CoordinatorDemoSeeder extends Seeder
         }
 
         ShiftSchedule::query()->updateOrCreate(
+            ['employee_id' => $karyawanProfile->id, 'date' => $today->toDateString()],
+            ['shift_id' => $shifts['JCHICKEN']['M10']->id, 'company_location_id' => $outlets['JCHICKEN']->id, 'section' => 'Kasir', 'is_day_off' => false, 'created_by' => $loocita->id],
+        );
+        ShiftSchedule::query()->updateOrCreate(
+            ['intern_id' => $magangProfile->id, 'date' => $today->toDateString()],
+            ['shift_id' => $shifts['LUUCA']['P']->id, 'company_location_id' => $outlets['LUUCA']->id, 'section' => 'Bar', 'is_day_off' => false, 'created_by' => $loocita->id],
+        );
+
+        ShiftSchedule::query()->updateOrCreate(
             ['freelancer_id' => $freelancers['Wikrio Rahmawanto']->id, 'date' => $today->toDateString()],
             ['shift_id' => null, 'company_location_id' => null, 'section' => null, 'is_day_off' => true, 'created_by' => $loocita->id],
         );
 
         // Today's attendance: some on time, one late, the rest still to come.
         foreach ([
-            ['Bayu Adillah', '07:56', AttendanceStatus::OnTime, 0],
             ['Dafid Nugroho', '09:22', AttendanceStatus::Late, 22],
             ['Sari Wulandari', '07:58', AttendanceStatus::OnTime, 0],
             ['Egi Febyan Dika', '07:50', AttendanceStatus::OnTime, 0],

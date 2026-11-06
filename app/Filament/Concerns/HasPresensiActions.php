@@ -4,6 +4,7 @@ namespace App\Filament\Concerns;
 
 use App\Enums\AttendanceStatus;
 use App\Models\Attendance;
+use App\Models\CompanyLocation;
 use App\Models\CompanyPolicy;
 use App\Models\Shift;
 use App\Models\User;
@@ -46,7 +47,7 @@ trait HasPresensiActions
     /**
      * Working hours that apply today (dated schedule, default shift, or company policy).
      *
-     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string}|null
+     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null}|null
      */
     public function getTodayWorkingHoursProperty(): ?array
     {

@@ -5,7 +5,11 @@ namespace Tests\Feature;
 use App\Enums\DataScope;
 use App\Models\Company;
 use App\Models\Division;
+use App\Models\Employee;
 use App\Models\Freelancer;
+use App\Models\Intern;
+use App\Models\JobLevel;
+use App\Models\JobTitle;
 use App\Models\User;
 use App\Support\WasteReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -44,6 +48,29 @@ class WasteReportLinkTest extends TestCase
 
         Sanctum::actingAs($crew);
         $this->getJson('/api/v1/auth/me')->assertJsonPath('user.access.waste_url', self::URL);
+    }
+
+    public function test_employees_and_interns_of_a_brand_get_it_too(): void
+    {
+        $momoyo = Division::create(['company_id' => $this->company->id, 'name' => 'MOMOYO', 'is_active' => true]);
+        Role::findOrCreate('Employee', 'web');
+        Role::findOrCreate('Intern', 'web');
+
+        $employee = User::factory()->create();
+        $employee->assignRole('Employee');
+        Employee::create([
+            'user_id' => $employee->id, 'company_id' => $this->company->id, 'division_id' => $momoyo->id,
+            'job_level_id' => JobLevel::create(['name' => 'STAFF', 'level_order' => 1])->id,
+            'job_title_id' => JobTitle::create(['name' => 'KASIR'])->id,
+            'nip' => 'MMY-1', 'full_name' => 'Kasir Momoyo', 'status' => 'active',
+        ]);
+
+        $intern = User::factory()->create();
+        $intern->assignRole('Intern');
+        Intern::create(['user_id' => $intern->id, 'company_id' => $this->company->id, 'division_id' => $momoyo->id, 'nis' => 'MG-1', 'full_name' => 'Magang Momoyo', 'institution' => 'SMK', 'status' => 'active']);
+
+        $this->assertSame(self::URL, WasteReport::urlFor($employee->fresh()));
+        $this->assertSame(self::URL, WasteReport::urlFor($intern->fresh()));
     }
 
     public function test_crew_of_other_brands_and_unplaced_accounts_do_not(): void

@@ -12,6 +12,7 @@ use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
 use App\Services\FileNamingService;
+use App\Services\WorkScheduleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -214,12 +215,23 @@ class AttendanceApiController extends Controller
         }
 
         $attendance = Attendance::byWorker($user)->whereDate('date', today())->first();
+        $hours = app(WorkScheduleService::class)->resolve($profile, today());
 
         return response()->json([
             'date' => today()->toDateString(),
             'has_checked_in' => $attendance?->check_in !== null,
             'has_checked_out' => $attendance?->check_out !== null,
             'attendance' => $attendance ? new AttendanceResource($attendance) : null,
+            // Today's working hours: the dated schedule, else the default shift, else the company hours.
+            'schedule' => [
+                'shift' => $hours['shift'] ? ['id' => (int) $hours['shift']->id, 'name' => $hours['shift']->name] : null,
+                'is_day_off' => $hours['is_day_off'],
+                'start_time' => substr($hours['start_time'], 0, 5),
+                'end_time' => substr($hours['end_time'], 0, 5),
+                'late_tolerance_minutes' => $hours['late_tolerance_minutes'],
+                'outlet' => $hours['location'] ? ['id' => (int) $hours['location']->id, 'name' => $hours['location']->name] : null,
+                'section' => $hours['section'],
+            ],
         ]);
     }
 

@@ -79,6 +79,24 @@ class TeamApiTest extends TestCase
             ->assertJsonPath('user.access.is_coordinator', true);
     }
 
+    public function test_today_tells_a_worker_their_shift_and_outlet(): void
+    {
+        $user = User::factory()->create();
+        $user->assignRole('Freelancer');
+        $this->bayu->update(['user_id' => $user->id]);
+        ShiftSchedule::create(['freelancer_id' => $this->bayu->id, 'date' => today(), 'shift_id' => $this->jchickenMorning->id, 'company_location_id' => $this->luucaOutlet->id, 'section' => 'Kasir']);
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/v1/attendance/today')
+            ->assertOk()
+            ->assertJsonPath('schedule.shift.name', 'Pagi')
+            ->assertJsonPath('schedule.start_time', '08:00')
+            ->assertJsonPath('schedule.end_time', '17:00')
+            ->assertJsonPath('schedule.outlet.name', 'Luuca Ciledug')
+            ->assertJsonPath('schedule.section', 'Kasir')
+            ->assertJsonPath('schedule.is_day_off', false);
+    }
+
     public function test_workers_without_management_rights_get_no_team_endpoints(): void
     {
         $worker = User::factory()->create();
