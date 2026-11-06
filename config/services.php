@@ -98,4 +98,9 @@ return [
         ],
     ],
 
+    'cesa' => [
+        // Food waste report for the F&B outlets, linked from the panel menu.
+        'waste_url' => env('CESA_WASTE_URL', 'https://cesa.completeselular.com/waste'),
+    ],
+
 ];

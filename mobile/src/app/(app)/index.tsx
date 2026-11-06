@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { router, type Href } from 'expo-router';
-import { Pressable, View } from 'react-native';
+import { Linking, Pressable, View } from 'react-native';
 
 import { TODAY_GROUP_TITLE, TodayCard } from '@/components/TodayCard';
 import { Avatar, ErrorBanner, Group, IconButton, type IconName, LoadingView, Notice, ProgressBar, QuickAction, Row, Screen, SectionTitle, Text } from '@/components/ui';
@@ -19,8 +19,20 @@ interface MenuItem {
   key: string;
   label: string;
   icon: IconName;
-  href: Href;
+  /** A screen in the app, or an external page opened in the browser. */
+  href: Href | { external: string };
   badge?: number;
+}
+
+/** Food waste report on CESA, used by the F&B outlets (JChicken, Momoyo, Luuca). */
+const WASTE_URL = 'https://cesa.completeselular.com/waste';
+
+function openMenuItem(item: MenuItem): void {
+  if (typeof item.href === 'object' && 'external' in item.href) {
+    void Linking.openURL(item.href.external);
+    return;
+  }
+  router.push(item.href);
 }
 
 /** Quick action tiles per row on the home screen. */
@@ -86,6 +98,7 @@ export default function HomeScreen() {
     ...(access.canSeeLeaveCalendar ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
     ...(access.canApprove ? [{ key: 'approvals', label: 'Persetujuan', icon: 'checkmark-done-outline', href: '/approvals', badge: pendingCount } as MenuItem] : []),
     ...(access.canUseAttendance ? [{ key: 'face', label: 'Master Wajah', icon: 'scan-outline', href: '/attendance/master-face' } as MenuItem] : []),
+    ...(access.isCoordinator ? [{ key: 'waste', label: 'Waste', icon: 'trash-outline', href: { external: WASTE_URL } } as MenuItem] : []),
   ];
 
   const displayName = access.profileName || user?.name;
@@ -152,7 +165,7 @@ export default function HomeScreen() {
           <View key={rowIndex} style={styles.menuRow}>
             {row.map((item, slot) =>
               item ? (
-                <QuickAction key={item.key} icon={item.icon} label={item.label} badge={item.badge} onPress={() => router.push(item.href)} />
+                <QuickAction key={item.key} icon={item.icon} label={item.label} badge={item.badge} onPress={() => openMenuItem(item)} />
               ) : (
                 <View key={`empty-${slot}`} style={styles.menuSpacer} />
               ),

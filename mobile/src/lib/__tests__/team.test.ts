@@ -25,6 +25,11 @@ describe('deriveAccess', () => {
     expect(deriveAccess(user({ roles: ['Admin'] })).canManageTeam).toBe(false);
   });
 
+  it('marks coordinators for the outlet shortcuts', () => {
+    expect(deriveAccess(user({ roles: ['Koordinator'], access: { can_manage_team: true, is_coordinator: true } })).isCoordinator).toBe(true);
+    expect(deriveAccess(user({ roles: ['Admin'], access: { can_manage_team: true, is_coordinator: false } })).isCoordinator).toBe(false);
+  });
+
   it('lets a coordinator approve requests', () => {
     expect(deriveAccess(user({ roles: ['Koordinator'] })).canApprove).toBe(true);
   });

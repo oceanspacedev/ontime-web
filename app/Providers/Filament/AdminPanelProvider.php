@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Widgets\PresensiWidget;
 use App\Filament\Widgets\UserProfileWidget;
+use App\Services\DataAccessService;
 use App\Support\ObservabilityAccess;
 use Apriansyahrs\MekayaTheme\Auth\MekayaLogin;
 use Apriansyahrs\MekayaTheme\MekayaPlugin;
@@ -12,6 +13,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\NavigationItem;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
@@ -54,7 +56,16 @@ class AdminPanelProvider extends PanelProvider
             ->pages([
                 Dashboard::class,
             ])
-            ->navigationItems(ObservabilityAccess::filamentNavigationItems())
+            ->navigationItems([
+                ...ObservabilityAccess::filamentNavigationItems(),
+                // Food waste report on CESA for the F&B outlets (JChicken, Momoyo, Luuca).
+                NavigationItem::make('Waste')
+                    ->url(config('services.cesa.waste_url'), shouldOpenInNewTab: true)
+                    ->icon('heroicon-o-trash')
+                    ->group('Jadwal & Shift')
+                    ->sort(10)
+                    ->visible(fn (): bool => DataAccessService::isCoordinator(auth()->user())),
+            ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             ->widgets([
                 UserProfileWidget::class,
