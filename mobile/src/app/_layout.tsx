@@ -15,11 +15,15 @@ import { View } from 'react-native';
 import { StackHeader } from '@/components/navigation';
 import { LoadingView } from '@/components/ui';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { initPush } from '@/lib/onesignal';
 import { queryClient } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
 import { useAppearance, useTheme } from '@/theme';
 
 void SplashScreen.preventAutoHideAsync();
+
+// OneSignal starts once with the app; permission is asked later, after sign-in.
+initPush();
 
 export default function RootLayout() {
   const status = useSession((state) => state.status);

@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { logout } from './api/auth';
 import { configureApi } from './api/client';
 import type { User } from './api/types';
+import { forgetPushUser } from './onesignal';
 import { takeStoredPushToken } from './push';
 
 const TOKEN_KEY = 'ontime.token';
@@ -107,6 +108,8 @@ export const useSession = create<SessionState>((set, get) => ({
     // Cleared before anything is awaited, so overlapping calls (several 401s at once) do it once
     // and the user never waits on the network to leave.
     set({ token: null, user: null, status: 'signedOut' });
+    // This device stops receiving the signed-out user's pushes right away.
+    forgetPushUser();
 
     const [pushToken] = await Promise.all([takeStoredPushToken(), writeSecure(TOKEN_KEY, null), writeSecure(USER_KEY, null)]);
 

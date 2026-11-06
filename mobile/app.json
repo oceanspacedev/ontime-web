@@ -37,6 +37,12 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "onesignal-expo-plugin",
+        {
+          "mode": "development"
+        }
+      ],
       "expo-router",
       "expo-secure-store",
       [
@@ -72,6 +78,9 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "oneSignalAppId": "37e96a62-f9fc-45d5-8159-1f079b3f80f5"
     }
   }
 }
