@@ -5,17 +5,19 @@ import { useState } from 'react';
 import { DaySwitcher } from '@/components/DaySwitcher';
 import { ScheduleSheet, type ScheduleTarget } from '@/components/ScheduleSheet';
 import { TeamFreelancerList } from '@/components/TeamFreelancerList';
+import { TeamRecapView } from '@/components/TeamRecapView';
 import { Badge, EmptyState, ErrorBanner, Group, IconButton, LoadingView, Row, Screen, Segmented, Sheet } from '@/components/ui';
 import { errorMessage, teamApi, type RosterEntry, type RosterOutlet, type TeamFreelancer } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { rosterBadge, rosterLine, rosterSummary } from '@/lib/team';
 
-type TeamView = 'schedule' | 'freelancers';
+type TeamView = 'schedule' | 'freelancers' | 'recap';
 
 const VIEWS: { value: TeamView; label: string }[] = [
   { value: 'schedule', label: 'Jadwal' },
   { value: 'freelancers', label: 'Freelancer' },
+  { value: 'recap', label: 'Rekap' },
 ];
 
 /** Days off carry no outlet, so a group of only days off is titled "Libur". */
@@ -71,7 +73,9 @@ export default function TeamScreen() {
       onRefresh={() => queryClient.invalidateQueries({ queryKey: queryKeys.team })}>
       <Segmented options={VIEWS} value={view} onChange={setView} />
 
-      {view === 'freelancers' ? (
+      {view === 'recap' ? (
+        <TeamRecapView />
+      ) : view === 'freelancers' ? (
         <TeamFreelancerList onSchedule={scheduleFreelancer} />
       ) : (
         <>

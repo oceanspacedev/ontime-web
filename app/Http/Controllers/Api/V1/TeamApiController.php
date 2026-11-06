@@ -15,12 +15,14 @@ use App\Services\DataAccessService;
 use App\Services\OutletRosterService;
 use App\Services\SchedulingOptions;
 use App\Services\ShiftAssignmentService;
+use App\Services\TeamRecapService;
 use App\Services\WorkerAccountService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\URL;
 use InvalidArgumentException;
 
 /**
@@ -138,6 +140,31 @@ class TeamApiController extends Controller
         ]);
     }
 
+    public function recap(Request $request, TeamRecapService $recaps): JsonResponse
+    {
+        $user = $this->manager($request);
+        $month = $this->month($request);
+
+        return response()->json([
+            'month' => $month->format('Y-m'),
+            'data' => $recaps->recap($user, $month),
+        ]);
+    }
+
+    /**
+     * A signed link, valid for 15 minutes, that downloads the recap as Excel without an API token.
+     */
+    public function recapLink(Request $request): JsonResponse
+    {
+        $user = $this->manager($request);
+        $month = $this->month($request);
+
+        return response()->json([
+            'url' => URL::temporarySignedRoute('exports.team-recap', now()->addMinutes(15), ['user' => $user->id, 'month' => $month->format('Y-m')]),
+            'expires_in' => 900,
+        ]);
+    }
+
     public function freelancers(Request $request): JsonResponse
     {
         $user = $this->manager($request);
@@ -239,6 +266,13 @@ class TeamApiController extends Controller
         $this->accounts->reactivate($freelancer);
 
         return response()->json(['message' => 'Freelancer aktif lagi.', 'data' => $this->freelancerData($freelancer->fresh(['division']))]);
+    }
+
+    private function month(Request $request): Carbon
+    {
+        $validated = $request->validate(['month' => ['nullable', 'date_format:Y-m']]);
+
+        return isset($validated['month']) ? Carbon::createFromFormat('Y-m', $validated['month'])->startOfMonth() : today()->startOfMonth();
     }
 
     private function manager(Request $request): User

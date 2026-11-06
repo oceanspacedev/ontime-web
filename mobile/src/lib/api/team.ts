@@ -6,6 +6,7 @@ import type {
   ScheduleChange,
   TeamFreelancer,
   TeamOptions,
+  TeamRecap,
   TeamRoster,
   TeamWorker,
 } from './types';
@@ -44,4 +45,14 @@ export function endFreelancer(id: number): Promise<{ message: string; data: Team
 
 export function reactivateFreelancer(id: number): Promise<{ message: string; data: TeamFreelancer }> {
   return request(`/team/freelancers/${id}/reactivate`, { method: 'POST' });
+}
+
+/** `month` is YYYY-MM. */
+export function recap(month: string): Promise<TeamRecap> {
+  return request<TeamRecap>('/team/recap', { query: { month } });
+}
+
+/** A signed link, valid for 15 minutes, that downloads the recap as Excel in the browser. */
+export function recapLink(month: string): Promise<{ url: string; expires_in: number }> {
+  return request<{ url: string; expires_in: number }>('/team/recap/link', { query: { month } });
 }

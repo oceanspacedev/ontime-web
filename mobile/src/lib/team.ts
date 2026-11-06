@@ -1,4 +1,4 @@
-import type { RosterEntry, RosterState, TeamRoster, TeamShift } from './api/types';
+import type { RosterEntry, RosterState, TeamRecapRow, TeamRoster, TeamShift } from './api/types';
 import { toDateString, type Tone } from './format';
 
 const STATE_LABELS: Record<RosterState, string> = {
@@ -67,4 +67,17 @@ export function teamAttention(roster: TeamRoster): string | undefined {
   const late = roster.outlets.reduce((sum, outlet) => sum + outlet.counts.terlambat, 0);
   const parts = [missing > 0 ? `${missing} belum absen` : null, late > 0 ? `${late} terlambat` : null].filter(Boolean);
   return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
+/** "Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam". */
+export function recapLine(row: TeamRecapRow): string {
+  const hours = row.worked_hours.toLocaleString('id-ID', { maximumFractionDigits: 2 });
+  return [
+    `Masuk ${row.present_days}/${row.scheduled_days}`,
+    row.absent_days > 0 ? `${row.absent_days} tidak hadir` : null,
+    row.late_days > 0 ? `${row.late_days}× telat` : null,
+    `${hours} jam`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }

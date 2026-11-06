@@ -493,3 +493,21 @@ export interface NewFreelancerResponse {
   data: TeamFreelancer;
   account: NewAccount | null;
 }
+
+export interface TeamRecapRow {
+  worker: { type: WorkerType; id: number; number: string; name: string; company: string | null; division: string | null };
+  outlet: string | null;
+  scheduled_days: number;
+  present_days: number;
+  late_days: number;
+  late_minutes: number;
+  absent_days: number;
+  off_days: number;
+  scheduled_hours: number;
+  worked_hours: number;
+}
+
+export interface TeamRecap {
+  month: string;
+  data: TeamRecapRow[];
+}

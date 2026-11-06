@@ -33,4 +33,5 @@ export const queryKeys = {
   teamOptions: ['team', 'options'] as const,
   teamWorkers: (search: string) => ['team', 'workers', search] as const,
   teamFreelancers: (status: string, search: string) => ['team', 'freelancers', status, search] as const,
+  teamRecap: (month: string) => ['team', 'recap', month] as const,
 };

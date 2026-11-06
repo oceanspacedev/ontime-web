@@ -1,6 +1,6 @@
 import { deriveAccess } from '../access';
 import type { TeamRoster, User } from '../api/types';
-import { rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention } from '../team';
+import { recapLine, rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention } from '../team';
 
 function user(overrides: Partial<User>): User {
   return {
@@ -69,5 +69,25 @@ describe('team summaries', () => {
   it('points out who is missing or late', () => {
     expect(teamAttention(roster)).toBe('1 belum absen · 1 terlambat');
     expect(teamAttention({ ...roster, outlets: [{ ...roster.outlets[0], counts: { ...counts, belum: 0, terlambat: 0 } }] })).toBeUndefined();
+  });
+});
+
+describe('recapLine', () => {
+  const row = {
+    worker: { type: 'freelancer' as const, id: 1, number: 'FL-1', name: 'Bayu', company: null, division: null },
+    outlet: 'JChicken Ciledug',
+    scheduled_days: 20,
+    present_days: 18,
+    late_days: 3,
+    late_minutes: 45,
+    absent_days: 2,
+    off_days: 4,
+    scheduled_hours: 180,
+    worked_hours: 152.5,
+  };
+
+  it('sums up a month in one line', () => {
+    expect(recapLine(row)).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam');
+    expect(recapLine({ ...row, absent_days: 0, late_days: 0, worked_hours: 160 })).toBe('Masuk 18/20 · 160 jam');
   });
 });
