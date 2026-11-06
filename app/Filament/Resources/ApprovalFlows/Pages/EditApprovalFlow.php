@@ -19,31 +19,31 @@ class EditApprovalFlow extends EditRecord
 
         $data['company_id'] = $companyId;
 
-        $data['leave_steps'] = ApprovalFlow::where('company_id', $companyId)
+        $data['leave_steps'] = ApprovalFlow::companyWide()->where('company_id', $companyId)
             ->where('request_type', 'leave')
             ->orderBy('step_order')
             ->get()
             ->toArray();
 
-        $data['overtime_steps'] = ApprovalFlow::where('company_id', $companyId)
+        $data['overtime_steps'] = ApprovalFlow::companyWide()->where('company_id', $companyId)
             ->where('request_type', 'overtime')
             ->orderBy('step_order')
             ->get()
             ->toArray();
 
-        $data['correction_steps'] = ApprovalFlow::where('company_id', $companyId)
+        $data['correction_steps'] = ApprovalFlow::companyWide()->where('company_id', $companyId)
             ->where('request_type', 'correction')
             ->orderBy('step_order')
             ->get()
             ->toArray();
 
-        $data['resignation_steps'] = ApprovalFlow::where('company_id', $companyId)
+        $data['resignation_steps'] = ApprovalFlow::companyWide()->where('company_id', $companyId)
             ->where('request_type', 'resignation')
             ->orderBy('step_order')
             ->get()
             ->toArray();
 
-        $data['geofence_steps'] = ApprovalFlow::where('company_id', $companyId)
+        $data['geofence_steps'] = ApprovalFlow::companyWide()->where('company_id', $companyId)
             ->where('request_type', 'geofence')
             ->orderBy('step_order')
             ->get()
@@ -69,7 +69,7 @@ class EditApprovalFlow extends EditRecord
         $this->validateSteps($geofenceSteps, 'Absensi Luar Geofence');
 
         DB::transaction(function () use ($companyId, $leaveSteps, $overtimeSteps, $correctionSteps, $resignationSteps, $geofenceSteps) {
-            ApprovalFlow::where('company_id', $companyId)->delete();
+            ApprovalFlow::companyWide()->where('company_id', $companyId)->delete();
 
             $this->insertSteps($companyId, 'leave', $leaveSteps);
             $this->insertSteps($companyId, 'overtime', $overtimeSteps);

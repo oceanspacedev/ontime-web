@@ -6,6 +6,7 @@ use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\ApprovalFlows\Pages\CreateApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\EditApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\ListApprovalFlows;
+use App\Filament\Resources\ApprovalFlows\RelationManagers\DivisionApprovalFlowsRelationManager;
 use App\Models\Company;
 use App\Models\User;
 use App\Services\ApprovalFlowService;
@@ -144,8 +145,8 @@ class ApprovalFlowResource extends Resource
                         ->options(fn (): array => static::approverRoleOptions())
                         ->default('Approver')
                         ->live()
-                        ->helperText(fn (Get $get, ?string $state): ?string => filled($state) && ! ApprovalFlowService::hasHolderForRole($state, $get('../../company_id'))
-                            ? "Belum ada pengguna aktif dengan role {$state} di badan usaha ini. Pengajuan akan tertahan di tahap ini."
+                        ->helperText(fn (Get $get, ?string $state): ?string => filled($state) && ! ApprovalFlowService::hasHolderForRole($state, $get('../../company_id'), $get('../../division_id'))
+                            ? "Belum ada pengguna aktif dengan role {$state} yang menjangkau badan usaha atau divisi ini. Pengajuan akan tertahan di tahap ini."
                             : null)
                         ->visible(fn (Get $get) => $get('approver_type') === 'role')
                         ->required(fn (Get $get) => $get('approver_type') === 'role'),
@@ -195,27 +196,27 @@ class ApprovalFlowResource extends Resource
 
                 BadgeColumn::make('leave_steps')
                     ->label('Tahap Cuti / Izin')
-                    ->state(fn (Company $record): string => $record->approvalFlows()->where('request_type', 'leave')->count().' Tahap')
+                    ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'leave')->count().' Tahap')
                     ->color('info'),
 
                 BadgeColumn::make('overtime_steps')
                     ->label('Tahap Lembur')
-                    ->state(fn (Company $record): string => $record->approvalFlows()->where('request_type', 'overtime')->count().' Tahap')
+                    ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'overtime')->count().' Tahap')
                     ->color('warning'),
 
                 BadgeColumn::make('correction_steps')
                     ->label('Tahap Koreksi Absensi')
-                    ->state(fn (Company $record): string => $record->approvalFlows()->where('request_type', 'correction')->count().' Tahap')
+                    ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'correction')->count().' Tahap')
                     ->color('success'),
 
                 BadgeColumn::make('resignation_steps')
                     ->label('Tahap Pengunduran Diri')
-                    ->state(fn (Company $record): string => $record->approvalFlows()->where('request_type', 'resignation')->count().' Tahap')
+                    ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'resignation')->count().' Tahap')
                     ->color('danger'),
 
                 BadgeColumn::make('geofence_steps')
                     ->label('Tahap Luar Geofence')
-                    ->state(fn (Company $record): string => $record->approvalFlows()->where('request_type', 'geofence')->count().' Tahap')
+                    ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'geofence')->count().' Tahap')
                     ->color('warning'),
             ])
             ->actions([
@@ -223,6 +224,13 @@ class ApprovalFlowResource extends Resource
                     ->label('Atur Alur Approval')
                     ->icon('heroicon-o-pencil-square'),
             ]);
+    }
+
+    public static function getRelations(): array
+    {
+        return [
+            DivisionApprovalFlowsRelationManager::class,
+        ];
     }
 
     public static function getPages(): array

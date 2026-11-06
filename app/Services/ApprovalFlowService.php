@@ -8,6 +8,7 @@ use App\Models\ApprovalRequestStep;
 use App\Models\Attendance;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
+use App\Models\Division;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\Resignation;
@@ -17,6 +18,7 @@ use App\Notifications\ApprovalResolvedNotification;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class ApprovalFlowService
@@ -42,16 +44,21 @@ class ApprovalFlowService
     public const APPROVER_ROLES = ['Approver', 'BOD', 'Superadmin', 'Admin', 'Koordinator'];
 
     /**
-     * Active users holding $role whose data access reaches $companyId, so a stage set to that role
+     * Active users holding $role whose data access reaches $companyId (and $divisionId, for a division
+     * rule), so a stage set to that role
      * has someone to act on it.
      */
-    public static function hasHolderForRole(string $role, int|string|null $companyId): bool
+    public static function hasHolderForRole(string $role, int|string|null $companyId, int|string|null $divisionId = null): bool
     {
         if ($companyId === null || $companyId === '') {
             return true;
         }
 
-        return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId): bool {
+        return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId, $divisionId): bool {
+            if (filled($divisionId)) {
+                return DataAccessService::canAccessPlacement($user, $companyId, $divisionId);
+            }
+
             $companyIds = DataAccessService::placeableCompanyIds($user);
 
             return $companyIds === null || in_array((int) $companyId, $companyIds, true);
@@ -88,7 +95,7 @@ class ApprovalFlowService
      */
     public function createDefaultFlows(Company $company): void
     {
-        if ($company->approvalFlows()->exists()) {
+        if ($company->approvalFlows()->companyWide()->exists()) {
             return;
         }
 
@@ -103,6 +110,106 @@ class ApprovalFlowService
                 'approver_role' => 'Approver',
             ]);
         }
+    }
+
+    /**
+     * Replace a division's own rule for the given request types with $steps, in the order given.
+     *
+     * @param  list<string>  $requestTypes
+     * @param  list<array{name?: string|null, approver_type?: string|null, approver_role?: string|null, user_id?: int|string|null}>  $steps
+     */
+    public function saveDivisionRule(Company $company, int $divisionId, array $requestTypes, array $steps): void
+    {
+        $division = Division::query()->where('company_id', $company->id)->findOrFail($divisionId);
+        $requestTypes = array_values(array_intersect($requestTypes, array_keys(self::REQUEST_TYPE_LABELS)));
+
+        if ($requestTypes === [] || $steps === []) {
+            throw ValidationException::withMessages(['steps' => 'Pilih jenis pengajuan dan isi minimal 1 tahap approval.']);
+        }
+
+        foreach ($steps as $index => $step) {
+            $type = $step['approver_type'] ?? 'role';
+            $role = $step['approver_role'] ?? null;
+
+            if (($type === 'role' && ! in_array($role, self::APPROVER_ROLES, true)) || ($type === 'user' && empty($step['user_id']))) {
+                throw ValidationException::withMessages(['steps' => 'Tahap '.($index + 1).' belum memilih approver.']);
+            }
+        }
+
+        DB::transaction(function () use ($company, $division, $requestTypes, $steps): void {
+            foreach ($requestTypes as $requestType) {
+                ApprovalFlow::query()
+                    ->where('company_id', $company->id)
+                    ->where('division_id', $division->id)
+                    ->where('request_type', $requestType)
+                    ->delete();
+
+                foreach ($steps as $index => $step) {
+                    $isUser = ($step['approver_type'] ?? 'role') === 'user';
+
+                    ApprovalFlow::create([
+                        'company_id' => $company->id,
+                        'division_id' => $division->id,
+                        'request_type' => $requestType,
+                        'step_number' => $index + 1,
+                        'step_order' => $index + 1,
+                        'name' => filled($step['name'] ?? null) ? $step['name'] : 'Tahap '.($index + 1),
+                        'approver_type' => $isUser ? 'user' : 'role',
+                        'approver_role' => $isUser ? null : $step['approver_role'],
+                        'user_id' => $isUser ? (int) $step['user_id'] : null,
+                    ]);
+                }
+            }
+        });
+    }
+
+    /**
+     * The flow that applies to a worker: the rule of their division, else of the nearest division
+     * above it that has one, else the company-wide flow. Resolved per request type, so a division
+     * can set its own leave rule and keep the company's flow for everything else.
+     *
+     * @return Collection<int, ApprovalFlow>
+     */
+    public function flowsFor(int $companyId, int|string|null $divisionId, string $requestType): Collection
+    {
+        $flows = ApprovalFlow::query()
+            ->where('company_id', $companyId)
+            ->where('request_type', $requestType)
+            ->orderBy('step_order')
+            ->get();
+
+        foreach ($this->divisionLineage($divisionId) as $lineageDivisionId) {
+            $divisionFlows = $flows->where('division_id', $lineageDivisionId);
+
+            if ($divisionFlows->isNotEmpty()) {
+                return $divisionFlows->values();
+            }
+        }
+
+        return $flows->whereNull('division_id')->values();
+    }
+
+    /**
+     * The division and the divisions above it, nearest first.
+     *
+     * @return list<int>
+     */
+    private function divisionLineage(int|string|null $divisionId): array
+    {
+        if (! $divisionId) {
+            return [];
+        }
+
+        $parentIdsById = Division::query()->pluck('parent_id', 'id')->all();
+        $lineage = [];
+        $current = (int) $divisionId;
+
+        while ($current && ! in_array($current, $lineage, true)) {
+            $lineage[] = $current;
+            $current = (int) ($parentIdsById[$current] ?? 0);
+        }
+
+        return $lineage;
     }
 
     /**
@@ -136,10 +243,7 @@ class ApprovalFlowService
             ]);
         }
 
-        $flows = ApprovalFlow::where('company_id', $companyId)
-            ->where('request_type', $requestType)
-            ->orderBy('step_order')
-            ->get();
+        $flows = $this->flowsFor((int) $companyId, $workerProfile?->division_id, $requestType);
 
         if ($flows->isEmpty()) {
             if ($requestType === 'geofence') {

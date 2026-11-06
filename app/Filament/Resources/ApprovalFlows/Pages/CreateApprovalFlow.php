@@ -32,7 +32,7 @@ class CreateApprovalFlow extends CreateRecord
         $this->validateSteps($geofenceSteps, 'Absensi Luar Geofence');
 
         DB::transaction(function () use ($companyId, $leaveSteps, $overtimeSteps, $correctionSteps, $resignationSteps, $geofenceSteps) {
-            ApprovalFlow::where('company_id', $companyId)->delete();
+            ApprovalFlow::companyWide()->where('company_id', $companyId)->delete();
 
             $this->insertSteps($companyId, 'leave', $leaveSteps);
             $this->insertSteps($companyId, 'overtime', $overtimeSteps);
