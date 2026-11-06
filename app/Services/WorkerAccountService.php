@@ -32,7 +32,7 @@ final class WorkerAccountService
      */
     public function createAccount(Employee|Intern|Freelancer $worker, ?string $email = null, ?string $role = null, ?string $password = null): array
     {
-        $email = Str::lower(trim($email ?: ($worker->email ?: $this->fallbackEmail($worker))));
+        $email = Str::lower(trim($email ?: $this->loginEmailFor($worker)));
         $role ??= $this->defaultRole($worker);
         $password ??= Str::password(10, symbols: false);
 
@@ -55,7 +55,7 @@ final class WorkerAccountService
             return $user;
         });
 
-        $whatsapp = WhatsAppNotificationService::sendAccountCredentials($worker->full_name, $worker->phone, $email, $password, $role);
+        $whatsapp = WhatsAppNotificationService::sendAccountCredentials($worker->full_name, $worker->phone, $email, $password);
 
         return ['user' => $user, 'email' => $email, 'password' => $password, 'whatsapp' => $whatsapp];
     }
@@ -99,6 +99,14 @@ final class WorkerAccountService
     public function isActive(Employee|Intern|Freelancer $worker): bool
     {
         return ! in_array($worker->status, self::ENDED_STATUSES, true);
+    }
+
+    /**
+     * The email a new account signs in with: the worker's own, else one made from their number.
+     */
+    public function loginEmailFor(Employee|Intern|Freelancer $worker): string
+    {
+        return Str::lower(trim($worker->email ?: $this->fallbackEmail($worker)));
     }
 
     private function fallbackEmail(Employee|Intern|Freelancer $worker): string

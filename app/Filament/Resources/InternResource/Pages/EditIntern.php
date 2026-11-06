@@ -3,11 +3,8 @@
 namespace App\Filament\Resources\InternResource\Pages;
 
 use App\Filament\Resources\InternResource;
-use App\Services\WorkerAccountService;
 use Filament\Actions;
-use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
-use InvalidArgumentException;
 
 class EditIntern extends EditRecord
 {
@@ -23,23 +20,8 @@ class EditIntern extends EditRecord
                 ->visible(fn (): bool => ! $this->record->user_id)
                 ->requiresConfirmation()
                 ->modalHeading("Buat Akun User untuk {$this->record->full_name}")
-                ->modalDescription('Akun user akan dibuat otomatis menggunakan data nama dan email/NIS magang.')
-                ->action(function (): void {
-                    try {
-                        $account = app(WorkerAccountService::class)->createAccount($this->record);
-                    } catch (InvalidArgumentException $exception) {
-                        Notification::make()->title('Gagal Membuat Akun')->body($exception->getMessage())->danger()->send();
-
-                        return;
-                    }
-
-                    Notification::make()
-                        ->title('Akun User Berhasil Dibuat')
-                        ->body("Email: {$account['email']} | Password: {$account['password']}")
-                        ->success()
-                        ->persistent()
-                        ->send();
-                }),
+                ->modalDescription('Kata sandi dibuat otomatis lalu dikirim ke WhatsApp bersama link unduh aplikasi.')
+                ->action(fn () => InternResource::openAccount($this->record)),
             Actions\DeleteAction::make(),
         ];
     }

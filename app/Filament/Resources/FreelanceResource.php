@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\OpensWorkerAccounts;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MasterFacePhotoField;
 use App\Filament\Resources\FreelanceResource\Pages;
@@ -28,18 +29,16 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
-use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\HtmlString;
-use InvalidArgumentException;
 use UnitEnum;
 
 class FreelanceResource extends Resource
 {
+    use OpensWorkerAccounts;
     use ScopesToManagedCompanies;
 
     protected static ?string $model = Freelancer::class;
@@ -317,29 +316,7 @@ class FreelanceResource extends Resource
                     ]),
             ])
             ->actions([
-                Action::make('createUser')
-                    ->label('Buat Akun')
-                    ->icon('heroicon-o-user-plus')
-                    ->color('success')
-                    ->visible(fn (Freelancer $record): bool => ! $record->user_id)
-                    ->modalHeading(fn (Freelancer $record) => "Buat Akun {$record->full_name}")
-                    ->modalWidth(Width::Medium)
-                    ->schema([
-                        TextInput::make('email')
-                            ->label('Email Login')
-                            ->email()
-                            ->default(fn (Freelancer $record) => $record->email ?: strtolower($record->freelancer_number).'@freelance.local')
-                            ->required(),
-                        Select::make('role')
-                            ->label('Role')
-                            ->options(fn (): array => static::assignableRoleOptions())
-                            ->default('Freelancer')
-                            ->required(),
-                    ])
-                    ->action(function (Freelancer $record, array $data): void {
-                        abort_unless(array_key_exists($data['role'], static::assignableRoleOptions()), 403);
-                        static::openAccount($record, $data['email'], $data['role']);
-                    }),
+                static::createAccountAction(),
 
                 ...static::contractActions(),
 
@@ -380,42 +357,6 @@ class FreelanceResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
-    }
-
-    /**
-     * Create the login account and show the credentials once, with a WhatsApp fallback link.
-     */
-    public static function openAccount(Freelancer $freelancer, ?string $email = null, ?string $role = null): void
-    {
-        try {
-            $account = app(WorkerAccountService::class)->createAccount($freelancer, $email, $role);
-        } catch (InvalidArgumentException $exception) {
-            Notification::make()->title('Akun belum dibuat')->body($exception->getMessage())->danger()->send();
-
-            return;
-        }
-
-        $whatsapp = $account['whatsapp'];
-        $notification = Notification::make()
-            ->title('Akun dibuat')
-            ->body(new HtmlString(collect([
-                'Email: '.e($account['email']),
-                'Password: '.e($account['password']),
-                $whatsapp['api_sent'] ? 'Terkirim lewat WhatsApp.' : 'Belum terkirim lewat WhatsApp.',
-            ])->implode('<br>')))
-            ->success()
-            ->persistent();
-
-        if (! $whatsapp['api_sent'] && ! empty($whatsapp['wa_url'])) {
-            $notification->actions([
-                Action::make('sendWhatsApp')
-                    ->label('Kirim via WhatsApp')
-                    ->url($whatsapp['wa_url'], shouldOpenInNewTab: true)
-                    ->button(),
-            ]);
-        }
-
-        $notification->send();
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\OpensWorkerAccounts;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MasterFacePhotoField;
 use App\Filament\Resources\EmployeeResource\Pages;
@@ -11,9 +12,7 @@ use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Shift;
-use App\Models\User;
 use App\Services\AnnualLeaveService;
-use App\Services\WhatsAppNotificationService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
@@ -40,13 +39,11 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class EmployeeResource extends Resource
 {
+    use OpensWorkerAccounts;
     use ScopesToManagedCompanies;
 
     protected static ?string $model = Employee::class;
@@ -364,89 +361,7 @@ class EmployeeResource extends Resource
                     ->default('active'),
             ])
             ->actions([
-                Action::make('createUser')
-                    ->label('Buat Akun')
-                    ->icon('heroicon-o-user-plus')
-                    ->color('success')
-                    ->visible(fn (Employee $record): bool => ! $record->user_id)
-                    ->modalHeading(fn (Employee $record) => "Buat Akun User untuk {$record->full_name}")
-                    ->modalDescription('Tinjau kredensial dan role yang akan dibuat untuk akun karyawan ini.')
-                    ->schema([
-                        TextInput::make('email')
-                            ->label('Alamat Email Login')
-                            ->email()
-                            ->default(fn (Employee $record) => $record->email ?: strtolower($record->nip).'@employee.local')
-                            ->required(),
-                        Select::make('role')
-                            ->label('Role Akses')
-                            ->options(fn (): array => static::assignableRoleOptions())
-                            ->default('Employee')
-                            ->required(),
-                        TextInput::make('password')
-                            ->label('Password Awal')
-                            ->default(fn (): string => Str::password(10, symbols: false))
-                            ->helperText('Dibuat acak dan dikirim lewat WhatsApp bila nomor tersedia.')
-                            ->required(),
-                    ])
-                    ->action(function (Employee $record, array $data) {
-                        $email = $data['email'];
-                        $roleName = $data['role'] ?? 'Employee';
-                        $password = $data['password'];
-
-                        if (User::where('email', $email)->exists()) {
-                            Notification::make()
-                                ->title('Gagal Membuat Akun')
-                                ->body("Email {$email} sudah digunakan oleh akun user lain.")
-                                ->danger()
-                                ->send();
-
-                            return;
-                        }
-
-                        $user = User::create([
-                            'name' => $record->full_name,
-                            'email' => $email,
-                            'phone' => $record->phone,
-                            'password' => Hash::make($password),
-                        ]);
-
-                        abort_unless(array_key_exists($roleName, static::assignableRoleOptions()), 403);
-
-                        if ($role = Role::firstOrCreate(['name' => $roleName])) {
-                            $user->assignRole($role);
-                        }
-
-                        $record->update(['user_id' => $user->id]);
-
-                        $waResult = WhatsAppNotificationService::sendAccountCredentials(
-                            $record->full_name,
-                            $record->phone,
-                            $email,
-                            $password,
-                            $roleName
-                        );
-
-                        $waStatusNote = $waResult['api_sent']
-                            ? "\n✅ Notifikasi WhatsApp telah otomatis terkirim via WAG Gateway."
-                            : ($waResult['api_error'] ? "\n⚠️ WAG Gateway: {$waResult['api_error']}" : "\n⚠️ Nomor HP belum diisi.");
-
-                        $notification = Notification::make()
-                            ->title('Akun User Berhasil Dibuat!')
-                            ->body("Kredensial Login {$record->full_name} (Role: {$roleName}):\nEmail: {$email}\nNo. HP: ".($record->phone ?? '-')."\nPassword: {$password}\nMetode Login: Email + Password atau WhatsApp OTP{$waStatusNote}")
-                            ->success();
-
-                        if (! $waResult['api_sent'] && ! empty($waResult['wa_url'])) {
-                            $notification->actions([
-                                Action::make('send_wa')
-                                    ->label('Kirim via WA Web/App (Fallback)')
-                                    ->url($waResult['wa_url'], shouldOpenInNewTab: true)
-                                    ->button()
-                                    ->color('warning'),
-                            ]);
-                        }
-
-                        $notification->send();
-                    }),
+                static::createAccountAction(),
                 Action::make('deleteUser')
                     ->label('Hapus Akun')
                     ->icon('heroicon-o-user-minus')

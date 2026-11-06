@@ -103,10 +103,10 @@ class CompanyAdminAccessTest extends TestCase
         $this->assertArrayNotHasKey('Admin', $roles);
 
         Livewire::test(ListEmployees::class)
-            ->callAction(TestAction::make('createUser')->table($this->employeeTop), data: ['email' => 'baru@example.com', 'role' => 'Superadmin', 'password' => 'rahasia-123'])
+            ->callAction(TestAction::make('createUser')->table($this->employeeTop), data: ['role' => 'Superadmin'])
             ->assertHasFormErrors(['role']);
 
-        $this->assertDatabaseMissing('users', ['email' => 'baru@example.com']);
+        $this->assertNull($this->employeeTop->fresh()->user_id);
     }
 
     public function test_company_admin_never_sees_or_deletes_superadmin_accounts(): void

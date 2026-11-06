@@ -64,7 +64,7 @@ class WorkerLifecycleTest extends TestCase
             ])
             ->call('create')
             ->assertHasNoFormErrors()
-            ->assertNotified('Akun dibuat');
+            ->assertNotified('Akun Bayu Adillah dibuat');
 
         $freelancer = Freelancer::with('user')->sole();
 

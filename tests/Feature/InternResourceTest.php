@@ -201,11 +201,7 @@ class InternResourceTest extends TestCase
         Role::create(['name' => 'Intern']);
 
         Livewire::test(ListInterns::class)
-            ->callTableAction('createUser', $intern, [
-                'email' => 'autouser@example.com',
-                'role' => 'Intern',
-                'password' => 'password123',
-            ])
+            ->callTableAction('createUser', $intern)
             ->assertHasNoTableActionErrors();
 
         $intern->refresh();
