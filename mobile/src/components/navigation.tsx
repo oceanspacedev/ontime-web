@@ -41,7 +41,7 @@ export function StackHeader({ title, canGoBack, modal = false, right, onBack }: 
   };
 
   return (
-    <View style={[styles.header, { paddingTop: modal ? spacing.lg : insets.top + spacing.sm }]}>
+    <View style={[styles.header, { paddingTop: modal && Platform.OS === 'ios' ? spacing.lg : insets.top + spacing.sm }]}>
       {canGoBack || modal ? (
         <IconButton icon={modal ? 'close' : 'chevron-back'} onPress={goBack} accessibilityLabel={modal ? 'Tutup' : 'Kembali'} />
       ) : null}

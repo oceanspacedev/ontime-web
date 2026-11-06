@@ -89,7 +89,10 @@ export default function ServerSettingsScreen() {
           placeholder="https://ontime.perusahaan.id"
         />
         {Platform.OS === 'android' && /127\.0\.0\.1|localhost/.test(value) ? (
-          <Notice tone="warning" message="Di Android Emulator, komputer pengembang diakses lewat 10.0.2.2, bukan 127.0.0.1." />
+          <Notice
+            tone="info"
+            message="Di Android Emulator, komputer pengembang diakses lewat 10.0.2.2. Di HP yang tersambung USB, 127.0.0.1 hanya bisa dipakai bila portnya diteruskan dengan adb reverse."
+          />
         ) : null}
         {result ? <Notice tone={result.ok ? 'success' : 'danger'} message={result.message} /> : null}
         <View style={styles.actions}>
