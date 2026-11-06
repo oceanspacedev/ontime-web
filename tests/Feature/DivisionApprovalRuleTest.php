@@ -16,6 +16,7 @@ use Filament\Actions\Testing\TestAction;
 use Filament\Forms\Components\Repeater;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -88,8 +89,9 @@ class DivisionApprovalRuleTest extends TestCase
 
     public function test_a_specific_user_can_be_a_divisions_manager(): void
     {
-        $manager = User::factory()->create();
+        $manager = User::factory()->create(['is_active' => true]);
         $manager->assignRole('Approver');
+        $manager->grantDataAccess(DataScope::Divisions, divisionIds: [$this->finance->id]);
         $this->service->saveDivisionRule($this->company, $this->finance->id, ['leave'], [$this->step('Approver'), ['name' => 'Manager Keuangan', 'approver_type' => 'user', 'user_id' => $manager->id]]);
 
         $leave = $this->leaveIn($this->finance);
@@ -106,6 +108,44 @@ class DivisionApprovalRuleTest extends TestCase
         $this->expectException(ModelNotFoundException::class);
 
         $this->service->saveDivisionRule($this->company, $foreign->id, ['leave'], [$this->step('Approver')]);
+    }
+
+    public function test_only_users_who_reach_the_company_can_be_named_approver(): void
+    {
+        $other = Company::create(['name' => 'PT Lain', 'code' => 'LAIN', 'is_active' => true]);
+        $inside = User::factory()->create(['name' => 'Manager Dalam', 'is_active' => true]);
+        $inside->assignRole('Approver');
+        $inside->grantDataAccess(DataScope::Divisions, divisionIds: [$this->finance->id]);
+        $outside = User::factory()->create(['name' => 'Manager Luar', 'is_active' => true]);
+        $outside->assignRole('Approver');
+        $outside->grantDataAccess(DataScope::Companies, companyIds: [$other->id]);
+
+        $options = ApprovalFlowService::approverUserOptions($this->company->id);
+
+        $this->assertArrayHasKey($inside->id, $options);
+        $this->assertArrayHasKey($this->superadmin->id, $options);
+        $this->assertArrayNotHasKey($outside->id, $options);
+
+        $this->expectException(ValidationException::class);
+        $this->service->saveDivisionRule($this->company, $this->finance->id, ['leave'], [['name' => 'Luar', 'approver_type' => 'user', 'user_id' => $outside->id]]);
+    }
+
+    public function test_the_company_flow_rejects_a_user_from_another_company(): void
+    {
+        $other = Company::create(['name' => 'PT Lain', 'code' => 'LAIN', 'is_active' => true]);
+        $outside = User::factory()->create(['is_active' => true]);
+        $outside->assignRole('Approver');
+        $outside->grantDataAccess(DataScope::Companies, companyIds: [$other->id]);
+        $this->actingAs($this->superadmin);
+        $undoRepeaterFake = Repeater::fake();
+
+        Livewire::test(EditApprovalFlow::class, ['record' => $this->company->id])
+            ->fillForm(['leave_steps' => [['name' => 'Luar', 'approver_type' => 'user', 'approver_role' => null, 'user_id' => $outside->id]]])
+            ->call('save')
+            ->assertHasFormErrors(['leave_steps.0.user_id']);
+
+        $this->assertFalse(ApprovalFlow::where('user_id', $outside->id)->exists());
+        $undoRepeaterFake();
     }
 
     public function test_rules_are_added_edited_and_removed_in_the_panel(): void

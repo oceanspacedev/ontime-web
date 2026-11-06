@@ -33,6 +33,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 use UnitEnum;
 
@@ -326,7 +327,8 @@ class InternResource extends Resource
                             ->required(),
                         TextInput::make('password')
                             ->label('Password Awal')
-                            ->default('password123')
+                            ->default(fn (): string => Str::password(10, symbols: false))
+                            ->helperText('Dibuat acak dan dikirim lewat WhatsApp bila nomor tersedia.')
                             ->required(),
                     ])
                     ->action(function (Intern $record, array $data) {

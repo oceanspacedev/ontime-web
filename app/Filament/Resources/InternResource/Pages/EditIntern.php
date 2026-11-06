@@ -3,12 +3,11 @@
 namespace App\Filament\Resources\InternResource\Pages;
 
 use App\Filament\Resources\InternResource;
-use App\Models\User;
+use App\Services\WorkerAccountService;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
-use Illuminate\Support\Facades\Hash;
-use Spatie\Permission\Models\Role;
+use InvalidArgumentException;
 
 class EditIntern extends EditRecord
 {
@@ -25,36 +24,20 @@ class EditIntern extends EditRecord
                 ->requiresConfirmation()
                 ->modalHeading("Buat Akun User untuk {$this->record->full_name}")
                 ->modalDescription('Akun user akan dibuat otomatis menggunakan data nama dan email/NIS magang.')
-                ->action(function () {
-                    $record = $this->record;
-                    $email = $record->email ?: strtolower($record->nis).'@magang.local';
-
-                    if (User::where('email', $email)->exists()) {
-                        Notification::make()
-                            ->title('Gagal Membuat Akun')
-                            ->body("Email {$email} sudah digunakan oleh akun user lain.")
-                            ->danger()
-                            ->send();
+                ->action(function (): void {
+                    try {
+                        $account = app(WorkerAccountService::class)->createAccount($this->record);
+                    } catch (InvalidArgumentException $exception) {
+                        Notification::make()->title('Gagal Membuat Akun')->body($exception->getMessage())->danger()->send();
 
                         return;
                     }
 
-                    $user = User::create([
-                        'name' => $record->full_name,
-                        'email' => $email,
-                        'password' => Hash::make('password123'),
-                    ]);
-
-                    if ($role = Role::firstOrCreate(['name' => 'Intern'])) {
-                        $user->assignRole($role);
-                    }
-
-                    $record->update(['user_id' => $user->id]);
-
                     Notification::make()
                         ->title('Akun User Berhasil Dibuat')
-                        ->body("Akun untuk {$record->full_name} berhasil dibuat.\nEmail: {$email} | Password: password123")
+                        ->body("Email: {$account['email']} | Password: {$account['password']}")
                         ->success()
+                        ->persistent()
                         ->send();
                 }),
             Actions\DeleteAction::make(),

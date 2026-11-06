@@ -9,7 +9,6 @@ use App\Filament\Resources\ApprovalFlows\Pages\ListApprovalFlows;
 use App\Filament\Resources\ApprovalFlows\RelationManagers\DivisionApprovalFlowsRelationManager;
 use App\Models\ApprovalFlow;
 use App\Models\Company;
-use App\Models\User;
 use App\Services\ApprovalFlowService;
 use BackedEnum;
 use Filament\Actions\EditAction;
@@ -169,12 +168,7 @@ class ApprovalFlowResource extends Resource
                         Select::make('user_id')
                             ->label('User')
                             ->placeholder('Pilih user')
-                            ->options(fn (): array => User::query()
-                                ->where('is_active', true)
-                                ->whereHas('roles', fn ($query) => $query->whereIn('name', ApprovalFlowService::APPROVER_ROLES))
-                                ->orderBy('name')
-                                ->pluck('name', 'id')
-                                ->all())
+                            ->options(fn (Get $get): array => ApprovalFlowService::approverUserOptions($get('../../company_id')))
                             ->searchable()
                             ->visible(fn (Get $get): bool => $get('approver_type') === 'user')
                             ->required(fn (Get $get): bool => $get('approver_type') === 'user'),

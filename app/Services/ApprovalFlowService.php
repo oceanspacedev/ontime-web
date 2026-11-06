@@ -44,6 +44,32 @@ class ApprovalFlowService
     public const APPROVER_ROLES = ['Approver', 'BOD', 'Superadmin', 'Admin', 'Koordinator'];
 
     /**
+     * Users who can be named as a stage's approver for the company: active, holding an approval role,
+     * and with data access reaching that company. Anyone else would approve requests they cannot see.
+     *
+     * @return array<int, string>
+     */
+    public static function approverUserOptions(int|string|null $companyId): array
+    {
+        if (blank($companyId)) {
+            return [];
+        }
+
+        return User::query()
+            ->where('is_active', true)
+            ->whereHas('roles', fn ($query) => $query->whereIn('name', self::APPROVER_ROLES))
+            ->orderBy('name')
+            ->get()
+            ->filter(function (User $user) use ($companyId): bool {
+                $companyIds = DataAccessService::placeableCompanyIds($user);
+
+                return $companyIds === null || in_array((int) $companyId, $companyIds, true);
+            })
+            ->pluck('name', 'id')
+            ->all();
+    }
+
+    /**
      * Active users holding $role whose data access reaches $companyId (and $divisionId, for a division
      * rule), so a stage set to that role
      * has someone to act on it.
@@ -131,8 +157,9 @@ class ApprovalFlowService
             $type = $step['approver_type'] ?? 'role';
             $role = $step['approver_role'] ?? null;
 
-            if (($type === 'role' && ! in_array($role, self::APPROVER_ROLES, true)) || ($type === 'user' && empty($step['user_id']))) {
-                throw ValidationException::withMessages(['steps' => 'Tahap '.($index + 1).' belum memilih approver.']);
+            if (($type === 'role' && ! in_array($role, self::APPROVER_ROLES, true))
+                || ($type === 'user' && ! array_key_exists((int) ($step['user_id'] ?? 0), self::approverUserOptions($company->id)))) {
+                throw ValidationException::withMessages(['steps' => 'Tahap '.($index + 1).' belum memilih approver, atau approver-nya tidak punya akses ke badan usaha ini.']);
             }
         }
 
