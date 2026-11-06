@@ -7,21 +7,25 @@ use App\Filament\Resources\ApprovalFlows\Pages\CreateApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\EditApprovalFlow;
 use App\Filament\Resources\ApprovalFlows\Pages\ListApprovalFlows;
 use App\Filament\Resources\ApprovalFlows\RelationManagers\DivisionApprovalFlowsRelationManager;
+use App\Models\ApprovalFlow;
 use App\Models\Company;
 use App\Models\User;
 use App\Services\ApprovalFlowService;
 use BackedEnum;
 use Filament\Actions\EditAction;
-use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\ToggleButtons;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
+use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Schemas\Components\Text;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -59,55 +63,57 @@ class ApprovalFlowResource extends Resource
 
     public static function form(Schema $schema): Schema
     {
+        $tab = fn (string $requestType, string $field, Heroicon $icon): Tab => Tab::make(ApprovalFlowService::requestTypeLabel($requestType))
+            ->icon($icon)
+            ->badge(fn (Get $get): int => count($get($field) ?? []))
+            ->schema([static::getStepRepeaterSchema($field)]);
+
         return $schema
             ->components([
-                Section::make('Identitas Perusahaan')
+                Section::make()
+                    ->columnSpanFull()
+                    ->columns(['default' => 1, 'lg' => 2])
                     ->schema([
                         Select::make('company_id')
-                            ->label('Badan Usaha (Company)')
-                            ->options(fn (): array => static::managedCompanyOptions())
+                            ->label('Badan usaha')
+                            ->placeholder('Pilih badan usaha')
+                            ->options(fn (string $operation): array => $operation === 'create' ? static::companiesWithoutFlowOptions() : static::managedCompanyOptions(activeOnly: false))
+                            ->searchable()
                             ->required()
+                            ->live()
                             ->disabledOn('edit')
-                            ->default(fn () => request()->query('company_id')),
+                            ->dehydrated()
+                            ->default(fn () => request()->query('company_id'))
+                            ->helperText(fn (string $operation): ?string => $operation === 'create' && static::companiesWithoutFlowOptions() === []
+                                ? 'Semua badan usaha sudah punya alur. Ubah alurnya dari daftar.'
+                                : null),
+                        Text::make('Berlaku untuk semua divisi, kecuali divisi yang punya aturan sendiri di bagian Aturan per Divisi.')
+                            ->color('gray'),
                     ]),
 
-                Section::make('Konfigurasi Tahap Approval')
-                    ->description('Atur urutan dan penugasan approver untuk setiap jenis pengajuan (Cuti, Lembur, Koreksi Absensi).')
-                    ->schema([
-                        Tabs::make('ApprovalFlows')
-                            ->tabs([
-                                Tabs\Tab::make('Cuti / Izin')
-                                    ->icon('heroicon-o-calendar')
-                                    ->schema([
-                                        static::getStepRepeaterSchema('leave_steps', 'Leave / Cuti'),
-                                    ]),
-
-                                Tabs\Tab::make('Lembur')
-                                    ->icon('heroicon-o-clock')
-                                    ->schema([
-                                        static::getStepRepeaterSchema('overtime_steps', 'Overtime / Lembur'),
-                                    ]),
-
-                                Tabs\Tab::make('Koreksi Absensi')
-                                    ->icon('heroicon-o-arrow-path')
-                                    ->schema([
-                                        static::getStepRepeaterSchema('correction_steps', 'Koreksi Absensi'),
-                                    ]),
-
-                                Tabs\Tab::make('Pengunduran Diri')
-                                    ->icon('heroicon-o-arrow-right-on-rectangle')
-                                    ->schema([
-                                        static::getStepRepeaterSchema('resignation_steps', 'Pengunduran Diri'),
-                                    ]),
-
-                                Tabs\Tab::make('Absensi Luar Geofence')
-                                    ->icon('heroicon-o-map-pin')
-                                    ->schema([
-                                        static::getStepRepeaterSchema('geofence_steps', 'Absensi Luar Geofence'),
-                                    ]),
-                            ]),
+                Tabs::make('ApprovalFlows')
+                    ->columnSpanFull()
+                    ->tabs([
+                        $tab('leave', 'leave_steps', Heroicon::OutlinedCalendarDays),
+                        $tab('overtime', 'overtime_steps', Heroicon::OutlinedClock),
+                        $tab('correction', 'correction_steps', Heroicon::OutlinedPencilSquare),
+                        $tab('resignation', 'resignation_steps', Heroicon::OutlinedArrowRightStartOnRectangle),
+                        $tab('geofence', 'geofence_steps', Heroicon::OutlinedMapPin),
                     ]),
             ]);
+    }
+
+    /**
+     * Companies the current user manages that have no company-wide flow yet; creating one for a
+     * company that already has a flow would replace it.
+     *
+     * @return array<int, string>
+     */
+    public static function companiesWithoutFlowOptions(): array
+    {
+        $withFlow = ApprovalFlow::companyWide()->distinct()->pluck('company_id')->all();
+
+        return collect(static::managedCompanyOptions())->except($withFlow)->all();
     }
 
     /**
@@ -120,52 +126,61 @@ class ApprovalFlowResource extends Resource
         return Role::query()->whereIn('name', ApprovalFlowService::APPROVER_ROLES)->pluck('name', 'name')->all();
     }
 
-    public static function getStepRepeaterSchema(string $name, string $label): Repeater
+    /**
+     * The stages of one request type, in order. Each stage is approved by a role or by one user.
+     */
+    public static function getStepRepeaterSchema(string $name): Repeater
     {
         return Repeater::make($name)
-            ->label("Tahap Approval {$label}")
+            ->label('Tahap approval')
+            ->hiddenLabel()
             ->schema([
-                Grid::make(2)->schema([
-                    TextInput::make('name')
-                        ->label('Nama Tahap / Label')
-                        ->placeholder('Contoh: Manager Direct / HR Review')
-                        ->required(),
+                Grid::make(['default' => 1, '@lg' => 3])
+                    ->gridContainer()
+                    ->schema([
+                        TextInput::make('name')
+                            ->label('Nama tahap')
+                            ->placeholder('Persetujuan Manager')
+                            ->required(),
 
-                    Radio::make('approver_type')
-                        ->label('Penetapan Approver')
-                        ->options([
-                            'role' => 'Berdasarkan Role (Role Approver Divisi)',
-                            'user' => 'User Spesifik (Pengawas Khusus)',
-                        ])
-                        ->default('role')
-                        ->live(),
+                        ToggleButtons::make('approver_type')
+                            ->label('Disetujui oleh')
+                            ->options([
+                                'role' => 'Role',
+                                'user' => 'User tertentu',
+                            ])
+                            ->grouped()
+                            ->default('role')
+                            ->required()
+                            ->live(),
 
-                    Select::make('approver_role')
-                        ->label('Role Approver')
-                        ->options(fn (): array => static::approverRoleOptions())
-                        ->default('Approver')
-                        ->live()
-                        ->helperText(fn (Get $get, ?string $state): ?string => filled($state) && ! ApprovalFlowService::hasHolderForRole($state, $get('../../company_id'), $get('../../division_id'))
-                            ? "Belum ada pengguna aktif dengan role {$state} yang menjangkau badan usaha atau divisi ini. Pengajuan akan tertahan di tahap ini."
-                            : null)
-                        ->visible(fn (Get $get) => $get('approver_type') === 'role')
-                        ->required(fn (Get $get) => $get('approver_type') === 'role'),
+                        Select::make('approver_role')
+                            ->label('Role')
+                            ->placeholder('Pilih role')
+                            ->options(fn (): array => static::approverRoleOptions())
+                            ->default('Approver')
+                            ->live()
+                            ->visible(fn (Get $get): bool => $get('approver_type') !== 'user')
+                            ->required(fn (Get $get): bool => $get('approver_type') !== 'user')
+                            ->helperText(fn (Get $get, ?string $state): ?string => filled($state) && ! ApprovalFlowService::hasHolderForRole($state, $get('../../company_id'), $get('../../division_id'))
+                                ? 'Belum ada pengguna aktif dengan role ini, pengajuan akan tertahan.'
+                                : null),
 
-                    Select::make('user_id')
-                        ->label('Pilih User Spesifik')
-                        ->options(function () {
-                            return User::query()
+                        Select::make('user_id')
+                            ->label('User')
+                            ->placeholder('Pilih user')
+                            ->options(fn (): array => User::query()
                                 ->where('is_active', true)
-                                ->whereHas('roles', fn ($q) => $q->whereIn('name', ApprovalFlowService::APPROVER_ROLES))
-                                ->pluck('name', 'id');
-                        })
-                        ->searchable()
-                        ->visible(fn (Get $get) => $get('approver_type') === 'user')
-                        ->required(fn (Get $get) => $get('approver_type') === 'user'),
-                ]),
+                                ->whereHas('roles', fn ($query) => $query->whereIn('name', ApprovalFlowService::APPROVER_ROLES))
+                                ->orderBy('name')
+                                ->pluck('name', 'id')
+                                ->all())
+                            ->searchable()
+                            ->visible(fn (Get $get): bool => $get('approver_type') === 'user')
+                            ->required(fn (Get $get): bool => $get('approver_type') === 'user'),
+                    ]),
             ])
             ->itemLabel(fn (array $state): ?string => $state['name'] ?? null)
-            ->collapsible()
             ->default([
                 [
                     'name' => 'Persetujuan Approver',
@@ -173,11 +188,12 @@ class ApprovalFlowResource extends Resource
                     'approver_role' => 'Approver',
                 ],
             ])
+            ->addActionLabel('Tambah tahap')
             ->minItems(1)
             ->validationMessages([
-                'min' => 'Setiap jenis alur (Cuti, Lembur, Koreksi) wajib memiliki minimal 1 tahap approval.',
+                'min' => 'Minimal 1 tahap approval.',
             ])
-            ->reorderable(true);
+            ->reorderable();
     }
 
     public static function table(Table $table): Table

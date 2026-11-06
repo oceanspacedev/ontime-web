@@ -102,7 +102,7 @@ class ApprovalNotificationRecipientsTest extends TestCase
         $this->assertFalse(ApprovalFlowService::hasHolderForRole('Approver', $this->company->id));
 
         Livewire::test(EditApprovalFlow::class, ['record' => $this->company->id])
-            ->assertSee('Belum ada pengguna aktif dengan role Approver yang menjangkau badan usaha atau divisi ini.');
+            ->assertSee('Belum ada pengguna aktif dengan role ini, pengajuan akan tertahan.');
     }
 
     /** @param list<string> $roles */

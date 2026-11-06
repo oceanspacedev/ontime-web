@@ -106,11 +106,13 @@ class DivisionApprovalFlowsRelationManager extends RelationManager
             ->slideOver()
             ->modalWidth(Width::Medium)
             ->modalSubmitActionLabel('Simpan')
+            ->modalCancelActionLabel('Batal')
             ->schema([
                 Hidden::make('company_id')
                     ->default($company->id),
                 Select::make('division_id')
                     ->label('Divisi')
+                    ->placeholder('Pilih divisi')
                     ->options(fn (): array => $this->divisionOptions($company))
                     ->searchable()
                     ->required()
@@ -122,8 +124,8 @@ class DivisionApprovalFlowsRelationManager extends RelationManager
                     ->columns(2)
                     ->required()
                     ->helperText('Aturan divisi yang sudah ada untuk jenis yang dipilih akan diganti.'),
-                ApprovalFlowResource::getStepRepeaterSchema('steps', '')
-                    ->label('Tahap approval'),
+                ApprovalFlowResource::getStepRepeaterSchema('steps')
+                    ->hiddenLabel(false),
             ])
             ->action(function (array $data) use ($company): void {
                 app(ApprovalFlowService::class)->saveDivisionRule($company, (int) $data['division_id'], $data['request_types'], array_values($data['steps'] ?? []));

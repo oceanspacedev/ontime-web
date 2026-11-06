@@ -5,6 +5,7 @@ namespace App\Filament\Resources\ApprovalFlows\Pages;
 use App\Filament\Resources\ApprovalFlows\ApprovalFlowResource;
 use App\Models\ApprovalFlow;
 use App\Models\Company;
+use Filament\Actions\Action;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,25 @@ use Illuminate\Validation\ValidationException;
 class CreateApprovalFlow extends CreateRecord
 {
     protected static string $resource = ApprovalFlowResource::class;
+
+    protected static ?string $title = 'Atur Alur Persetujuan';
+
+    protected static bool $canCreateAnother = false;
+
+    public function getBreadcrumb(): string
+    {
+        return 'Atur';
+    }
+
+    protected function getCancelFormAction(): Action
+    {
+        return parent::getCancelFormAction()->label('Batal');
+    }
+
+    protected function getCreateFormAction(): Action
+    {
+        return parent::getCreateFormAction()->label('Simpan');
+    }
 
     protected function handleRecordCreation(array $data): Model
     {

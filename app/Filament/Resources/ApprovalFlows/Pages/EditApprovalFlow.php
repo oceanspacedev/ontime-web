@@ -4,6 +4,7 @@ namespace App\Filament\Resources\ApprovalFlows\Pages;
 
 use App\Filament\Resources\ApprovalFlows\ApprovalFlowResource;
 use App\Models\ApprovalFlow;
+use Filament\Actions\Action;
 use Filament\Resources\Pages\EditRecord;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +13,26 @@ use Illuminate\Validation\ValidationException;
 class EditApprovalFlow extends EditRecord
 {
     protected static string $resource = ApprovalFlowResource::class;
+
+    public function getTitle(): string
+    {
+        return 'Alur Persetujuan '.$this->getRecord()->name;
+    }
+
+    public function getBreadcrumb(): string
+    {
+        return 'Atur';
+    }
+
+    protected function getCancelFormAction(): Action
+    {
+        return parent::getCancelFormAction()->label('Batal');
+    }
+
+    protected function getSaveFormAction(): Action
+    {
+        return parent::getSaveFormAction()->label('Simpan');
+    }
 
     protected function mutateFormDataBeforeFill(array $data): array
     {
