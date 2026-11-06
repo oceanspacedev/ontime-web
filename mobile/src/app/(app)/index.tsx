@@ -87,14 +87,14 @@ export default function HomeScreen() {
 
   const pendingCount = countPending(pending.data);
 
+  // Only what the bottom bar does not already offer: Riwayat and Persetujuan have their own tabs.
   const menu: MenuItem[] = [
-    { key: 'history', label: 'Riwayat', icon: 'calendar-outline', href: '/history' },
     ...(access.canRequestLeave ? [{ key: 'leave', label: 'Cuti / Izin', icon: 'sunny-outline', href: '/request/leave/new' } as MenuItem] : []),
     ...(access.canRequestOvertime ? [{ key: 'overtime', label: 'Lembur', icon: 'moon-outline', href: '/request/overtime/new' } as MenuItem] : []),
     ...(access.canRequestCorrection ? [{ key: 'correction', label: 'Koreksi', icon: 'create-outline', href: '/request/correction/new' } as MenuItem] : []),
     ...(access.canSeeLeaveCalendar ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
-    ...(access.canApprove ? [{ key: 'approvals', label: 'Persetujuan', icon: 'checkmark-done-outline', href: '/approvals', badge: pendingCount } as MenuItem] : []),
-    ...(access.canUseAttendance ? [{ key: 'face', label: 'Master Wajah', icon: 'scan-outline', href: '/attendance/master-face' } as MenuItem] : []),
+    // Team runners have Tim in the bar instead of Riwayat, so Riwayat stays reachable here.
+    ...(access.canManageTeam && access.canUseAttendance ? [{ key: 'history', label: 'Riwayat', icon: 'calendar-outline', href: '/history' } as MenuItem] : []),
     ...(access.wasteUrl ? [{ key: 'waste', label: 'Waste', icon: 'trash-outline', href: { external: access.wasteUrl } } as MenuItem] : []),
   ];
 
@@ -124,11 +124,9 @@ export default function HomeScreen() {
               .join(' · ') || access.roles.join(', ')}
           </Text>
         </View>
-        {access.canApprove ? (
+        {access.canApprove && pendingCount > 0 ? (
           <IconButton icon="notifications-outline" onPress={() => router.push('/approvals')} badge={pendingCount} accessibilityLabel="Persetujuan" />
-        ) : (
-          <IconButton icon="person-outline" onPress={() => router.push('/profile')} accessibilityLabel="Profil" />
-        )}
+        ) : null}
       </View>
 
       {access.canUseAttendance ? (

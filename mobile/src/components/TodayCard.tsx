@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { View } from 'react-native';
 
-import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { Badge, Button, Group, Notice, Text } from '@/components/ui';
 import type { Access } from '@/lib/access';
 import { type Attendance, attendanceApi, type TodayAttendance } from '@/lib/api';
@@ -77,18 +76,20 @@ export function TodayCard({ today, access }: Props) {
               </Text>
             </View>
           ) : null}
-          {policy ? <AttendanceModeChips policy={policy} style={styles.modeChips} /> : null}
         </View>
-        {attendance ? <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} /> : null}
+        {attendance ? (
+          <Badge
+            label={attendance.late_minutes ? `Telat ${attendance.late_minutes} mnt` : attendanceStatusLabel(attendance.status)}
+            tone={attendanceStatusTone(attendance.status)}
+          />
+        ) : null}
       </View>
 
-      <View style={styles.times}>
+      <View style={[styles.times, done && styles.timesLast]}>
         <TimeHalf label="Masuk" value={attendance?.check_in} icon="log-in-outline" />
         <View style={styles.divider} />
         <TimeHalf label="Pulang" value={attendance?.check_out} icon="log-out-outline" />
       </View>
-
-      {attendance?.late_minutes ? <Badge label={`Terlambat ${attendance.late_minutes} menit`} tone="warning" dot /> : null}
 
       {attendance?.status === 'pending_approval' ? (
         <Notice tone="warning" message={pendingApprovalMessage(attendance)} />
@@ -106,9 +107,7 @@ export function TodayCard({ today, access }: Props) {
         />
       ) : null}
 
-      {done ? (
-        <Notice tone="success" message="Presensi hari ini sudah lengkap. Sampai jumpa besok!" />
-      ) : needsMasterFace ? (
+      {done ? null : needsMasterFace ? (
         <Button title="Daftarkan Foto Master Wajah" icon="scan-outline" size="lg" onPress={() => router.push('/attendance/master-face')} />
       ) : !today.has_checked_in ? (
         <Button title="Absen Masuk" icon="log-in-outline" size="lg" onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'in' } })} />
@@ -149,7 +148,6 @@ const useStyles = makeStyles((c) => ({
   date: { fontSize: fontSize.lg, fontWeight: '600', color: c.text },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   schedule: { flexShrink: 1, fontSize: fontSize.sm, color: c.textMuted },
-  modeChips: { marginTop: 4 },
   times: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -158,6 +156,8 @@ const useStyles = makeStyles((c) => ({
     borderBottomWidth: 1,
     borderColor: c.separator,
   },
+  /** Nothing follows the times once the day is done, so no closing line. */
+  timesLast: { borderBottomWidth: 0, paddingBottom: 0 },
   half: { flex: 1, gap: 6, paddingHorizontal: spacing.xs },
   halfLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   halfLabel: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },
