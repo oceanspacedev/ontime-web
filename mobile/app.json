@@ -67,13 +67,6 @@
         }
       ],
       "expo-document-picker",
-      [
-        "expo-notifications",
-        {
-          "color": "#0F4C81",
-          "defaultChannel": "default"
-        }
-      ],
       "expo-font"
     ],
     "experiments": {

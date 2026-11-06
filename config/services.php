@@ -59,13 +59,14 @@ return [
         'deep_link' => env('MOBILE_APP_DEEP_LINK', 'ontime://'),
     ],
 
-    // Expo Push API for the mobile app. EXPO_ACCESS_TOKEN is only needed once "enhanced push
-    // security" is enabled for the Expo project.
-    'expo' => [
-        'push_url' => env('EXPO_PUSH_URL') ?: 'https://exp.host/--/api/v2/push/send',
-        'access_token' => env('EXPO_ACCESS_TOKEN'),
-        'connect_timeout' => (float) env('EXPO_CONNECT_TIMEOUT', 5),
-        'timeout' => (float) env('EXPO_API_TIMEOUT', 15),
+    // OneSignal push for the mobile app. The App ID is public (also in mobile/app.json); the REST API
+    // key is secret and only lives here. Without the key no push is sent.
+    'onesignal' => [
+        'app_id' => env('ONESIGNAL_APP_ID', '37e96a62-f9fc-45d5-8159-1f079b3f80f5'),
+        'rest_api_key' => env('ONESIGNAL_REST_API_KEY'),
+        'api_url' => env('ONESIGNAL_API_URL', 'https://api.onesignal.com/notifications?c=push'),
+        'connect_timeout' => (float) env('ONESIGNAL_CONNECT_TIMEOUT', 5),
+        'timeout' => (float) env('ONESIGNAL_TIMEOUT', 15),
     ],
 
     'google' => [

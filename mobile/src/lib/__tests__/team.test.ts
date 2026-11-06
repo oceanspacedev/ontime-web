@@ -98,3 +98,18 @@ describe('recapLine', () => {
     expect(recapLine({ ...row, absent_days: 0, late_days: 0, worked_hours: 160 })).toBe('Masuk 18/20 · 160 jam');
   });
 });
+
+describe('pushTarget', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- keeps the import local to this block
+  const { pushTarget } = require('../push') as typeof import('../push');
+
+  it('opens the check screen from an attendance reminder', () => {
+    expect(pushTarget({ kind: 'attendance_reminder', action: 'check_in' }, false)).toEqual({ pathname: '/attendance/check', params: { mode: 'in' } });
+    expect(pushTarget({ kind: 'attendance_reminder', action: 'check_out' }, false)).toEqual({ pathname: '/attendance/check', params: { mode: 'out' } });
+  });
+
+  it('opens the Tim tab for coordinators only', () => {
+    expect(pushTarget({ kind: 'team_missing' }, true, true)).toEqual({ pathname: '/(app)/team' });
+    expect(pushTarget({ kind: 'team_missing' }, true, false)).toBeNull();
+  });
+});

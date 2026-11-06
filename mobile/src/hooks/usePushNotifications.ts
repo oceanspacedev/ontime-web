@@ -26,7 +26,7 @@ import { useSession } from '@/lib/session';
 export function usePushNotifications(): void {
   const status = useSession((state) => state.status);
   const userId = useSession((state) => state.user?.id ?? null);
-  const { canApprove } = useAccess();
+  const { canApprove, canManageTeam } = useAccess();
   const navigationReady = Boolean(useRootNavigationState()?.key);
 
   // The tapped push waits here until the navigator exists and the user is signed in.
@@ -61,6 +61,7 @@ export function usePushNotifications(): void {
 
   useEffect(() => {
     const stopForeground = onPushInForeground(() => {
+      void queryClient.invalidateQueries({ queryKey: ['team'] });
       void queryClient.invalidateQueries({ queryKey: ['approvals'] });
       void queryClient.invalidateQueries({ queryKey: ['requests'] });
       void queryClient.invalidateQueries({ queryKey: ['attendance'] });
@@ -81,9 +82,9 @@ export function usePushNotifications(): void {
       return;
     }
     pendingData.current = null;
-    const target = pushTarget(data, canApprove);
+    const target = pushTarget(data, canApprove, canManageTeam);
     if (target) {
       router.push(target);
     }
-  }, [tapCount, navigationReady, status, canApprove]);
+  }, [tapCount, navigationReady, status, canApprove, canManageTeam]);
 }
