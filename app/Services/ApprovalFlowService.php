@@ -271,27 +271,31 @@ class ApprovalFlowService
 
         $currentStepOrder = (int) ($requestModel->current_step ?? 1);
         $maxSteps = (int) $requestModel->approvalSteps()->max('step_order');
+        $closesAllStages = $this->closesAllStages($user);
+        $isFinalApproval = $closesAllStages || $currentStepOrder >= $maxSteps;
 
         // The final approval turns annual leave into used quota, so the worker must still be entitled.
-        if ($requestModel instanceof LeaveRequest && $currentStepOrder >= $maxSteps
+        if ($requestModel instanceof LeaveRequest && $isFinalApproval
             && $error = app(AnnualLeaveService::class)->approvalError($requestModel)) {
             throw ValidationException::withMessages(['approve' => $error]);
         }
 
-        $step = $requestModel->approvalSteps()
-            ->where('step_order', $currentStepOrder)
-            ->first();
-
-        if ($step) {
-            $step->update([
+        $requestModel->approvalSteps()
+            ->where(fn ($steps) => $steps->where('step_order', $currentStepOrder)
+                ->when($closesAllStages, fn ($query) => $query->orWhere(fn ($later) => $later->where('step_order', '>', $currentStepOrder)->where('status', 'pending'))))
+            ->get()
+            ->each(fn ($step) => $step->update([
                 'status' => 'approved',
                 'actioned_by' => $user->id,
                 'actioned_at' => now(),
                 'notes' => $notes,
-            ]);
+            ]));
+
+        if ($closesAllStages && $currentStepOrder < $maxSteps) {
+            $requestModel->update(['current_step' => $maxSteps]);
         }
 
-        if ($currentStepOrder < $maxSteps) {
+        if (! $isFinalApproval) {
             $requestModel->update([
                 'current_step' => $currentStepOrder + 1,
             ]);
@@ -336,6 +340,15 @@ class ApprovalFlowService
 
             $this->notifyRequester($requestModel, 'approved');
         }
+    }
+
+    /**
+     * A coordinator decides for the crew of their brands, so one approval from them settles every
+     * remaining stage instead of one tap per stage. Admin and Superadmin keep acting per stage.
+     */
+    private function closesAllStages(User $user): bool
+    {
+        return $user->hasRole('Koordinator') && ! $user->hasAnyRole(['Superadmin', 'Admin']);
     }
 
     /**
