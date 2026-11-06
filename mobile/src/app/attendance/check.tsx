@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { type CapturedShot, type LivenessFrames, LivenessStepCard, LivenessThumbnails } from '@/components/LivenessGuide';
-import { Button, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
+import { bottomGap, Button, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { ApiError, attendanceApi, type AttendancePurpose, type Company, errorMessage, type LivenessStep, type LivenessStepKey, type UploadFile } from '@/lib/api';
@@ -439,7 +439,7 @@ export default function AttendanceCheckScreen() {
         ) : null}
       </ScrollView>
 
-      <View style={[styles.actionsArea, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+      <View style={[styles.actionsArea, { paddingBottom: bottomGap(insets.bottom) }]}>
         {missingMasterFace ? (
           <Button title="Daftarkan Foto Master Wajah" icon="scan-outline" size="lg" onPress={() => router.replace('/attendance/master-face')} />
         ) : awaitingCapture ? (

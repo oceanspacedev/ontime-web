@@ -5,7 +5,7 @@ import type { ComponentProps, ReactNode } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IconButton, Text } from '@/components/ui';
+import { bottomGap, IconButton, Text } from '@/components/ui';
 import { elevation, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
 
 /* -------------------------------------------------------------------------------------------------
@@ -81,13 +81,6 @@ const useHeaderStyles = makeStyles((c) => ({
 
 type TabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>['tabBar']>>[0];
 
-/**
- * Space under the floating tab bar. iOS can tuck it slightly into the home indicator area; Android's
- * navigation buttons cannot be overlapped, so the bar sits fully above them with a small gap.
- */
-function tabBarBottomGap(bottomInset: number): number {
-  return Platform.OS === 'android' ? bottomInset + spacing.sm : Math.max(bottomInset - 6, spacing.md);
-}
 
 /**
  * Pill-shaped tab bar floating above the content, icons only. The active tab sits on a soft red
@@ -99,7 +92,7 @@ export function FloatingTabBar({ state, descriptors, navigateToTab, emitter }: T
   const insets = useSafeAreaInsets();
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: tabBarBottomGap(insets.bottom) }]}>
+    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: bottomGap(insets.bottom) - (Platform.OS === 'ios' ? 6 : 0) }]}>
       <View style={styles.bar}>
         {state.routes.map((route, index) => {
           const descriptor = descriptors[route.key];

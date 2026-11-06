@@ -13,6 +13,7 @@ import {
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   type PressableProps,
   RefreshControl,
@@ -95,6 +96,15 @@ export const FloatingTabBarContext = createContext(false);
 /** Height the floating tab bar covers above the bottom safe area. */
 export const FLOATING_TAB_BAR_SPACE = 96;
 
+/**
+ * Space under anything pinned to the bottom (footer buttons, sheets, the tab bar). On iOS the home
+ * indicator area is see-through, so the inset alone is enough. Android's navigation buttons are an
+ * opaque bar the content must not touch, so a gap is added on top of the inset.
+ */
+export function bottomGap(bottomInset: number): number {
+  return Platform.OS === 'android' ? bottomInset + spacing.lg : Math.max(bottomInset, spacing.lg);
+}
+
 interface ScreenProps {
   children: ReactNode;
   scroll?: boolean;
@@ -132,7 +142,7 @@ export function Screen({
   const [refreshing, setRefreshing] = useState(false);
 
   const safeEdges = edges ?? (title ? (['top'] as const) : ([] as const));
-  const bottomSpace = inTabs ? FLOATING_TAB_BAR_SPACE + insets.bottom : footer ? spacing.lg : Math.max(insets.bottom, spacing.lg) + spacing.sm;
+  const bottomSpace = inTabs ? FLOATING_TAB_BAR_SPACE + insets.bottom : footer ? spacing.lg : bottomGap(insets.bottom) + spacing.sm;
 
   const header = title ? (
     <View style={styles.largeHeader}>
@@ -187,7 +197,7 @@ export function Screen({
       ) : (
         <View style={[styles.fill, { paddingBottom: footer ? 0 : bottomSpace }]}>{content}</View>
       )}
-      {footer ? <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>{footer}</View> : null}
+      {footer ? <View style={[styles.footer, { paddingBottom: bottomGap(insets.bottom) }]}>{footer}</View> : null}
     </SafeAreaView>
   );
 }
@@ -1065,7 +1075,7 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
       <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Tutup" />
-      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+      <View style={[styles.sheet, { paddingBottom: bottomGap(insets.bottom) }]}>
         <View style={styles.handle} />
         {title ? <Text style={styles.title}>{title}</Text> : null}
         {children}
