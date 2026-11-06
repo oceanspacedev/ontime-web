@@ -22,6 +22,7 @@ class Attendance extends Model
         'intern_id',
         'freelancer_id',
         'shift_id',
+        'company_location_id',
         'date',
         'check_in',
         'check_out',
@@ -77,6 +78,14 @@ class Attendance extends Model
     public function shift(): BelongsTo
     {
         return $this->belongsTo(Shift::class);
+    }
+
+    /**
+     * Outlet the worker was scheduled at when checking in.
+     */
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(CompanyLocation::class, 'company_location_id');
     }
 
     public function employee(): BelongsTo

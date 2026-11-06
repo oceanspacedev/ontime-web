@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\AttendanceStatus;
 use App\Models\Attendance;
+use App\Models\CompanyLocation;
 use App\Models\CompanyPolicy;
 use App\Models\Employee;
 use App\Models\Freelancer;
@@ -179,12 +180,12 @@ class AttendanceCheckService
             throw new AttendanceRuleException('Sudah melakukan check in hari ini.', 409);
         }
 
-        $checks = $this->runChecks($user, $profile, $input, self::PURPOSE_CHECK_IN);
+        $workingHours = $this->workSchedule->resolve($profile, now());
+        $checks = $this->runChecks($user, $profile, $input, self::PURPOSE_CHECK_IN, $workingHours['location']);
         $reasons = $checks['approval_reasons'];
         $requiresApproval = $reasons !== [];
 
         $now = now();
-        $workingHours = $this->workSchedule->resolve($profile, $now);
         $lateMinutes = $requiresApproval ? 0 : $this->workSchedule->lateMinutes($workingHours, $now);
         $status = match (true) {
             $requiresApproval => AttendanceStatus::PendingApproval,
@@ -202,6 +203,7 @@ class AttendanceCheckService
 
             $attendance->fill([
                 'shift_id' => $workingHours['shift']?->id,
+                'company_location_id' => $workingHours['location']?->id,
                 'check_in' => $now,
                 'check_in_lat' => $checks['latitude'],
                 'check_in_lng' => $checks['longitude'],
@@ -249,7 +251,7 @@ class AttendanceCheckService
             throw new AttendanceRuleException('Sudah melakukan check out hari ini.', 409);
         }
 
-        $checks = $this->runChecks($user, $profile, $input, self::PURPOSE_CHECK_OUT);
+        $checks = $this->runChecks($user, $profile, $input, self::PURPOSE_CHECK_OUT, $attendance->location);
         $reasons = $checks['approval_reasons'];
         $requiresApproval = $reasons !== [];
 
@@ -303,7 +305,8 @@ class AttendanceCheckService
     }
 
     /**
-     * Apply the location and selfie rules of the worker's company policy.
+     * Apply the location and selfie rules of the worker's company policy. With a scheduled outlet,
+     * the geofence only accepts that outlet.
      *
      * @return array{
      *     latitude: float|null,
@@ -322,7 +325,7 @@ class AttendanceCheckService
      *
      * @throws AttendanceRuleException
      */
-    private function runChecks(User $user, Employee|Intern|Freelancer $profile, AttendanceCheckInput $input, string $purpose): array
+    private function runChecks(User $user, Employee|Intern|Freelancer $profile, AttendanceCheckInput $input, string $purpose, ?CompanyLocation $outlet = null): array
     {
         $company = $profile->company;
         $policy = $company?->policy;
@@ -359,11 +362,11 @@ class AttendanceCheckService
                 $reasons[] = 'lokasi palsu terdeteksi';
             }
 
-            $geofence = GeofenceService::validateCompanyGeofence($company, $input->latitude, $input->longitude);
+            $geofence = GeofenceService::validateCompanyGeofence($company, $input->latitude, $input->longitude, $outlet);
 
             if (! $geofence['is_valid']) {
                 $checks['is_out_of_bounds'] = true;
-                $reasons[] = 'di luar area kantor';
+                $reasons[] = $outlet ? "di luar area outlet jadwal ({$outlet->name})" : 'di luar area kantor';
             }
         }
 

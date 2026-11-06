@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Shifts;
 
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\Shifts\Pages\ManageShifts;
+use App\Models\Division;
 use App\Models\Shift;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
@@ -17,6 +18,7 @@ use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
@@ -53,7 +55,7 @@ class ShiftResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('company')->withCount('employees'));
+        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with(['company', 'division'])->withCount('employees'));
     }
 
     public static function form(Schema $schema): Schema
@@ -66,14 +68,30 @@ class ShiftResource extends Resource
                         ->options(fn (): array => static::managedCompanyOptions())
                         ->searchable()
                         ->required()
-                        ->live(),
+                        ->live()
+                        ->afterStateUpdated(fn (Set $set) => $set('division_id', null)),
+
+                    Select::make('division_id')
+                        ->label('Brand')
+                        ->options(fn (Get $get): array => static::brandOptions($get('company_id')))
+                        ->searchable()
+                        ->placeholder('Semua brand')
+                        ->helperText('Divisi brand pemilik shift ini, misalnya JCHICKEN. Kosongkan bila dipakai semua brand.')
+                        ->nullable(),
 
                     TextInput::make('name')
                         ->label('Nama Shift')
-                        ->placeholder('Contoh: Pagi, Siang, Malam')
+                        ->placeholder('Contoh: Pagi, Siang, Sore Closing')
                         ->required()
                         ->maxLength(100)
-                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule->where('company_id', $get('company_id'))),
+                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule
+                            ->where('company_id', $get('company_id'))
+                            ->when(
+                                filled($get('division_id')),
+                                fn (Unique $rule): Unique => $rule->where('division_id', $get('division_id')),
+                                fn (Unique $rule): Unique => $rule->whereNull('division_id'),
+                            ))
+                        ->validationMessages(['unique' => 'Nama shift ini sudah dipakai di brand yang sama.']),
 
                     TimePicker::make('start_time')
                         ->label('Jam Masuk')
@@ -115,6 +133,11 @@ class ShiftResource extends Resource
                     ->sortable()
                     ->searchable(),
 
+                TextColumn::make('division.name')
+                    ->label('Brand')
+                    ->placeholder('Semua brand')
+                    ->sortable(),
+
                 TextColumn::make('name')
                     ->label('Shift')
                     ->searchable(),
@@ -141,6 +164,10 @@ class ShiftResource extends Resource
                     ->label('Badan Usaha')
                     ->options(fn (): array => static::managedCompanyOptions(activeOnly: false)),
 
+                SelectFilter::make('division_id')
+                    ->label('Brand')
+                    ->relationship('division', 'name', fn (Builder $query): Builder => $query->whereIn('id', Shift::query()->whereNotNull('division_id')->select('division_id'))),
+
                 TernaryFilter::make('is_active')
                     ->label('Status Aktif'),
             ])
@@ -153,6 +180,36 @@ class ShiftResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * Active divisions of a managed company, labelled with their full path ("F&B > JCHICKEN").
+     *
+     * @return array<int, string>
+     */
+    public static function brandOptions(int|string|null $companyId): array
+    {
+        if (! $companyId || ! in_array((int) $companyId, array_map('intval', array_keys(static::managedCompanyOptions())), true)) {
+            return [];
+        }
+
+        $divisions = Division::query()->where('company_id', $companyId)->get(['id', 'parent_id', 'name', 'is_active'])->keyBy('id');
+
+        return $divisions
+            ->where('is_active', true)
+            ->mapWithKeys(function (Division $division) use ($divisions): array {
+                $names = [];
+                $node = $division;
+
+                while ($node && count($names) < 10) {
+                    array_unshift($names, $node->name);
+                    $node = $node->parent_id ? $divisions->get($node->parent_id) : null;
+                }
+
+                return [$division->id => implode(' > ', $names)];
+            })
+            ->sort()
+            ->all();
     }
 
     public static function getPages(): array

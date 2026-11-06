@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\ShiftSchedules\Pages;
 
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
+use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
@@ -41,7 +42,7 @@ class ManageShiftSchedules extends ManageRecords
                 ->label('Atur Jadwal')
                 ->icon('heroicon-o-calendar-days')
                 ->modalHeading('Atur Jadwal Shift')
-                ->modalDescription('Tetapkan shift atau hari libur untuk beberapa pekerja sekaligus dalam rentang tanggal.')
+                ->modalDescription('Tetapkan shift atau hari libur untuk beberapa pekerja sekaligus dalam rentang tanggal. Shift brand lain boleh dipilih untuk pekerja yang diperbantukan.')
                 ->modalSubmitActionLabel('Simpan Jadwal')
                 ->modalWidth('2xl')
                 ->schema([
@@ -54,6 +55,7 @@ class ManageShiftSchedules extends ManageRecords
                         ->afterStateUpdated(function (Set $set): void {
                             $set('workers', []);
                             $set('shift_id', null);
+                            $set('company_location_id', null);
                         }),
 
                     Select::make('workers')
@@ -93,8 +95,26 @@ class ManageShiftSchedules extends ManageRecords
                     Select::make('shift_id')
                         ->label('Shift')
                         ->options(fn (Get $get): array => ShiftScheduleResource::shiftOptions($get('company_id')))
+                        ->searchable()
                         ->required(fn (Get $get): bool => $get('mode') === 'shift')
                         ->visible(fn (Get $get): bool => $get('mode') === 'shift'),
+
+                    Grid::make(2)
+                        ->visible(fn (Get $get): bool => $get('mode') === 'shift')
+                        ->schema([
+                            Select::make('company_location_id')
+                                ->label('Outlet (opsional)')
+                                ->options(fn (Get $get): array => ShiftScheduleResource::locationOptions($get('company_id')))
+                                ->searchable()
+                                ->placeholder('Lokasi mana pun')
+                                ->helperText('Absen hanya diterima di outlet ini, dan jam kerjanya dihitung untuk outlet ini.'),
+
+                            TextInput::make('section')
+                                ->label('Section (opsional)')
+                                ->placeholder('Contoh: Kasir, Bar, Cook')
+                                ->datalist(fn (Get $get): array => ShiftScheduleResource::sectionSuggestions($get('company_id')))
+                                ->maxLength(50),
+                        ]),
 
                     TextInput::make('notes')
                         ->label('Catatan (opsional)')
@@ -136,12 +156,20 @@ class ManageShiftSchedules extends ManageRecords
             abort(422, 'Shift tidak termasuk badan usaha yang dipilih.');
         }
 
+        $locationId = $isDayOff || blank($data['company_location_id'] ?? null) ? null : (int) $data['company_location_id'];
+
+        if ($locationId && ! CompanyLocation::query()->whereKey($locationId)->where('company_id', $companyId)->exists()) {
+            abort(422, 'Outlet tidak termasuk badan usaha yang dipilih.');
+        }
+
+        $section = $isDayOff ? null : (trim((string) ($data['section'] ?? '')) ?: null);
+
         $workers = $this->resolveWorkers((array) $data['workers'], $companyId);
         $weekdays = array_map('intval', (array) $data['weekdays']);
         $dates = collect(CarbonPeriod::create($from, $until))->filter(fn ($date): bool => in_array($date->dayOfWeekIso, $weekdays, true));
         $counts = ['created' => 0, 'updated' => 0, 'skipped' => 0];
 
-        DB::transaction(function () use ($workers, $dates, $isDayOff, $shiftId, $data, &$counts): void {
+        DB::transaction(function () use ($workers, $dates, $isDayOff, $shiftId, $locationId, $section, $data, &$counts): void {
             foreach ($workers as [$column, $workerId]) {
                 foreach ($dates as $date) {
                     $schedule = ShiftSchedule::query()->where($column, $workerId)->whereDate('date', $date->toDateString())->first();
@@ -157,7 +185,9 @@ class ManageShiftSchedules extends ManageRecords
 
                     $schedule->fill([
                         'shift_id' => $shiftId,
+                        'company_location_id' => $locationId,
                         'is_day_off' => $isDayOff,
+                        'section' => $section,
                         'notes' => $data['notes'] ?? null,
                         'created_by' => $schedule->created_by ?? auth()->id(),
                     ])->save();
