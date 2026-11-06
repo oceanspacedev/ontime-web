@@ -914,10 +914,13 @@ export function Segmented<T extends string>({
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
             style={[styles.segment, active && styles.segmentActive]}>
-            {option.icon ? <Ionicons name={option.icon} size={16} color={active ? colors.primary : colors.textMuted} /> : null}
-            <Text style={[styles.text, active && styles.textActive]} numberOfLines={1}>
-              {option.label}
-            </Text>
+            {/* The label lets touches through, so a tap on the text selects the segment too. */}
+            <View pointerEvents="none" style={styles.segmentContent}>
+              {option.icon ? <Ionicons name={option.icon} size={16} color={active ? colors.primary : colors.textMuted} /> : null}
+              <Text style={[styles.text, active && styles.textActive]} numberOfLines={1}>
+                {option.label}
+              </Text>
+            </View>
           </Pressable>
         );
       })}
@@ -929,6 +932,7 @@ const useSegmentedStyles = makeStyles((c, dark) => ({
   track: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: radius.pill, padding: 4, gap: 4 },
   segment: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 42, borderRadius: radius.pill, paddingHorizontal: 8 },
   segmentActive: { backgroundColor: dark ? c.card : c.card, boxShadow: elevation(c, 1) },
+  segmentContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   text: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },
   textActive: { color: c.text, fontWeight: '600' },
 }));

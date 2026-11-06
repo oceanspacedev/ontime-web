@@ -1,6 +1,6 @@
 import { deriveAccess } from '../access';
-import type { User } from '../api/types';
-import { rosterBadge, rosterLine, shiftDate, shiftText } from '../team';
+import type { TeamRoster, User } from '../api/types';
+import { rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention } from '../team';
 
 function user(overrides: Partial<User>): User {
   return {
@@ -53,5 +53,21 @@ describe('roster helpers', () => {
   it('moves a date across month ends', () => {
     expect(shiftDate('2026-11-30', 1)).toBe('2026-12-01');
     expect(shiftDate('2026-11-01', -1)).toBe('2026-10-31');
+  });
+});
+
+describe('team summaries', () => {
+  const counts = { scheduled: 4, hadir: 1, terlambat: 1, pulang: 0, menunggu: 0, belum: 1, nanti: 1, libur: 1 };
+  const roster: TeamRoster = { date: '2026-11-06', outlets: [{ location: { id: 1, name: 'JChicken Ciledug' }, counts, entries: [] }] };
+
+  it('counts who already checked in, or who is scheduled on later days', () => {
+    expect(rosterSummary(roster, '2026-11-06')).toBe('2 dari 4 orang sudah absen');
+    expect(rosterSummary({ ...roster, date: '2026-11-07' }, '2026-11-06')).toBe('4 orang terjadwal');
+    expect(rosterSummary({ date: '2026-11-06', outlets: [] }, '2026-11-06')).toBe('Belum ada jadwal');
+  });
+
+  it('points out who is missing or late', () => {
+    expect(teamAttention(roster)).toBe('1 belum absen · 1 terlambat');
+    expect(teamAttention({ ...roster, outlets: [{ ...roster.outlets[0], counts: { ...counts, belum: 0, terlambat: 0 } }] })).toBeUndefined();
   });
 });

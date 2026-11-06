@@ -14,6 +14,8 @@ export interface ScheduleTarget {
   date: string;
   /** The schedule already set for that day, if any. */
   current?: { shift_id: number | null; location_id: number | null; section: string | null; is_day_off: boolean } | null;
+  /** Outlet to start with when there is no schedule yet, usually the outlet of the worker's brand. */
+  defaultLocationId?: number | null;
 }
 
 const NO_OUTLET = 'none';
@@ -43,7 +45,8 @@ function ScheduleForm({ target, onClose, onSaved }: { target: ScheduleTarget; on
 
   const [mode, setMode] = useState<ScheduleMode>(target.current?.is_day_off ? 'off' : 'shift');
   const [shiftId, setShiftId] = useState<string | null>(target.current?.shift_id ? String(target.current.shift_id) : null);
-  const [outletId, setOutletId] = useState<string>(target.current?.location_id ? String(target.current.location_id) : NO_OUTLET);
+  const startOutlet = target.current ? target.current.location_id : target.defaultLocationId;
+  const [outletId, setOutletId] = useState<string>(startOutlet ? String(startOutlet) : NO_OUTLET);
   const [section, setSection] = useState(target.current?.section ?? '');
 
   // An outlet narrows the shifts to its brand; without one every brand is listed with its name.

@@ -462,6 +462,7 @@ export interface ScheduleChange {
 
 export interface TeamFreelancer {
   id: number;
+  company_id: number;
   number: string;
   name: string;
   phone: string | null;

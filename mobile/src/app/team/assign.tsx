@@ -12,15 +12,22 @@ const TYPE_LABELS = { employee: 'Karyawan', intern: 'Magang', freelancer: 'Freel
 
 /** Pick someone and set their schedule for the chosen day. */
 export default function AssignScreen() {
-  const params = useLocalSearchParams<{ date?: string }>();
+  const params = useLocalSearchParams<{ date?: string; search?: string }>();
   const date = params.date ?? toDateString(new Date());
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(params.search ?? '');
   const [target, setTarget] = useState<ScheduleTarget | null>(null);
   const workers = useQuery({ queryKey: queryKeys.teamWorkers(search.trim()), queryFn: () => teamApi.workers(search.trim()) });
 
   return (
     <Screen>
-      <Field label={formatDate(date, 'weekday')} value={search} onChangeText={setSearch} placeholder="Cari nama atau nomor" autoCorrect={false} />
+      <Field
+        label="Cari pekerja"
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Nama atau nomor"
+        autoCorrect={false}
+        hint={`Jadwal untuk ${formatDate(date, 'weekday')}`}
+      />
 
       {workers.isPending ? (
         <LoadingView />

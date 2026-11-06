@@ -264,6 +264,7 @@ class TeamApiController extends Controller
     {
         return [
             'id' => (int) $freelancer->id,
+            'company_id' => (int) $freelancer->company_id,
             'number' => $freelancer->freelancer_number,
             'name' => $freelancer->full_name,
             'phone' => $freelancer->phone,

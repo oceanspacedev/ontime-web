@@ -99,6 +99,10 @@ export function FloatingTabBar({ state, descriptors, navigateToTab, emitter }: T
             return null;
           }
           const options = descriptor.options;
+          // A tab with href null stays a route (reachable from links) but is left out of the bar.
+          if ((options as { href?: unknown }).href === null) {
+            return null;
+          }
           const focused = state.index === index;
           const label = options.title ?? route.name;
           const badge = options.tabBarBadge;

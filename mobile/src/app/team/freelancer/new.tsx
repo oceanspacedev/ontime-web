@@ -26,7 +26,10 @@ export default function NewFreelancerScreen() {
     mutationFn: () => teamApi.addFreelancer({ full_name: name.trim(), phone: phone.trim(), company_location_id: outletId ? Number(outletId) : null, start_date: startDate }),
     onSuccess: async (response) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.team });
-      showNewAccount(response.data.name, response.account, response.message, () => router.back());
+      showNewAccount(response.data.name, response.account, response.message, () => router.back(), {
+        text: 'Atur jadwal',
+        onPress: () => router.replace({ pathname: '/team/assign', params: { search: response.data.name } }),
+      });
     },
     onError: (error) => setErrors(fieldErrorsFrom(error)),
   });

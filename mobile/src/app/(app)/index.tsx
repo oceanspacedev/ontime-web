@@ -7,11 +7,12 @@ import { TODAY_GROUP_TITLE, TodayCard } from '@/components/TodayCard';
 import { Avatar, ErrorBanner, Group, IconButton, type IconName, LoadingView, Notice, ProgressBar, QuickAction, Row, Screen, SectionTitle, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { approvalsApi, attendanceApi, errorMessage, requestsApi } from '@/lib/api';
+import { approvalsApi, attendanceApi, errorMessage, requestsApi, teamApi } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
-import { greeting } from '@/lib/format';
+import { greeting, toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
+import { rosterSummary, teamAttention } from '@/lib/team';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface MenuItem {
@@ -60,12 +61,19 @@ export default function HomeScreen() {
     queryFn: approvalsApi.pending,
     enabled: access.canApprove,
   });
+  const todayDate = toDateString(new Date());
+  const team = useQuery({
+    queryKey: queryKeys.teamRoster(todayDate),
+    queryFn: () => teamApi.roster(todayDate),
+    enabled: access.canManageTeam,
+  });
 
   const refresh = () => {
     refreshUser.mutate();
     void today.refetch();
     void leaves.refetch();
     void pending.refetch();
+    void team.refetch();
   };
 
   const pendingCount = countPending(pending.data);
@@ -126,6 +134,17 @@ export default function HomeScreen() {
       ) : (
         <Notice tone="info" message="Akun ini tidak terhubung ke profil pekerja, jadi presensi dan pengajuan pribadi tidak tersedia. Menu lain tetap bisa dipakai sesuai role." />
       )}
+
+      {access.canManageTeam && team.data ? (
+        <Group title="Tim hari ini">
+          <Row
+            icon="people-outline"
+            title={rosterSummary(team.data)}
+            subtitle={teamAttention(team.data)}
+            onPress={() => router.push('/team')}
+          />
+        </Group>
+      ) : null}
 
       <View style={styles.menu}>
         <SectionTitle title="Menu" />

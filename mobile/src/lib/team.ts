@@ -1,4 +1,4 @@
-import type { RosterEntry, RosterState, TeamShift } from './api/types';
+import type { RosterEntry, RosterState, TeamRoster, TeamShift } from './api/types';
 import { toDateString, type Tone } from './format';
 
 const STATE_LABELS: Record<RosterState, string> = {
@@ -49,4 +49,22 @@ export function rosterLine(entry: Pick<RosterEntry, 'shift' | 'section' | 'state
 export function shiftDate(date: string, days: number): string {
   const [y, m, d] = date.split('-').map(Number);
   return toDateString(new Date(y, m - 1, d + days));
+}
+
+/** "3 dari 8 orang sudah absen" for today and earlier, "8 orang terjadwal" for later days. */
+export function rosterSummary(roster: TeamRoster, today: string = toDateString(new Date())): string {
+  const people = roster.outlets.reduce((sum, outlet) => sum + outlet.counts.scheduled, 0);
+  const present = roster.outlets.reduce((sum, outlet) => sum + outlet.counts.hadir + outlet.counts.terlambat + outlet.counts.pulang, 0);
+  if (people === 0) {
+    return 'Belum ada jadwal';
+  }
+  return roster.date <= today ? `${present} dari ${people} orang sudah absen` : `${people} orang terjadwal`;
+}
+
+/** What needs a look today: people missing or late. Undefined when everyone is fine. */
+export function teamAttention(roster: TeamRoster): string | undefined {
+  const missing = roster.outlets.reduce((sum, outlet) => sum + outlet.counts.belum, 0);
+  const late = roster.outlets.reduce((sum, outlet) => sum + outlet.counts.terlambat, 0);
+  const parts = [missing > 0 ? `${missing} belum absen` : null, late > 0 ? `${late} terlambat` : null].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
