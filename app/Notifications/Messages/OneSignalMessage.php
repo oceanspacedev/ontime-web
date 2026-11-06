@@ -11,6 +11,8 @@ class OneSignalMessage
     /** @var array<string, mixed> */
     protected array $data = [];
 
+    protected ?string $webUrl = null;
+
     public function __construct(
         protected string $title,
         protected string $body,
@@ -34,6 +36,16 @@ class OneSignalMessage
     }
 
     /**
+     * Page a browser opens when the push is clicked; the apps use `data` instead.
+     */
+    public function webUrl(?string $url): static
+    {
+        $this->webUrl = $url;
+
+        return $this;
+    }
+
+    /**
      * @param  list<string>  $externalIds
      * @return array<string, mixed>
      */
@@ -47,6 +59,7 @@ class OneSignalMessage
             'headings' => ['en' => $this->title, 'id' => $this->title],
             'contents' => ['en' => $this->body, 'id' => $this->body],
             'data' => $this->data ?: null,
+            'web_url' => $this->webUrl,
             'priority' => 10,
         ], fn (mixed $value): bool => $value !== null);
     }

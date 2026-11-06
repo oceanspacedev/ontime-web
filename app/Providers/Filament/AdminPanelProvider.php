@@ -40,6 +40,11 @@ class AdminPanelProvider extends PanelProvider
                 PanelsRenderHook::AUTH_LOGIN_FORM_AFTER,
                 fn () => view('auth.login-extra'),
             )
+            // OneSignal web push: links the signed-in user's browser for reminders and approvals.
+            ->renderHook(
+                PanelsRenderHook::BODY_END,
+                fn () => view('filament.hooks.onesignal'),
+            )
             ->databaseNotifications()
             ->databaseTransactions()
             ->plugins([

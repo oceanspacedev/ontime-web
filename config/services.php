@@ -63,6 +63,9 @@ return [
     // key is secret and only lives here. Without the key no push is sent.
     'onesignal' => [
         'app_id' => env('ONESIGNAL_APP_ID', '37e96a62-f9fc-45d5-8159-1f079b3f80f5'),
+        // The web panel can use a separate OneSignal app, since a web app is tied to one exact site URL
+        // (for example a localhost app while developing). Same app as the phones by default.
+        'web_app_id' => env('ONESIGNAL_WEB_APP_ID') ?: env('ONESIGNAL_APP_ID', '37e96a62-f9fc-45d5-8159-1f079b3f80f5'),
         'rest_api_key' => env('ONESIGNAL_REST_API_KEY'),
         'api_url' => env('ONESIGNAL_API_URL', 'https://api.onesignal.com/notifications?c=push'),
         'connect_timeout' => (float) env('ONESIGNAL_CONNECT_TIMEOUT', 5),

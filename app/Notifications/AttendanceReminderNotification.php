@@ -35,6 +35,8 @@ class AttendanceReminderNotification extends Notification implements ShouldQueue
 
     public function toOneSignal(object $notifiable): OneSignalMessage
     {
-        return OneSignalMessage::make($this->title, $this->body)->data($this->data);
+        $page = ($this->data['kind'] ?? null) === 'team_missing' ? '/admin' : '/admin/absen-hari-ini';
+
+        return OneSignalMessage::make($this->title, $this->body)->data($this->data)->webUrl(url($page));
     }
 }

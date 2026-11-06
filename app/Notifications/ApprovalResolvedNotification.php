@@ -53,6 +53,7 @@ class ApprovalResolvedNotification extends Notification implements ShouldQueue
                 'request_type' => $this->requestType,
                 'request_id' => $this->request->getKey(),
                 'status' => $this->status,
-            ]);
+            ])
+            ->webUrl(url('/admin'));
     }
 }

@@ -47,6 +47,7 @@ class ApprovalRequestedNotification extends Notification implements ShouldQueue
                 'request_type' => $this->requestType,
                 'request_id' => $this->request->getKey(),
                 'step_order' => $this->stepOrder,
-            ]);
+            ])
+            ->webUrl(url('/admin/approval-saya'));
     }
 }
