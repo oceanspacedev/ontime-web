@@ -16,16 +16,19 @@ import { StackHeader } from '@/components/navigation';
 import { LoadingView } from '@/components/ui';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { initPush } from '@/lib/onesignal';
+import { initSentry, setSentryUser, wrapRoot } from '@/lib/sentry';
 import { queryClient } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
 import { useAppearance, useTheme } from '@/theme';
 
 void SplashScreen.preventAutoHideAsync();
 
+// Sentry first, so it also catches errors while the rest starts up.
+initSentry();
 // OneSignal starts once with the app; permission is asked later, after sign-in.
 initPush();
 
-export default function RootLayout() {
+function RootLayout() {
   const status = useSession((state) => state.status);
   const hydrate = useSession((state) => state.hydrate);
   const hydrateAppearance = useAppearance((state) => state.hydrate);
@@ -39,6 +42,11 @@ export default function RootLayout() {
   });
 
   usePushNotifications();
+
+  const userId = useSession((state) => state.user?.id ?? null);
+  useEffect(() => {
+    setSentryUser(userId);
+  }, [userId]);
 
   useEffect(() => {
     void hydrate();
@@ -137,3 +145,5 @@ export default function RootLayout() {
     </QueryClientProvider>
   );
 }
+
+export default wrapRoot(RootLayout);
