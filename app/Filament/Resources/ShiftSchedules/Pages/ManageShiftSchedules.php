@@ -51,7 +51,7 @@ class ManageShiftSchedules extends ManageRecords
                 ->label('Atur Jadwal')
                 ->icon('heroicon-o-calendar-days')
                 ->modalHeading('Atur Jadwal Shift')
-                ->modalDescription('Tetapkan shift atau hari libur untuk beberapa pekerja sekaligus dalam rentang tanggal. Shift brand lain boleh dipilih untuk pekerja yang diperbantukan.')
+                ->modalDescription('Tetapkan shift atau hari libur untuk beberapa pekerja sekaligus dalam rentang tanggal.')
                 ->modalSubmitActionLabel('Simpan Jadwal')
                 ->modalWidth('2xl')
                 ->schema([
@@ -115,8 +115,7 @@ class ManageShiftSchedules extends ManageRecords
                                 ->label('Outlet (opsional)')
                                 ->options(fn (Get $get): array => ShiftScheduleResource::locationOptions($get('company_id')))
                                 ->searchable()
-                                ->placeholder('Lokasi mana pun')
-                                ->helperText('Absen hanya diterima di outlet ini, dan jam kerjanya dihitung untuk outlet ini.'),
+                                ->placeholder('Lokasi mana pun'),
 
                             TextInput::make('section')
                                 ->label('Section (opsional)')
@@ -140,7 +139,6 @@ class ManageShiftSchedules extends ManageRecords
                 ->icon('heroicon-o-arrow-down-tray')
                 ->color('gray')
                 ->modalHeading('Ekspor Jadwal Mingguan')
-                ->modalDescription('Satu sheet per outlet, satu baris per pekerja, satu kolom per tanggal. Ubah di Excel lalu unggah lagi dengan Impor Excel.')
                 ->modalSubmitActionLabel('Unduh Excel')
                 ->schema([
                     Select::make('company_id')
@@ -163,7 +161,7 @@ class ManageShiftSchedules extends ManageRecords
                     ]),
 
                     Toggle::make('include_unscheduled')
-                        ->label('Sertakan pekerja aktif yang belum punya jadwal (di sheet "'.ShiftScheduleSpreadsheet::NO_OUTLET_SHEET.'")')
+                        ->label('Sertakan pekerja tanpa jadwal')
                         ->default(true),
                 ])
                 ->action(fn (array $data): ?BinaryFileResponse => $this->exportSchedule($data)),
@@ -173,7 +171,7 @@ class ManageShiftSchedules extends ManageRecords
                 ->icon('heroicon-o-arrow-up-tray')
                 ->color('gray')
                 ->modalHeading('Impor Jadwal Mingguan')
-                ->modalDescription('Pakai file dari Ekspor Excel. Nama sheet = nama outlet. Sel kosong tidak mengubah jadwal; lihat sheet "'.ShiftScheduleSpreadsheet::LEGEND_SHEET.'" untuk cara mengisi.')
+                ->modalDescription('Pakai file dari Ekspor Excel. Nama sheet = nama outlet.')
                 ->modalSubmitActionLabel('Impor')
                 ->schema([
                     Select::make('company_id')

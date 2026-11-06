@@ -76,7 +76,6 @@ class ShiftResource extends Resource
                         ->options(fn (Get $get): array => static::brandOptions($get('company_id')))
                         ->searchable()
                         ->placeholder('Semua brand')
-                        ->helperText('Divisi brand pemilik shift ini, misalnya JCHICKEN. Kosongkan bila dipakai semua brand.')
                         ->nullable(),
 
                     TextInput::make('name')

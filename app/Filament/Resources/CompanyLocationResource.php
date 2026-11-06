@@ -75,7 +75,6 @@ class CompanyLocationResource extends Resource
                                 ->label('Brand (opsional)')
                                 ->options(fn (Get $get): array => ShiftResource::brandOptions($get('company_id')))
                                 ->searchable()
-                                ->helperText('Untuk outlet franchise. Kode shift di jadwal outlet ini dicari dari shift brand ini dulu.')
                                 ->nullable(),
 
                             TextInput::make('name')

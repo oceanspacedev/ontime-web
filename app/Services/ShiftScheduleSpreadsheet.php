@@ -565,18 +565,17 @@ class ShiftScheduleSpreadsheet
             ])));
 
         $writer->addRow(Row::fromValues([]));
-        $writer->addRow(Row::fromValues(['Cara mengisi sel jadwal'], $this->headerStyle()));
+        $writer->addRow(Row::fromValues(['Isi sel'], $this->headerStyle()));
 
         foreach ([
-            'Kode atau nama shift, misalnya P atau Pagi. Shift brand outlet sheet itu dipilih lebih dulu.',
-            'Shift brand lain ditulis dengan brand-nya, misalnya MOMOYO · Pagi.',
-            'Jam kerja, misalnya 08:00 - 17:00, dicocokkan ke shift dengan jam yang sama.',
-            'Section di dalam kurung, misalnya P (K) untuk shift Pagi di section Kasir.',
-            'OFF atau DAY OFF untuk libur, dan - untuk menghapus jadwal tanggal itu.',
-            'Sel kosong dan isian lain (misalnya mmy) tidak mengubah jadwal.',
-            'Nama sheet adalah nama outlet. Sheet "'.self::NO_OUTLET_SHEET.'" untuk jadwal tanpa outlet.',
+            ['P, Pagi, 08:00 - 17:00', 'Shift (brand outlet didahulukan)'],
+            ['MOMOYO · Pagi', 'Shift brand lain'],
+            ['P (K)', 'Shift + section'],
+            ['OFF', 'Libur'],
+            ['-', 'Hapus jadwal'],
+            ['Kosong', 'Tidak diubah'],
         ] as $line) {
-            $writer->addRow(Row::fromValues([$line]));
+            $writer->addRow(Row::fromValues($line));
         }
     }
 

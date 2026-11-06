@@ -54,7 +54,7 @@ class CompanyResource extends Resource
 
     protected static ?int $navigationSort = 1;
 
-    public const LIVENESS_DRIVER_MESSAGE = 'Liveness membutuhkan layanan wajah CompreFace. Atur FACE_DRIVER=compreface beserta COMPREFACE_URL, COMPREFACE_VERIFICATION_KEY dan COMPREFACE_DETECTION_KEY di .env.';
+    public const LIVENESS_DRIVER_MESSAGE = 'Liveness butuh CompreFace (FACE_DRIVER=compreface).';
 
     public static function canViewAny(): bool
     {
@@ -295,7 +295,6 @@ class CompanyResource extends Resource
                                     ->numeric()
                                     ->minValue(0)
                                     ->suffix('menit')
-                                    ->helperText('Check in setelah jam masuk shift ditambah toleransi ini dihitung terlambat.')
                                     ->required()
                                     ->default(15),
                             ]),
@@ -303,7 +302,6 @@ class CompanyResource extends Resource
                         Section::make('Lokasi')
                             ->icon('heroicon-o-map-pin')
                             ->compact()
-                            ->description('Periksa posisi pekerja terhadap kantor pusat dan cabang aktif saat presensi.')
                             ->schema([
                                 Toggle::make('require_gps')
                                     ->label('Wajib Lokasi GPS')
@@ -315,9 +313,9 @@ class CompanyResource extends Resource
                                             }
                                         },
                                     ])
-                                    ->helperText(fn (?Company $record) => $record === null || GeofenceService::hasConfiguredLocations($record)
-                                        ? 'Jika nonaktif, aplikasi tidak meminta izin lokasi sama sekali.'
-                                        : 'Isi Koordinat GPS Utama atau tambahkan cabang aktif terlebih dahulu; tanpa itu geofence tidak bisa diperiksa.')
+                                    ->helperText(fn (?Company $record): ?string => $record === null || GeofenceService::hasConfiguredLocations($record)
+                                        ? null
+                                        : 'Isi koordinat HQ atau cabang aktif dulu.')
                                     ->default(false),
 
                                 TextInput::make('geofence_radius_meters')
@@ -325,8 +323,7 @@ class CompanyResource extends Resource
                                     ->numeric()
                                     ->minValue(1)
                                     ->suffix('meter')
-                                    ->placeholder('Contoh: 100')
-                                    ->helperText('Presensi di luar radius dialihkan ke persetujuan atasan.')
+                                    ->placeholder('100')
                                     ->visible(fn (Get $get) => (bool) $get('require_gps'))
                                     ->required(fn (Get $get) => (bool) $get('require_gps')),
 
@@ -334,7 +331,6 @@ class CompanyResource extends Resource
                                     ->label('Jika Lokasi Palsu Terdeteksi')
                                     ->native(false)
                                     ->options(static::mockLocationActionOptions())
-                                    ->helperText('Aplikasi Android melaporkan lokasi palsu (mock location). Browser tidak bisa mendeteksinya.')
                                     ->default('reject')
                                     ->visible(fn (Get $get) => (bool) $get('require_gps'))
                                     ->required(fn (Get $get) => (bool) $get('require_gps')),
@@ -343,9 +339,6 @@ class CompanyResource extends Resource
                         Section::make('Verifikasi Selfie')
                             ->icon('heroicon-o-camera')
                             ->compact()
-                            ->description(fn (): ?string => static::faceVerifier()->isAccurate()
-                                ? null
-                                : 'Layanan wajah saat ini memakai pembanding bawaan (bukan pengenalan wajah sungguhan).')
                             ->schema([
                                 Radio::make('selfie_mode')
                                     ->hiddenLabel()
@@ -394,9 +387,6 @@ class CompanyResource extends Resource
                                         'reject' => 'Tolak Presensi Langsung',
                                         'approval' => 'Alihkan ke Approval Atasan (Pending)',
                                     ])
-                                    ->helperText(fn (Get $get): ?string => $get('selfie_mode') === 'liveness'
-                                        ? 'Liveness yang gagal (gerakan kepala tidak sesuai) selalu ditolak; pilihan ini hanya untuk wajah yang tidak cocok.'
-                                        : null)
                                     ->default('reject')
                                     ->visible(fn (Get $get) => static::usesFaceMatch($get('selfie_mode')))
                                     ->required(fn (Get $get) => static::usesFaceMatch($get('selfie_mode'))),
@@ -420,7 +410,6 @@ class CompanyResource extends Resource
                                     ->numeric()
                                     ->minValue(1)
                                     ->suffix('tahap')
-                                    ->helperText('Referensi default.')
                                     ->required()
                                     ->default(1),
                             ]),
@@ -526,7 +515,7 @@ class CompanyResource extends Resource
     }
 
     /**
-     * Option descriptions, with warnings that depend on the configured face service driver.
+     * Warnings for modes the configured face service cannot do properly; other modes need no description.
      *
      * @return array<string, string>
      */
@@ -534,24 +523,10 @@ class CompanyResource extends Resource
     {
         $verifier = static::faceVerifier();
 
-        $face = 'Selfie dicocokkan dengan Foto Master Wajah pekerja.';
-
-        if (! $verifier->isAccurate()) {
-            $face .= ' Peringatan: pembanding bawaan hanya membandingkan warna piksel, bukan pengenalan wajah sungguhan. Gunakan CompreFace (FACE_DRIVER=compreface) untuk hasil yang andal.';
-        }
-
-        $liveness = 'Pekerja mengikuti 3 langkah acak (hadap depan, tengok kiri, tengok kanan) yang diperiksa server, lalu wajah dicocokkan dengan Foto Master. Foto cetak atau layar lain tidak bisa lolos.';
-
-        if (! $verifier->supportsPose()) {
-            $liveness .= ' Belum tersedia: '.static::LIVENESS_DRIVER_MESSAGE;
-        }
-
-        return [
-            'none' => 'Pekerja cukup menekan tombol Check In / Check Out tanpa kamera.',
-            'photo' => 'Pekerja mengambil satu foto selfie sebagai bukti kehadiran.',
-            'face' => $face,
-            'liveness' => $liveness,
-        ];
+        return array_filter([
+            'face' => $verifier->isAccurate() ? null : 'Pembanding bawaan, bukan pengenalan wajah sungguhan.',
+            'liveness' => $verifier->supportsPose() ? null : 'Butuh CompreFace.',
+        ]);
     }
 
     public static function usesFaceMatch(mixed $selfieMode): bool
