@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MapPickerField;
 use App\Filament\Resources\CompanyLocationResource\Pages;
+use App\Filament\Resources\Shifts\ShiftResource;
 use App\Models\CompanyLocation;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
@@ -18,6 +19,8 @@ use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -50,7 +53,7 @@ class CompanyLocationResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedCompanies(parent::getEloquentQuery());
+        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('division'));
     }
 
     public static function form(Schema $schema): Schema
@@ -64,7 +67,16 @@ class CompanyLocationResource extends Resource
                                 ->label('Badan Usaha (Company)')
                                 ->options(fn (): array => static::managedCompanyOptions())
                                 ->required()
-                                ->searchable(),
+                                ->searchable()
+                                ->live()
+                                ->afterStateUpdated(fn (Set $set) => $set('division_id', null)),
+
+                            Select::make('division_id')
+                                ->label('Brand (opsional)')
+                                ->options(fn (Get $get): array => ShiftResource::brandOptions($get('company_id')))
+                                ->searchable()
+                                ->helperText('Untuk outlet franchise. Kode shift di jadwal outlet ini dicari dari shift brand ini dulu.')
+                                ->nullable(),
 
                             TextInput::make('name')
                                 ->label('Nama Cabang / Lokasi')
@@ -121,6 +133,11 @@ class CompanyLocationResource extends Resource
                     ->label('Nama Cabang / Lokasi')
                     ->sortable()
                     ->searchable(),
+
+                TextColumn::make('division.name')
+                    ->label('Brand')
+                    ->placeholder('-')
+                    ->toggleable(),
 
                 TextColumn::make('latitude')
                     ->label('Latitude')

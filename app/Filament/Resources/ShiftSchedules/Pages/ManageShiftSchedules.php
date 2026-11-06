@@ -3,16 +3,19 @@
 namespace App\Filament\Resources\ShiftSchedules\Pages;
 
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
+use App\Models\Company;
 use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Services\ShiftScheduleSpreadsheet;
 use Carbon\CarbonPeriod;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -24,6 +27,12 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\HtmlString;
+use Illuminate\Support\Str;
+use InvalidArgumentException;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Throwable;
 
 class ManageShiftSchedules extends ManageRecords
 {
@@ -125,7 +134,129 @@ class ManageShiftSchedules extends ManageRecords
                         ->default(true),
                 ])
                 ->action(fn (array $data) => $this->assignSchedule($data)),
+
+            Action::make('exportSchedule')
+                ->label('Ekspor Excel')
+                ->icon('heroicon-o-arrow-down-tray')
+                ->color('gray')
+                ->modalHeading('Ekspor Jadwal Mingguan')
+                ->modalDescription('Satu sheet per outlet, satu baris per pekerja, satu kolom per tanggal. Ubah di Excel lalu unggah lagi dengan Impor Excel.')
+                ->modalSubmitActionLabel('Unduh Excel')
+                ->schema([
+                    Select::make('company_id')
+                        ->label('Badan Usaha')
+                        ->options(fn (): array => ShiftScheduleResource::placeableCompanyOptions())
+                        ->searchable()
+                        ->required(),
+
+                    Grid::make(2)->schema([
+                        DatePicker::make('date_from')
+                            ->label('Dari Tanggal')
+                            ->default(today()->startOfWeek())
+                            ->required(),
+
+                        DatePicker::make('date_until')
+                            ->label('Sampai Tanggal')
+                            ->default(today()->endOfWeek())
+                            ->afterOrEqual('date_from')
+                            ->required(),
+                    ]),
+
+                    Toggle::make('include_unscheduled')
+                        ->label('Sertakan pekerja aktif yang belum punya jadwal (di sheet "'.ShiftScheduleSpreadsheet::NO_OUTLET_SHEET.'")')
+                        ->default(true),
+                ])
+                ->action(fn (array $data): ?BinaryFileResponse => $this->exportSchedule($data)),
+
+            Action::make('importSchedule')
+                ->label('Impor Excel')
+                ->icon('heroicon-o-arrow-up-tray')
+                ->color('gray')
+                ->modalHeading('Impor Jadwal Mingguan')
+                ->modalDescription('Pakai file dari Ekspor Excel. Nama sheet = nama outlet. Sel kosong tidak mengubah jadwal; lihat sheet "'.ShiftScheduleSpreadsheet::LEGEND_SHEET.'" untuk cara mengisi.')
+                ->modalSubmitActionLabel('Impor')
+                ->schema([
+                    Select::make('company_id')
+                        ->label('Badan Usaha')
+                        ->options(fn (): array => ShiftScheduleResource::placeableCompanyOptions())
+                        ->searchable()
+                        ->required(),
+
+                    FileUpload::make('file')
+                        ->label('File Excel (.xlsx)')
+                        ->acceptedFileTypes(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'])
+                        ->storeFiles(false)
+                        ->required(),
+                ])
+                ->action(fn (array $data) => $this->importSchedule($data)),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function exportSchedule(array $data): ?BinaryFileResponse
+    {
+        $company = Company::query()->findOrFail((int) $data['company_id']);
+        abort_unless(ShiftScheduleResource::canPlaceInCompany($company->id), 403);
+
+        $from = Carbon::parse($data['date_from'])->startOfDay();
+        $until = Carbon::parse($data['date_until'])->startOfDay();
+
+        if ($from->diffInDays($until) + 1 > ShiftScheduleSpreadsheet::MAX_DAYS) {
+            Notification::make()
+                ->title('Rentang tanggal terlalu panjang')
+                ->body('Ekspor maksimal '.ShiftScheduleSpreadsheet::MAX_DAYS.' hari per file.')
+                ->danger()
+                ->send();
+
+            return null;
+        }
+
+        $path = app(ShiftScheduleSpreadsheet::class)->export(auth()->user(), $company, $from, $until, (bool) ($data['include_unscheduled'] ?? false));
+        $fileName = sprintf('jadwal-shift-%s-%s-sd-%s.xlsx', Str::slug($company->code ?: $company->name), $from->format('Ymd'), $until->format('Ymd'));
+
+        return response()->download($path, $fileName)->deleteFileAfterSend();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function importSchedule(array $data): void
+    {
+        $company = Company::query()->findOrFail((int) $data['company_id']);
+        abort_unless(ShiftScheduleResource::canPlaceInCompany($company->id), 403);
+
+        $file = $data['file'];
+        $path = $file instanceof TemporaryUploadedFile ? $file->getRealPath() : (string) $file;
+
+        try {
+            $result = app(ShiftScheduleSpreadsheet::class)->import(auth()->user(), $company, $path);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            Notification::make()
+                ->title('File tidak bisa diimpor')
+                ->body($exception instanceof InvalidArgumentException ? $exception->getMessage() : 'Pastikan file berformat .xlsx hasil Ekspor Excel.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $summary = "Baru: {$result['created']}, diperbarui: {$result['updated']}, dihapus: {$result['deleted']}, tidak berubah: {$result['unchanged']}.";
+        $lines = collect($result['issues'])->take(8)->map(fn (string $issue): string => '• '.e($issue));
+
+        if ($result['issue_count'] > 8) {
+            $lines->push('…dan '.($result['issue_count'] - 8).' catatan lain.');
+        }
+
+        Notification::make()
+            ->title($result['issue_count'] > 0 ? "Jadwal diimpor dengan {$result['issue_count']} catatan" : 'Jadwal diimpor')
+            ->body(new HtmlString(collect([e($summary), ...$lines])->implode('<br>')))
+            ->status($result['issue_count'] > 0 ? 'warning' : 'success')
+            ->persistent($result['issue_count'] > 0)
+            ->send();
     }
 
     /**
