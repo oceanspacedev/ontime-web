@@ -21,7 +21,7 @@ Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini me
 | `Authorization` | `Bearer <token>` (semua endpoint kecuali login) |
 | `Content-Type` | `application/json`, atau `multipart/form-data` untuk unggah foto/lampiran |
 
-- Autentikasi memakai Laravel Sanctum (personal access token). Token didapat dari `POST /auth/login` dan dihapus lewat `POST /auth/logout`. Token tidak kedaluwarsa otomatis.
+- Autentikasi memakai Laravel Sanctum (personal access token). Token didapat dari `POST /auth/login` dan dihapus lewat `POST /auth/logout`. Token berhenti berlaku setelah 90 hari tidak dipakai (`SANCTUM_IDLE_EXPIRATION`, menit) dan saat akun dinonaktifkan; selama dipakai, token tidak kedaluwarsa.
 - Semua path di bawah `api/*` selalu membalas JSON, termasuk error.
 - PHP tidak membaca `multipart/form-data` pada request `PUT`. Untuk mengubah pengajuan sambil mengunggah file, kirim `POST` ke URL yang sama dengan field `_method=PUT`.
 
@@ -47,9 +47,10 @@ Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini me
 | 401 | Token tidak ada/tidak valid; login gagal | `{"message": "Unauthenticated."}` / `{"message": "Credentials do not match our records."}` |
 | 403 | Izin `can:` tidak dimiliki; detail data di luar akses | `{"message": "This action is unauthorized."}` / `{"message": "Unauthorized access."}` |
 | 404 | Data tidak ditemukan | `{"message": "..."}` |
-| 409 | Check-in/check-out kedua di hari yang sama | `{"message": "Sudah melakukan check in hari ini."}` |
+| 409 | Check-in/check-out kedua di hari yang sama | `{"message": "Sudah melakukan check in hari ini.", "errors": {"attendance": ["..."]}}` |
 | 422 | Validasi input | `{"message": "...", "errors": {"field": ["..."]}}` |
-| 422 | Aturan bisnis (kuota habis, status bukan pending, profil tidak ada) | `{"message": "..."}` |
+| 422 | Aturan bisnis (kuota habis, status bukan pending, profil tidak ada) | `{"message": "..."}`; check-in/check-out dan tantangan liveness juga mengirim `errors` (lihat 3.2) |
+| 503 | Layanan verifikasi wajah (CompreFace) tidak tersedia atau belum dikonfigurasi | `{"message": "...", "errors": {"photo": ["..."]}}` |
 
 ### 1.5 Format paginasi
 
@@ -134,9 +135,11 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
 | POST | `/auth/otp/request` | Publik | Kirim kode OTP ke WhatsApp atau email, mengembalikan `challenge_id` |
 | POST | `/auth/otp/verify` | Publik | Tukar `challenge_id` + kode OTP dengan token |
 | GET | `/auth/me` | Token | Profil akun saat ini |
-| POST | `/auth/logout` | Token | Menghapus token yang sedang dipakai |
+| POST | `/auth/logout` | Token | Menghapus token yang sedang dipakai, dan push token perangkat bila dikirim |
 
-**POST /auth/login** (JSON): `email` (wajib, email), `password` (wajib).
+**POST /auth/login** (JSON): `email` (wajib, email), `password` (wajib). Dibatasi 5 percobaan/menit per email dari satu IP dan 20/menit per IP; selebihnya 429 `Terlalu banyak percobaan masuk. Silakan coba lagi sebentar lagi.` dengan header `Retry-After` dan `retry_after` (detik).
+
+**POST /auth/logout** (JSON, opsional): `push_token` (Expo push token perangkat ini, maks 255). Push token itu ikut dihapus dalam request yang sama, jadi aplikasi tidak perlu memanggil `DELETE /devices` lebih dulu. Membalas `{"message": "Logged out successfully"}`.
 
 ```json
 {
@@ -161,6 +164,8 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
         "id": 1, "name": "PT Contoh Sejahtera", "latitude": -6.2, "longitude": 106.8,
         "locations": [{"id": 1, "name": "Kantor Pusat", "latitude": -6.2, "longitude": 106.8, "radius_meters": 100}],
         "policy": {"require_gps": true, "require_photo": true, "require_face_recognition": false,
+                   "require_liveness": false, "selfie_mode": "photo", "mock_location_action": "reject",
+                   "face_match_threshold": 60, "face_fail_action": "reject", "mode_label": "GPS + Foto",
                    "late_tolerance_minutes": 15, "work_start_time": "08:00:00", "work_end_time": "17:00:00"}
       },
       "division": {"id": 3, "name": "Operasional"},
@@ -179,6 +184,7 @@ Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur 
 - `freelancer` berisi `id, full_name, institution, master_face_photo, master_face_verified_at, company, division, supervisor {id, full_name}`.
 - `employee.has_annual_leave` bernilai `true` bila HR memberi karyawan ini cuti tahunan, dan `employee.annual_leave_quota` berisi kuota per tahun yang berlaku (0 tanpa cuti tahunan). Tampilkan jenis Cuti Tahunan dan kartu kuota hanya bila `has_annual_leave` bernilai `true`. Objek `intern` dan `freelancer` tidak punya field ini karena keduanya tidak pernah mendapat cuti tahunan.
 - `GET /auth/me` membalas `{"user": {...}}` dengan isi yang sama. `data_scope` tidak ikut dikirim.
+- `company.policy` menentukan mode presensi (GPS, foto, wajah, liveness). Arti tiap field ada di 3.2.
 - Logout membalas `{"message": "Logged out successfully"}`.
 - Akun nonaktif (`is_active = false`, misalnya setelah resign disetujui) ditolak saat login dengan 403 `Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.` Token yang sudah ada langsung tidak berlaku dan membalas 401.
 
@@ -219,6 +225,7 @@ Berhasil membalas 200 dengan isi yang persis sama seperti `POST /auth/login` (`m
 | Method | Path | Akses | Keterangan |
 | :--- | :--- | :--- | :--- |
 | GET | `/attendance/today` | Token + profil | Status presensi hari ini |
+| POST | `/attendance/liveness-challenge` | Token + profil | Minta tantangan liveness (gerak kepala) |
 | POST | `/attendance/check-in` | Token + profil | Presensi masuk |
 | POST | `/attendance/check-out` | Token + profil | Presensi keluar |
 | POST | `/attendance/master-face` | Token + profil | Unggah/ganti foto master wajah |
@@ -226,31 +233,104 @@ Berhasil membalas 200 dengan isi yang persis sama seperti `POST /auth/login` (`m
 | GET | `/attendances` | Token | Riwayat presensi (bentuk A) |
 | GET | `/attendances/{id}` | Token | Detail presensi |
 
+#### Mode presensi
+
+Mode ditentukan kebijakan badan usaha dari dua pengaturan yang berdiri sendiri: GPS (mati/aktif) dan verifikasi selfie (`selfie_mode`). Aturan yang sama berlaku di aplikasi mobile dan di panel web (Presensi Mandiri), dan berlaku untuk check-in maupun check-out.
+
+| `selfie_mode` | Yang dikirim klien | Yang dicek server |
+| :--- | :--- | :--- |
+| `none` (klik saja) | Tidak ada foto | Tidak ada pemeriksaan foto |
+| `photo` | `photo` | Foto wajib ada |
+| `face` | `photo` | Foto wajib ada, lalu dicocokkan dengan foto master wajah |
+| `liveness` | `liveness_challenge_id` + `liveness_frames[]` | Tiga foto gerak kepala sesuai tantangan, lalu foto "Hadap depan" dicocokkan dengan foto master wajah |
+
+| GPS | `selfie_mode` | `mode_label` |
+| :--- | :--- | :--- |
+| Mati | `none` | `Klik saja` |
+| Aktif | `none` | `GPS` |
+| Mati | `photo` | `Foto` |
+| Aktif | `photo` | `GPS + Foto` |
+| Mati | `face` | `Foto + Wajah` |
+| Aktif | `face` | `GPS + Foto + Wajah` |
+| Mati | `liveness` | `Liveness + Wajah` |
+| Aktif | `liveness` | `GPS + Liveness + Wajah` |
+
+Kebijakan dibaca dari `GET /auth/me` di `user.{employee|intern|freelancer}.company.policy`:
+
+| Field | Isi |
+| :--- | :--- |
+| `require_gps` | `true` bila lokasi wajib dan geofence dicek. Bila `false`, aplikasi tidak perlu meminta izin lokasi. |
+| `selfie_mode` | `none`, `photo`, `face`, atau `liveness`. Pakai field ini untuk memilih alur kamera. |
+| `require_photo`, `require_face_recognition`, `require_liveness` | Bentuk boolean dari `selfie_mode` (liveness ⇒ wajah ⇒ foto), untuk klien lama. |
+| `mock_location_action` | `reject` (bawaan) atau `approval`: tindakan bila lokasi palsu terdeteksi saat GPS aktif. |
+| `face_match_threshold` | Skor kemiripan minimum dalam persen (bawaan 60). |
+| `face_fail_action` | `reject` atau `approval`: tindakan bila wajah tidak cocok. |
+| `mode_label` | Ringkasan mode untuk ditampilkan, misalnya `GPS + Foto + Wajah`. |
+
 **GET /attendance/today**
 
 ```json
 {"date": "2026-08-03", "has_checked_in": true, "has_checked_out": false, "attendance": { "...": "objek presensi" }}
 ```
 
+**POST /attendance/liveness-challenge** (JSON): `purpose` wajib, `check_in` atau `check_out`.
+
+```json
+{
+  "challenge_id": "9b1d6a0e-2f4c-4f7e-9a51-3c0f3f1f8d21",
+  "steps": [
+    {"key": "left", "label": "Tengok ke kiri", "instruction": "Putar kepala ke kiri sampai pipi kanan terlihat jelas."},
+    {"key": "front", "label": "Hadap depan", "instruction": "Lihat lurus ke kamera."},
+    {"key": "right", "label": "Tengok ke kanan", "instruction": "Putar kepala ke kanan sampai pipi kiri terlihat jelas."}
+  ],
+  "expires_at": "2026-08-03T01:08:00+00:00",
+  "expires_in": 180
+}
+```
+
+- Urutan `steps` diacak setiap kali. Ambil satu foto per langkah sesuai urutan itu, lalu kirim semuanya bersama check-in/check-out sebelum `expires_in` detik habis (`LIVENESS_TTL_SECONDS`, bawaan 180).
+- Satu tantangan hanya berlaku sekali, untuk akun dan `purpose` yang memintanya, baik verifikasinya lolos maupun gagal. Setelah gagal, minta tantangan baru.
+- 422 `Liveness tidak diwajibkan untuk badan usaha Anda.` bila `selfie_mode` bukan `liveness`; 422 `errors.purpose` bila `purpose` kosong atau tidak dikenal.
+- 503 `Liveness membutuhkan layanan wajah CompreFace. Hubungi admin.` bila server memakai `FACE_DRIVER=basic`, yang tidak bisa membaca arah kepala.
+
 **POST /attendance/check-in** dan **POST /attendance/check-out** (`multipart/form-data`)
 
 | Field | Aturan | Keterangan |
 | :--- | :--- | :--- |
-| `latitude` | opsional, numerik -90..90 | Wajib bila kebijakan `require_gps` aktif (422 `Lokasi GPS wajib diisi.`) |
+| `latitude` | opsional, numerik -90..90 | Wajib bila `require_gps` aktif. Bila GPS mati, koordinat yang dikirim tetap disimpan. |
 | `longitude` | opsional, numerik -180..180 | Sama seperti `latitude` |
-| `photo` | opsional, gambar jpeg/png/jpg/webp, maks 5 MB | Wajib bila `require_photo` aktif |
+| `accuracy` | opsional, numerik ≥ 0 | Akurasi lokasi dalam meter, hanya informasi |
+| `is_mocked` | opsional, boolean (`1`, `0`, `true`, `false`) | `true` bila sistem operasi melaporkan lokasi palsu (Android `mocked`) |
+| `photo` | opsional, gambar jpeg/png/jpg/webp, maks 5 MB | Wajib untuk `selfie_mode` `photo` dan `face` |
+| `liveness_challenge_id` | opsional, string | `challenge_id` dari `/attendance/liveness-challenge` dengan `purpose` yang sesuai. Wajib untuk `liveness`. |
+| `liveness_frames[]` | opsional, maks 3 gambar jpeg/png/jpg/webp, masing-masing maks 5 MB | Satu foto per langkah, urut sama dengan `steps`. Wajib untuk `liveness`. |
 
-Perilaku check-in:
-- Geofence hanya dicek bila `require_gps` aktif. Di luar radius kantor pusat dan semua lokasi aktif: presensi tetap tercatat dengan status `pending_approval` dan masuk alur persetujuan `geofence`.
-- Bila `require_face_recognition` aktif, foto dibandingkan dengan foto master. Gagal + `face_fail_action = reject`: 422. Gagal dengan aksi lain: `pending_approval`.
-- `late_minutes` dihitung dari jadwal shift hari itu, lalu shift bawaan, lalu jam kerja kebijakan perusahaan.
-- Check-in kedua di hari yang sama: 409.
+Aturan diterapkan berurutan; pelanggaran pertama yang menghentikan proses:
 
-Perilaku check-out: 422 bila belum check-in, 409 bila sudah check-out. Di luar geofence mengubah status menjadi `pending_approval`. Verifikasi wajah tidak dijalankan saat check-out.
+1. Akun tanpa profil pekerja: 422.
+2. Check-in kedua di hari yang sama: 409. Check-out sebelum check-in: 422; check-out kedua: 409.
+3. GPS aktif: koordinat wajib. Lokasi palsu (`is_mocked`) ditolak bila `mock_location_action = reject`, atau masuk persetujuan bila `approval`. Di luar radius kantor pusat dan semua lokasi aktif juga masuk persetujuan. GPS mati: hanya dicatat (`is_mock_location`), tidak ada pemeriksaan.
+4. `photo`/`face`: foto wajib.
+5. `face`/`liveness`: foto master wajah wajib sudah didaftarkan.
+6. `liveness`: tantangan dan ketiga foto wajib. Gerakan kepala yang tidak sesuai selalu ditolak (tidak pernah dialihkan ke persetujuan). Foto "Hadap depan" menjadi foto presensi.
+7. Wajah tidak cocok: ditolak bila `face_fail_action = reject`, masuk persetujuan bila `approval`.
+8. Layanan wajah tidak bisa dihubungi: 503, presensi tidak tercatat.
+
+Foto dari percobaan yang ditolak dihapus lagi dari server, jadi aman untuk langsung mengulang. Foto yang tidak dipakai oleh presensi yang tercatat juga dihapus, misalnya `photo` yang ikut terkirim di mode `liveness` (foto presensinya adalah foto "Hadap depan"). Di mode `none`, `photo` yang dikirim tetap disimpan sebagai foto presensi.
+
+Bila ada alasan persetujuan, presensi tetap tercatat dengan status `pending_approval` (check-in dengan `late_minutes = 0`) dan masuk alur persetujuan `geofence`. Alasan yang mungkin, dalam urutan ini:
+
+| Alasan (`approval_reasons[]`) | Kapan |
+| :--- | :--- |
+| `lokasi palsu terdeteksi` | GPS aktif, `is_mocked = true`, `mock_location_action = approval` |
+| `di luar area kantor` | GPS aktif, koordinat di luar semua geofence |
+| `verifikasi wajah tidak cocok` | `face`/`liveness`, skor di bawah ambang, `face_fail_action = approval` |
 
 ```json
 {
   "message": "Check in berhasil",
+  "requires_approval": false,
+  "approval_reasons": [],
   "attendance": {
     "id": 102, "employee_id": 7, "intern_id": null, "freelancer_id": null,
     "date": "2026-08-03",
@@ -258,7 +338,11 @@ Perilaku check-out: 422 bila belum check-in, 409 bila sudah check-out. Di luar g
     "check_in_lat": "-6.1753924", "check_in_lng": "106.8271528",
     "check_out_lat": null, "check_out_lng": null,
     "check_in_photo": "<url>", "check_out_photo": null,
-    "status": "on_time", "is_corrected": false, "is_out_of_bounds": false, "late_minutes": 0,
+    "status": "on_time", "is_corrected": false, "is_out_of_bounds": false, "is_mock_location": false,
+    "is_face_verified": true, "face_match_score": 92,
+    "face_verification_notes": "Verifikasi wajah berhasil (Skor: 92%, Threshold: 60%).",
+    "liveness_verified": true, "liveness_notes": "Liveness terverifikasi: gerakan kepala sesuai instruksi.",
+    "late_minutes": 0,
     "employee": {"id": 7, "full_name": "Karyawan Contoh", "nip": "2026.01.001",
                  "company": {"id": 1, "name": "PT Contoh Sejahtera"}, "division": {"id": 3, "name": "Operasional"},
                  "master_face_photo": null},
@@ -268,7 +352,32 @@ Perilaku check-out: 422 bila belum check-in, 409 bila sudah check-out. Di luar g
 }
 ```
 
-Pesan bila perlu persetujuan: `Check in berhasil dicatat dan sedang menunggu persetujuan atasan.`
+- Pesan bila perlu persetujuan menyebut alasannya, digabung dengan " dan ", misalnya `Check in berhasil dicatat dan sedang menunggu persetujuan atasan karena lokasi palsu terdeteksi dan di luar area kantor.` (pola yang sama untuk `Check out ...`). Tampilkan `message` apa adanya.
+- `is_face_verified`, `face_match_score`, `face_verification_notes`, `liveness_verified`, dan `liveness_notes` bernilai `null` bila mode tidak memeriksanya.
+- `is_out_of_bounds` dan `is_mock_location` bernilai `true` bila salah satu dari check-in atau check-out memenuhinya.
+- Check-out yang perlu persetujuan mengubah status menjadi `pending_approval`; tahap persetujuan baru hanya dibuat bila tidak ada tahap yang masih menunggu (misalnya check-in sudah disetujui atau belum pernah perlu persetujuan).
+- `late_minutes` dihitung dari jadwal shift hari itu, lalu shift bawaan, lalu jam kerja kebijakan perusahaan.
+
+Error check-in/check-out selalu berbentuk `{"message": "...", "errors": {"<field>": ["..."]}}`:
+
+| Status | `errors` | Pesan |
+| :--- | :--- | :--- |
+| 422 | `attendance` | `Profil pengguna tidak ditemukan.` |
+| 409 | `attendance` | `Sudah melakukan check in hari ini.` / `Sudah melakukan check out hari ini.` |
+| 422 | `attendance` | `Anda belum melakukan check in hari ini.` |
+| 422 | `latitude` | `Lokasi GPS wajib diisi.` |
+| 422 | `latitude` | `Lokasi palsu (mock location) terdeteksi. Matikan aplikasi pemalsu lokasi lalu coba lagi.` |
+| 422 | `photo` | `Foto selfie absensi wajib diunggah.` |
+| 422 | `photo` | `Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.` |
+| 422 | `photo` | `Verifikasi wajah gagal: {catatan}`, misalnya `Verifikasi wajah gagal: Tingkat kemiripan wajah rendah (Skor: 40%, Threshold minimum: 60%).` |
+| 422 | `liveness_frames` | `Verifikasi liveness wajib. Ambil foto sesuai langkah yang diminta.` |
+| 422 | `liveness_frames` | `Tantangan liveness sudah kedaluwarsa atau tidak dikenali. Mulai ulang verifikasi.` |
+| 422 | `liveness_frames` | `Jumlah foto liveness tidak sesuai. Mulai ulang verifikasi.` |
+| 422 | `liveness_frames` | `Wajah tidak terdeteksi dengan jelas pada langkah "{label}".` / `Terdeteksi lebih dari satu wajah pada langkah "{label}".` |
+| 422 | `liveness_frames` | `Gerakan kepala tidak sesuai pada langkah "{label}". Ulangi dan ikuti instruksi dengan jelas.` |
+| 503 | `photo` | `Layanan verifikasi wajah sedang tidak tersedia. Coba lagi beberapa saat.` |
+
+Setiap 422 di `liveness_frames` berarti tantangan sudah terpakai: minta tantangan baru lalu ulangi ketiga langkah. Kesalahan validasi field (format gambar, ukuran, `is_mocked` bukan boolean, lebih dari 3 foto) memakai format 422 validasi biasa.
 
 Nilai `status` presensi: `on_time` (Tepat Waktu), `late` (Terlambat), `absent` (Tidak Hadir), `leave` (Cuti / Izin), `holiday` (Hari Libur), `off` (Libur), `pending_approval` (Menunggu Persetujuan), `rejected` (Ditolak).
 
@@ -525,7 +634,7 @@ Semua `GET`, read-only, dengan pola `GET /master/<resource>` (daftar) dan `GET /
 | `users` | `ViewAny:User` | Ya | `email` (sebagian) | `roles`, `employee`, `intern`, `freelancer` (+`permissions` di detail) | C |
 
 - `approval-flows`: `request_type` salah satu `leave`, `overtime`, `correction`, `resignation`, `geofence`. Urut `company_id`, `request_type`, `step_order`. Field utama: `step_order`, `name`, `approver_type` (`role`/`user`), `approver_role`, `user_id`.
-- `company-policies`: field utama `late_tolerance_minutes`, `require_photo`, `require_gps`, `require_face_recognition`, `face_match_threshold`, `face_fail_action`, `geofence_radius_meters`, `annual_leave_quota`, `work_start_time`, `work_end_time`.
+- `company-policies`: field utama `late_tolerance_minutes`, `require_photo`, `require_gps`, `require_face_recognition`, `require_liveness`, `face_match_threshold`, `face_fail_action`, `mock_location_action`, `geofence_radius_meters`, `annual_leave_quota`, `work_start_time`, `work_end_time`.
 
 **GET /master/approvers** mengembalikan **akun** pengguna dengan role Approver atau BOD (tabel lama `approvers` tidak dipakai lagi), urut nama, tanpa paginasi.
 
@@ -569,7 +678,7 @@ Semua `GET`, read-only, dengan pola `GET /master/<resource>` (daftar) dan `GET /
 | Method | Path | Akses | Keterangan |
 | :--- | :--- | :--- | :--- |
 | POST | `/devices` | Token | Daftarkan atau perbarui Expo push token perangkat ini |
-| DELETE | `/devices` | Token | Hapus token perangkat ini; panggil sebelum `POST /auth/logout` |
+| DELETE | `/devices` | Token | Hapus token perangkat ini tanpa logout (saat logout, kirim `push_token` ke `POST /auth/logout`) |
 
 **POST /devices** (JSON)
 
@@ -636,7 +745,7 @@ Catatan:
 | :--- | :--- | :--- |
 | Login | `POST /auth/login` | Simpan token, user, roles, permissions |
 | Dashboard | `GET /auth/me`, `GET /attendance/today`, `GET /approvals/pending` | Status presensi hari ini, status foto master, kartu kuota/pembimbing, badge antrean |
-| Presensi | `POST /attendance/check-in`, `check-out`, `GET /attendances` | Kamera selfie, GPS vs `company.locations[].radius_meters`, riwayat terakhir |
+| Presensi | `POST /attendance/liveness-challenge`, `check-in`, `check-out`, `GET /attendances` | Alur mengikuti `policy.selfie_mode` dan `require_gps` (3.2): tanpa kamera, satu selfie, atau tiga langkah liveness; GPS dan deteksi lokasi palsu hanya bila wajib; riwayat terakhir |
 | Foto master wajah | `POST`/`DELETE /attendance/master-face` | Unggah dari galeri atau kamera |
 | Pusat pengajuan | `GET` cuti, lembur, koreksi, resign | Menu per role (4.1) dan riwayat dengan badge status |
 | Form cuti | `POST /leave-requests` | Jenis, tanggal mulai/selesai, alasan, lampiran |
@@ -647,7 +756,7 @@ Catatan:
 | Kalender cuti | `GET /kalender-cuti` | Grid bulanan cuti rekan |
 | Laporan presensi | `GET /laporan-absensi` | Kartu hadir, terlambat, cuti, tidak hadir |
 | Profil | `GET /auth/me`, `POST /auth/logout` | Biodata, badan usaha, divisi, jabatan, pembimbing, pengaturan base URL |
-| Push notification | `POST /devices` setelah login dan tiap aplikasi dibuka, `DELETE /devices` sebelum logout | Minta izin notifikasi, daftarkan Expo push token; tekan notifikasi membuka detail pengajuan (3.12) |
+| Push notification | `POST /devices` setelah login dan tiap aplikasi dibuka, `push_token` di `POST /auth/logout` | Minta izin notifikasi, daftarkan Expo push token; tekan notifikasi membuka detail pengajuan (3.12) |
 
 Label status pengajuan: `pending` Menunggu Persetujuan, `approved` Disetujui, `rejected` Ditolak.
 
@@ -670,3 +779,6 @@ Label status pengajuan: `pending` Menunggu Persetujuan, `approved` Disetujui, `r
 | Akun nonaktif ditolak | Tangani 403 saat login dan 401 pada token lama dengan mengarahkan ke layar login. |
 | Pengajuan tanpa alur persetujuan | Respons 422 `errors.approval_flow` tidak lagi meninggalkan pengajuan setengah jadi, jadi aman untuk dikirim ulang setelah alur dibuat. |
 | Push notification (`/devices`) | Opsional. Klien yang tidak mendaftarkan token tidak menerima push; notifikasi panel web tetap berjalan seperti sebelumnya. |
+| Mode presensi (`selfie_mode`, liveness, lokasi palsu) | Pilih alur dari `policy.selfie_mode`, bukan dari `require_face_recognition` saja. Mode `liveness` butuh `POST /attendance/liveness-challenge` dan `liveness_frames[]`; klien lama yang hanya mengirim `photo` ditolak 422 di mode itu. Kirim `is_mocked` dan `accuracy` bila GPS aktif. |
+| Check-out memverifikasi wajah | Check-out kini menjalankan pemeriksaan yang sama dengan check-in, termasuk foto, wajah, dan liveness. |
+| Respons check-in/check-out | Menambah `requires_approval` dan `approval_reasons`. Pesan persetujuan kini menyebut alasannya, dan error aturan presensi kini menyertakan `errors.<field>`. |

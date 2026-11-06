@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Company;
+use App\Models\CompanyLocation;
 
 class GeofenceService
 {
@@ -69,19 +70,22 @@ class GeofenceService
     }
 
     /**
-     * Validate user GPS against all active branch/office locations of a Company.
+     * Validate user GPS against all active branch/office locations of a Company, or only against
+     * the outlet the worker is scheduled at when one is given.
      */
-    public static function validateCompanyGeofence(Company $company, float $userLat, float $userLng): array
+    public static function validateCompanyGeofence(Company $company, float $userLat, float $userLng, ?CompanyLocation $outlet = null): array
     {
         $policy = $company->policy;
         $defaultRadius = max(1, (int) ($policy?->geofence_radius_meters ?: static::DEFAULT_RADIUS_METERS));
 
-        $locations = $company->locations()->where('is_active', true)->get();
+        $locations = $outlet
+            ? collect([$outlet])
+            : $company->locations()->where('is_active', true)->get();
 
         $validLocations = [];
 
-        // 1. Sertakan Kantor Utama (HQ) jika koordinatnya diisi
-        if ($company->latitude && $company->longitude) {
+        // 1. Sertakan Kantor Utama (HQ) jika koordinatnya diisi, kecuali absen dibatasi ke outlet jadwal
+        if (! $outlet && $company->latitude && $company->longitude) {
             $validLocations[] = [
                 'name' => $company->name.' (Kantor Utama)',
                 'lat' => (float) $company->latitude,

@@ -15,13 +15,20 @@ import { View } from 'react-native';
 import { StackHeader } from '@/components/navigation';
 import { LoadingView } from '@/components/ui';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { initPush } from '@/lib/onesignal';
+import { initSentry, setSentryUser, wrapRoot } from '@/lib/sentry';
 import { queryClient } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
 import { useAppearance, useTheme } from '@/theme';
 
 void SplashScreen.preventAutoHideAsync();
 
-export default function RootLayout() {
+// Sentry first, so it also catches errors while the rest starts up.
+initSentry();
+// OneSignal starts once with the app; permission is asked later, after sign-in.
+initPush();
+
+function RootLayout() {
   const status = useSession((state) => state.status);
   const hydrate = useSession((state) => state.hydrate);
   const hydrateAppearance = useAppearance((state) => state.hydrate);
@@ -35,6 +42,11 @@ export default function RootLayout() {
   });
 
   usePushNotifications();
+
+  const userId = useSession((state) => state.user?.id ?? null);
+  useEffect(() => {
+    setSentryUser(userId);
+  }, [userId]);
 
   useEffect(() => {
     void hydrate();
@@ -92,6 +104,7 @@ export default function RootLayout() {
           }}>
           <Stack.Protected guard={!signedIn}>
             <Stack.Screen name="login" options={{ headerShown: false }} />
+            <Stack.Screen name="email-login" options={{ headerShown: false, animation: 'fade' }} />
           </Stack.Protected>
 
           <Stack.Protected guard={signedIn}>
@@ -113,6 +126,8 @@ export default function RootLayout() {
             <Stack.Screen name="request/resignation/new" options={{ title: 'Pengunduran Diri' }} />
             <Stack.Screen name="request/[type]/[id]" options={{ title: 'Detail Pengajuan' }} />
             <Stack.Screen name="approval/[type]/[id]" options={{ title: 'Proses Persetujuan' }} />
+            <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />
+            <Stack.Screen name="team/freelancer/new" options={{ title: 'Tambah Freelancer' }} />
             <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
           </Stack.Protected>
 
@@ -130,3 +145,5 @@ export default function RootLayout() {
     </QueryClientProvider>
   );
 }
+
+export default wrapRoot(RootLayout);

@@ -5,6 +5,7 @@ namespace App\Providers\Filament;
 use App\Filament\Widgets\PresensiWidget;
 use App\Filament\Widgets\UserProfileWidget;
 use App\Support\ObservabilityAccess;
+use App\Support\WasteReport;
 use Apriansyahrs\MekayaTheme\Auth\MekayaLogin;
 use Apriansyahrs\MekayaTheme\MekayaPlugin;
 use BezhanSalleh\FilamentShield\FilamentShieldPlugin;
@@ -12,6 +13,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\NavigationItem;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
@@ -38,6 +40,11 @@ class AdminPanelProvider extends PanelProvider
                 PanelsRenderHook::AUTH_LOGIN_FORM_AFTER,
                 fn () => view('auth.login-extra'),
             )
+            // OneSignal web push: links the signed-in user's browser for reminders and approvals.
+            ->renderHook(
+                PanelsRenderHook::BODY_END,
+                fn () => view('filament.hooks.onesignal'),
+            )
             ->databaseNotifications()
             ->databaseTransactions()
             ->plugins([
@@ -45,15 +52,25 @@ class AdminPanelProvider extends PanelProvider
                 FilamentShieldPlugin::make(),
             ])
             ->registration(false)
+            // Tailwind red (500 = #FB2C36) matches the mobile app's brand red, #F22929 in mobile/src/theme.ts.
             ->colors([
-                'primary' => Color::Amber,
+                'primary' => Color::Red,
             ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
             ->pages([
                 Dashboard::class,
             ])
-            ->navigationItems(ObservabilityAccess::filamentNavigationItems())
+            ->navigationItems([
+                ...ObservabilityAccess::filamentNavigationItems(),
+                // Food waste report on CESA for coordinators and F&B crew (see WasteReport).
+                NavigationItem::make('Waste')
+                    ->url(config('services.cesa.waste_url'), shouldOpenInNewTab: true)
+                    ->icon('heroicon-o-trash')
+                    ->group('Jadwal & Shift')
+                    ->sort(10)
+                    ->visible(fn (): bool => WasteReport::urlFor(auth()->user()) !== null),
+            ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             ->widgets([
                 UserProfileWidget::class,

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
@@ -14,11 +15,13 @@ use Carbon\CarbonInterface;
  * 1. the dated shift schedule (a shift, or a day off),
  * 2. otherwise the worker's default shift,
  * 3. otherwise the company policy hours.
+ *
+ * A schedule may also name the outlet (company location) and section the worker covers that day.
  */
 class WorkScheduleService
 {
     /**
-     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string}
+     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null}
      */
     public function resolve(Employee|Intern|Freelancer $worker, CarbonInterface $date): array
     {
@@ -30,10 +33,12 @@ class WorkScheduleService
             'end_time' => (string) ($policy?->work_end_time ?? '17:00:00'),
             'late_tolerance_minutes' => (int) ($policy?->late_tolerance_minutes ?? 15),
             'source' => 'policy',
+            'location' => null,
+            'section' => null,
         ];
 
         $schedule = ShiftSchedule::query()
-            ->with('shift')
+            ->with(['shift', 'location'])
             ->where($this->workerColumn($worker), $worker->getKey())
             ->whereDate('date', $date->toDateString())
             ->first();
@@ -43,9 +48,13 @@ class WorkScheduleService
         }
 
         $shift = $schedule?->shift ?? ($worker->shift_id ? $worker->shift : null);
+        $placement = [
+            'location' => $schedule?->location,
+            'section' => $schedule?->section,
+        ];
 
         if (! $shift) {
-            return $policyHours;
+            return [...$policyHours, ...$placement];
         }
 
         return [
@@ -55,6 +64,7 @@ class WorkScheduleService
             'end_time' => (string) $shift->end_time,
             'late_tolerance_minutes' => (int) ($shift->late_tolerance_minutes ?? $policyHours['late_tolerance_minutes']),
             'source' => $schedule ? 'schedule' : 'default',
+            ...$placement,
         ];
     }
 

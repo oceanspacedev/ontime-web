@@ -78,6 +78,14 @@ class Company extends Model
         return $this->hasMany(ApprovalFlow::class);
     }
 
+    /**
+     * Rules a division set for itself, which override the company-wide flow for that division.
+     */
+    public function divisionApprovalFlows(): HasMany
+    {
+        return $this->hasMany(ApprovalFlow::class)->whereNotNull('division_id');
+    }
+
     public function holidays(): HasMany
     {
         return $this->hasMany(Holiday::class);

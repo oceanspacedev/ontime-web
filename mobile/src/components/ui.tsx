@@ -13,6 +13,7 @@ import {
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   type PressableProps,
   RefreshControl,
@@ -95,6 +96,15 @@ export const FloatingTabBarContext = createContext(false);
 /** Height the floating tab bar covers above the bottom safe area. */
 export const FLOATING_TAB_BAR_SPACE = 96;
 
+/**
+ * Space under anything pinned to the bottom (footer buttons, sheets, the tab bar). On iOS the home
+ * indicator area is see-through, so the inset alone is enough. Android's navigation buttons are an
+ * opaque bar the content must not touch, so a gap is added on top of the inset.
+ */
+export function bottomGap(bottomInset: number): number {
+  return Platform.OS === 'android' ? bottomInset + spacing.lg : Math.max(bottomInset, spacing.lg);
+}
+
 interface ScreenProps {
   children: ReactNode;
   scroll?: boolean;
@@ -132,7 +142,7 @@ export function Screen({
   const [refreshing, setRefreshing] = useState(false);
 
   const safeEdges = edges ?? (title ? (['top'] as const) : ([] as const));
-  const bottomSpace = inTabs ? FLOATING_TAB_BAR_SPACE + insets.bottom : footer ? spacing.lg : Math.max(insets.bottom, spacing.lg) + spacing.sm;
+  const bottomSpace = inTabs ? FLOATING_TAB_BAR_SPACE + insets.bottom : footer ? spacing.lg : bottomGap(insets.bottom) + spacing.sm;
 
   const header = title ? (
     <View style={styles.largeHeader}>
@@ -187,7 +197,7 @@ export function Screen({
       ) : (
         <View style={[styles.fill, { paddingBottom: footer ? 0 : bottomSpace }]}>{content}</View>
       )}
-      {footer ? <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>{footer}</View> : null}
+      {footer ? <View style={[styles.footer, { paddingBottom: bottomGap(insets.bottom) }]}>{footer}</View> : null}
     </SafeAreaView>
   );
 }
@@ -424,7 +434,7 @@ export function SectionTitle({ title, action, onAction }: { title: string; actio
  * `primary` red, glossy, for the one main action. `inverse` is the near-black (light) or white
  * (dark) pill from the reference screens. `secondary` is a neutral fill. `danger` is a soft red.
  */
-export type ButtonVariant = 'primary' | 'inverse' | 'secondary' | 'danger' | 'ghost';
+export type ButtonVariant = 'primary' | 'inverse' | 'secondary' | 'danger' | 'ghost' | 'whatsapp';
 
 interface ButtonProps extends Omit<PressableProps, 'style' | 'children'> {
   title: string;
@@ -469,6 +479,8 @@ export function Button({ title, variant = 'primary', loading = false, icon, disa
   );
 }
 
+const WHATSAPP_GREEN = '#1DAA61';
+
 function buttonForeground(c: Palette, variant: ButtonVariant): string {
   switch (variant) {
     case 'primary':
@@ -479,6 +491,8 @@ function buttonForeground(c: Palette, variant: ButtonVariant): string {
       return c.danger;
     case 'ghost':
       return c.primary;
+    case 'whatsapp':
+      return '#FFFFFF';
     default:
       return c.text;
   }
@@ -517,6 +531,9 @@ const useButtonStyles = makeStyles((c, dark) => ({
 
   danger: { backgroundColor: c.dangerSoft },
   dangerPressed: { opacity: 0.8 },
+  /** WhatsApp's brand green: clearly WhatsApp, deeper than the neon #25D366 so it does not glare. */
+  whatsapp: { backgroundColor: WHATSAPP_GREEN },
+  whatsappPressed: { opacity: 0.85 },
 
   ghost: { backgroundColor: 'transparent' },
   ghostPressed: { backgroundColor: c.fill },
@@ -914,10 +931,13 @@ export function Segmented<T extends string>({
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
             style={[styles.segment, active && styles.segmentActive]}>
-            {option.icon ? <Ionicons name={option.icon} size={16} color={active ? colors.primary : colors.textMuted} /> : null}
-            <Text style={[styles.text, active && styles.textActive]} numberOfLines={1}>
-              {option.label}
-            </Text>
+            {/* The label lets touches through, so a tap on the text selects the segment too. */}
+            <View pointerEvents="none" style={styles.segmentContent}>
+              {option.icon ? <Ionicons name={option.icon} size={16} color={active ? colors.primary : colors.textMuted} /> : null}
+              <Text style={[styles.text, active && styles.textActive]} numberOfLines={1}>
+                {option.label}
+              </Text>
+            </View>
           </Pressable>
         );
       })}
@@ -929,6 +949,7 @@ const useSegmentedStyles = makeStyles((c, dark) => ({
   track: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: radius.pill, padding: 4, gap: 4 },
   segment: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 42, borderRadius: radius.pill, paddingHorizontal: 8 },
   segmentActive: { backgroundColor: dark ? c.card : c.card, boxShadow: elevation(c, 1) },
+  segmentContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   text: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },
   textActive: { color: c.text, fontWeight: '600' },
 }));
@@ -1054,7 +1075,7 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
       <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Tutup" />
-      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+      <View style={[styles.sheet, { paddingBottom: bottomGap(insets.bottom) }]}>
         <View style={styles.handle} />
         {title ? <Text style={styles.title}>{title}</Text> : null}
         {children}

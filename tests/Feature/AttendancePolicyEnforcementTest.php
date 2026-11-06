@@ -330,6 +330,37 @@ class AttendancePolicyEnforcementTest extends TestCase
         $this->assertTrue($policy->require_photo);
     }
 
+    public function test_policy_form_forces_photo_requirement_when_face_selfie_mode_is_chosen(): void
+    {
+        $this->actingAsSuperadmin();
+        $company = $this->createCompany();
+
+        Livewire::test(ListCompanies::class)
+            ->callAction(TestAction::make('managePolicy')->table($company), data: [
+                ...array_diff_key($this->policyFormData(), array_flip(['require_photo', 'require_face_recognition'])),
+                'selfie_mode' => 'face',
+            ])
+            ->assertHasNoFormErrors();
+
+        $policy = $company->policy->fresh();
+        $this->assertTrue($policy->require_face_recognition);
+        $this->assertTrue($policy->require_photo);
+        $this->assertSame('face', $policy->selfieMode());
+    }
+
+    public function test_policy_form_old_flags_override_the_filled_selfie_mode(): void
+    {
+        $this->actingAsSuperadmin();
+        $company = $this->createCompany();
+        $company->policy()->update(['require_photo' => true, 'require_face_recognition' => true]);
+
+        Livewire::test(ListCompanies::class)
+            ->callAction(TestAction::make('managePolicy')->table($company), data: $this->policyFormData())
+            ->assertHasNoFormErrors();
+
+        $this->assertSame('none', $company->policy->fresh()->selfieMode());
+    }
+
     public function test_policy_form_rejects_radius_below_one_meter(): void
     {
         $this->actingAsSuperadmin();

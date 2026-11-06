@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\OvertimeRequestApiController;
 use App\Http\Controllers\Api\V1\ReportAndCalendarApiController;
 use App\Http\Controllers\Api\V1\ResignationApiController;
 use App\Http\Controllers\Api\V1\ShieldApiController;
+use App\Http\Controllers\Api\V1\TeamApiController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/webhooks/employees', [EmployeeWebhookController::class, 'handle']);
@@ -19,9 +20,11 @@ Route::post('/webhooks/employees', [EmployeeWebhookController::class, 'handle'])
 Route::prefix('v1')->group(function () {
 
     // Auth Routes
-    Route::post('/auth/login', [AuthController::class, 'login']);
+    Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:api-login');
     Route::post('/auth/otp/request', [AuthController::class, 'requestOtp'])->middleware('throttle:api-otp-request');
     Route::post('/auth/otp/verify', [AuthController::class, 'verifyOtp'])->middleware('throttle:api-otp-verify');
+    Route::post('/auth/magic-link/request', [AuthController::class, 'requestMagicLink'])->middleware('throttle:api-otp-request');
+    Route::post('/auth/magic-link/verify', [AuthController::class, 'verifyMagicLink'])->middleware('throttle:api-otp-verify');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);
@@ -37,6 +40,7 @@ Route::prefix('v1')->group(function () {
 
         // Attendance Presensi
         Route::get('/attendance/today', [AttendanceApiController::class, 'today']);
+        Route::post('/attendance/liveness-challenge', [AttendanceApiController::class, 'livenessChallenge']);
         Route::post('/attendance/check-in', [AttendanceApiController::class, 'checkIn']);
         Route::post('/attendance/check-out', [AttendanceApiController::class, 'checkOut']);
         Route::post('/attendance/master-face', [AttendanceApiController::class, 'registerMasterFace']);
@@ -75,6 +79,19 @@ Route::prefix('v1')->group(function () {
         // Approval Actions
         Route::get('/approvals/pending', [ApprovalApiController::class, 'pending']);
         Route::put('/approvals/{type}/{id}/process', [ApprovalApiController::class, 'process']);
+
+        // Team (Koordinator / Admin): roster per outlet, schedules and freelancers
+        Route::get('/team/roster', [TeamApiController::class, 'roster']);
+        Route::get('/team/options', [TeamApiController::class, 'options']);
+        Route::get('/team/workers', [TeamApiController::class, 'workers']);
+        Route::get('/team/recap', [TeamApiController::class, 'recap']);
+        Route::get('/team/recap/link', [TeamApiController::class, 'recapLink']);
+        Route::put('/team/schedules', [TeamApiController::class, 'updateSchedule']);
+        Route::get('/team/freelancers', [TeamApiController::class, 'freelancers']);
+        Route::post('/team/freelancers', [TeamApiController::class, 'storeFreelancer']);
+        Route::post('/team/freelancers/{id}/account', [TeamApiController::class, 'createFreelancerAccount'])->whereNumber('id');
+        Route::post('/team/freelancers/{id}/end', [TeamApiController::class, 'endFreelancer'])->whereNumber('id');
+        Route::post('/team/freelancers/{id}/reactivate', [TeamApiController::class, 'reactivateFreelancer'])->whereNumber('id');
 
         // Master Data APIs
         Route::get('/master/companies', [MasterDataApiController::class, 'companies'])->middleware('can:ViewAny:Company');

@@ -2,13 +2,15 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\OpensWorkerAccounts;
 use App\Filament\Concerns\ScopesToManagedCompanies;
+use App\Filament\Forms\Components\MasterFacePhotoField;
 use App\Filament\Resources\FreelanceResource\Pages;
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Employee;
 use App\Models\Freelancer;
-use App\Models\User;
-use App\Services\WhatsAppNotificationService;
+use App\Services\DataAccessService;
+use App\Services\WorkerAccountService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -18,10 +20,11 @@ use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\ViewField;
+use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
@@ -31,12 +34,11 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Hash;
-use Spatie\Permission\Models\Role;
 use UnitEnum;
 
 class FreelanceResource extends Resource
 {
+    use OpensWorkerAccounts;
     use ScopesToManagedCompanies;
 
     protected static ?string $model = Freelancer::class;
@@ -65,128 +67,161 @@ class FreelanceResource extends Resource
     {
         return $schema
             ->components([
-                Section::make('Informasi Freelance')
+                Grid::make(['default' => 1, 'lg' => 3])
+                    ->columnSpanFull()
                     ->schema([
-                        Grid::make(2)->schema([
-                            TextInput::make('freelancer_number')
-                                ->label('ID / Nomor Freelance')
-                                ->required()
-                                ->unique(ignoreRecord: true)
-                                ->maxLength(50),
+                        Group::make([
+                            Section::make('Data Diri')
+                                ->icon('heroicon-o-user')
+                                ->columns(2)
+                                ->schema([
+                                    TextInput::make('freelancer_number')
+                                        ->label('Nomor Freelance')
+                                        ->placeholder('Otomatis')
+                                        ->unique(ignoreRecord: true)
+                                        ->maxLength(50),
 
-                            TextInput::make('full_name')
-                                ->label('Nama Lengkap')
-                                ->required()
-                                ->maxLength(255),
+                                    TextInput::make('full_name')
+                                        ->label('Nama Lengkap')
+                                        ->required()
+                                        ->maxLength(255),
 
-                            TextInput::make('institution')
-                                ->label('Keahlian / Agensi / Vendor (Opsional)')
-                                ->nullable()
-                                ->maxLength(255),
+                                    TextInput::make('email')
+                                        ->label('Email')
+                                        ->email()
+                                        ->maxLength(255),
 
-                            Select::make('company_id')
-                                ->label('Badan Usaha (Company)')
-                                ->options(fn (): array => static::placeableCompanyOptions())
-                                ->helperText('Otomatis terisi jika PIC / Supervisor Karyawan dipilih.')
-                                ->required()
-                                ->live()
-                                ->afterStateUpdated(function ($set): void {
-                                    $set('division_id', null);
-                                    $set('shift_id', null);
-                                }),
+                                    TextInput::make('phone')
+                                        ->label('Telepon')
+                                        ->tel()
+                                        ->maxLength(50),
 
-                            Select::make('division_id')
-                                ->label('Divisi')
-                                ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
-                                ->helperText('Otomatis terisi jika PIC / Supervisor Karyawan dipilih.')
-                                ->required(),
+                                    TextInput::make('institution')
+                                        ->label('Keahlian / Vendor')
+                                        ->nullable()
+                                        ->maxLength(255)
+                                        ->columnSpanFull(),
+                                ]),
 
-                            Select::make('shift_id')
-                                ->label('Shift Default')
-                                ->options(fn (Get $get, ?Freelancer $record): array => ShiftScheduleResource::shiftOptions($get('company_id')) + ($record?->shift ? [$record->shift_id => $record->shift->label()] : []))
-                                ->placeholder('Ikut jam kerja badan usaha')
-                                ->helperText('Dipakai bila tidak ada jadwal shift pada tanggal tersebut.')
-                                ->nullable(),
+                            Section::make('Penempatan')
+                                ->icon('heroicon-o-building-office-2')
+                                ->columns(2)
+                                ->schema([
+                                    Select::make('supervisor_id')
+                                        ->label('PIC')
+                                        ->relationship('supervisor', 'full_name', function ($query, Get $get, ?Freelancer $record) {
+                                            // Keep the currently assigned person selectable even after they resign,
+                                            // otherwise existing records fail validation on save.
+                                            $query->where(function ($available) use ($record) {
+                                                $available->whereNotIn('status', ['inactive', 'resigned']);
 
-                            Select::make('supervisor_id')
-                                ->label('Penanggung Jawab / PIC (Karyawan)')
-                                ->relationship('supervisor', 'full_name', function ($query, Get $get, ?Freelancer $record) {
-                                    // Keep the currently assigned person selectable even after they resign,
-                                    // otherwise existing records fail validation on save.
-                                    $query->where(function ($available) use ($record) {
-                                        $available->whereNotIn('status', ['inactive', 'resigned']);
+                                                if ($record?->supervisor_id) {
+                                                    $available->orWhere('id', $record->supervisor_id);
+                                                }
+                                            });
 
-                                        if ($record?->supervisor_id) {
-                                            $available->orWhere('id', $record->supervisor_id);
-                                        }
-                                    });
+                                            if ($companyId = $get('company_id')) {
+                                                $query->where('company_id', $companyId);
+                                            }
 
-                                    if ($companyId = $get('company_id')) {
-                                        $query->where('company_id', $companyId);
-                                    }
+                                            static::scopeToManagedWorkers($query);
+                                        })
+                                        ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
+                                        ->helperText('Badan usaha dan divisi ikut terisi.')
+                                        ->searchable()
+                                        ->preload()
+                                        ->live()
+                                        ->afterStateUpdated(function (Set $set, ?string $state) {
+                                            if (! $state) {
+                                                return;
+                                            }
 
-                                    static::scopeToManagedWorkers($query);
-                                })
-                                ->getOptionLabelFromRecordUsing(fn (Employee $record) => "{$record->nip} - {$record->full_name}")
-                                ->helperText('Memilih PIC / Supervisor akan otomatis mengeset Badan Usaha & Divisi.')
-                                ->searchable()
-                                ->preload()
-                                ->live()
-                                ->afterStateUpdated(function (Set $set, ?string $state) {
-                                    if (! $state) {
-                                        return;
-                                    }
+                                            $employee = Employee::find($state);
+                                            if ($employee) {
+                                                $set('company_id', $employee->company_id);
+                                                $set('division_id', $employee->division_id);
+                                            }
+                                        })
+                                        ->nullable()
+                                        ->columnSpanFull(),
 
-                                    $employee = Employee::find($state);
-                                    if ($employee) {
-                                        $set('company_id', $employee->company_id);
-                                        $set('division_id', $employee->division_id);
-                                    }
-                                })
-                                ->nullable(),
+                                    Select::make('company_id')
+                                        ->label('Badan Usaha')
+                                        ->options(fn (): array => static::placeableCompanyOptions())
+                                        ->required()
+                                        ->live()
+                                        ->afterStateUpdated(function ($set): void {
+                                            $set('division_id', null);
+                                            $set('shift_id', null);
+                                        }),
 
-                            TextInput::make('email')
-                                ->label('Email')
-                                ->email()
-                                ->maxLength(255),
+                                    Select::make('division_id')
+                                        ->label('Divisi')
+                                        ->options(fn (Get $get): array => static::placeableDivisionOptions($get('company_id')))
+                                        ->required(),
 
-                            TextInput::make('phone')
-                                ->label('Telepon')
-                                ->tel()
-                                ->maxLength(50),
+                                    Select::make('shift_id')
+                                        ->label('Shift Default')
+                                        ->options(fn (Get $get, ?Freelancer $record): array => ShiftScheduleResource::shiftOptions($get('company_id')) + ($record?->shift ? [$record->shift_id => $record->shift->label()] : []))
+                                        ->placeholder('Ikut jam kerja badan usaha')
+                                        ->nullable()
+                                        ->columnSpanFull(),
+                                ]),
 
-                            DatePicker::make('start_date')
-                                ->label('Tanggal Mulai Kontrak')
-                                ->native(false),
+                            Section::make('Kontrak')
+                                ->icon('heroicon-o-calendar-days')
+                                ->columns(3)
+                                ->schema([
+                                    DatePicker::make('start_date')
+                                        ->label('Mulai')
+                                        ->native(false),
 
-                            DatePicker::make('end_date')
-                                ->label('Tanggal Selesai Kontrak')
-                                ->native(false),
+                                    DatePicker::make('end_date')
+                                        ->label('Selesai')
+                                        ->native(false),
 
-                            Select::make('status')
-                                ->label('Status Freelance')
-                                ->options([
-                                    'active' => 'Aktif',
-                                    'completed' => 'Selesai Kontrak',
-                                    'extended' => 'Diperpanjang',
-                                    'terminated' => 'Berhenti',
-                                ])
-                                ->default('active')
-                                ->required(),
+                                    Select::make('status')
+                                        ->label('Status')
+                                        ->options([
+                                            'active' => 'Aktif',
+                                            'completed' => 'Selesai Kontrak',
+                                            'extended' => 'Diperpanjang',
+                                            'terminated' => 'Berhenti',
+                                        ])
+                                        ->default('active')
+                                        ->required(),
+                                ]),
+                        ])->columnSpan(['lg' => 2]),
 
-                            Select::make('user_id')
-                                ->label('Akun User Sistem (Opsional)')
-                                ->placeholder('Pilih Akun User')
-                                ->options(fn (?Freelancer $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
-                                ->searchable()
-                                ->nullable(),
+                        Group::make([
+                            Section::make('Akun')
+                                ->icon('heroicon-o-key')
+                                ->schema([
+                                    Toggle::make('create_account')
+                                        ->label('Buat akun login')
+                                        ->helperText('Password dikirim lewat WhatsApp.')
+                                        ->default(true)
+                                        ->live()
+                                        ->dehydrated(false)
+                                        ->visibleOn('create'),
 
-                            ViewField::make('master_face_photo')
-                                ->label('Foto Master Wajah (Face Recognition)')
-                                ->view('filament.components.master-face-capture')
-                                ->columnSpanFull()
-                                ->helperText('Pilih foto dari penyimpanan atau ambil foto via kamera langsung sebagai referensi Face Recognition.'),
-                        ]),
+                                    Select::make('user_id')
+                                        ->label('Akun User')
+                                        ->placeholder('Belum ada akun')
+                                        ->options(fn (?Freelancer $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->searchable()
+                                        ->nullable()
+                                        ->hidden(fn (Get $get, string $operation): bool => $operation === 'create' && (bool) $get('create_account')),
+                                ]),
+
+                            Section::make('Foto Master Wajah')
+                                ->icon('heroicon-o-face-smile')
+                                ->schema([
+                                    MasterFacePhotoField::make('master_face_photo')
+                                        ->label('Foto Master Wajah')
+                                        ->hiddenLabel(),
+                                ]),
+                        ])->columnSpan(['lg' => 1]),
                     ]),
             ]);
     }
@@ -281,93 +316,15 @@ class FreelanceResource extends Resource
                     ]),
             ])
             ->actions([
-                Action::make('createUser')
-                    ->label('Buat Akun')
-                    ->icon('heroicon-o-user-plus')
-                    ->color('success')
-                    ->visible(fn (Freelancer $record): bool => ! $record->user_id)
-                    ->modalHeading(fn (Freelancer $record) => "Buat Akun User untuk {$record->full_name}")
-                    ->modalDescription('Tinjau kredensial dan role yang akan dibuat untuk akun pekerja freelance ini.')
-                    ->schema([
-                        TextInput::make('email')
-                            ->label('Alamat Email Login')
-                            ->email()
-                            ->default(fn (Freelancer $record) => $record->email ?: strtolower($record->freelancer_number).'@freelance.local')
-                            ->required(),
-                        Select::make('role')
-                            ->label('Role Akses')
-                            ->options(fn (): array => static::assignableRoleOptions())
-                            ->default('Freelancer')
-                            ->required(),
-                        TextInput::make('password')
-                            ->label('Password Awal')
-                            ->default('password123')
-                            ->required(),
-                    ])
-                    ->action(function (Freelancer $record, array $data) {
-                        $email = $data['email'];
-                        $roleName = $data['role'] ?? 'Freelancer';
-                        $password = $data['password'];
+                static::createAccountAction(),
 
-                        if (User::where('email', $email)->exists()) {
-                            Notification::make()
-                                ->title('Gagal Membuat Akun')
-                                ->body("Email {$email} sudah digunakan oleh akun user lain.")
-                                ->danger()
-                                ->send();
+                ...static::contractActions(),
 
-                            return;
-                        }
-
-                        $user = User::create([
-                            'name' => $record->full_name,
-                            'email' => $email,
-                            'phone' => $record->phone,
-                            'password' => Hash::make($password),
-                        ]);
-
-                        abort_unless(array_key_exists($roleName, static::assignableRoleOptions()), 403);
-
-                        if ($role = Role::firstOrCreate(['name' => $roleName])) {
-                            $user->assignRole($role);
-                        }
-
-                        $record->update(['user_id' => $user->id]);
-
-                        $waResult = WhatsAppNotificationService::sendAccountCredentials(
-                            $record->full_name,
-                            $record->phone,
-                            $email,
-                            $password,
-                            $roleName
-                        );
-
-                        $waStatusNote = $waResult['api_sent']
-                            ? "\n✅ Notifikasi WhatsApp telah otomatis terkirim via WAG Gateway."
-                            : ($waResult['api_error'] ? "\n⚠️ WAG Gateway: {$waResult['api_error']}" : "\n⚠️ Nomor HP belum diisi.");
-
-                        $notification = Notification::make()
-                            ->title('Akun User Berhasil Dibuat!')
-                            ->body("Kredensial Login {$record->full_name} (Role: {$roleName}):\nEmail: {$email}\nNo. HP: ".($record->phone ?? '-')."\nPassword: {$password}\nMetode Login: Email + Password atau WhatsApp OTP{$waStatusNote}")
-                            ->success();
-
-                        if (! $waResult['api_sent'] && ! empty($waResult['wa_url'])) {
-                            $notification->actions([
-                                Action::make('send_wa')
-                                    ->label('Kirim via WA Web/App (Fallback)')
-                                    ->url($waResult['wa_url'], shouldOpenInNewTab: true)
-                                    ->button()
-                                    ->color('warning'),
-                            ]);
-                        }
-
-                        $notification->send();
-                    }),
                 Action::make('deleteUser')
                     ->label('Hapus Akun')
                     ->icon('heroicon-o-user-minus')
                     ->color('danger')
-                    ->visible(fn (Freelancer $record): bool => (bool) $record->user_id && static::canManageAccount($record->user))
+                    ->visible(fn (Freelancer $record): bool => (bool) $record->user_id && static::canManageAccount($record->user) && ! DataAccessService::isCoordinator(auth()->user()))
                     ->requiresConfirmation()
                     ->modalHeading(fn (Freelancer $record) => "Hapus Akun User {$record->full_name}")
                     ->modalDescription('Apakah Anda yakin ingin menghapus akun user ini? Pengguna ini tidak akan dapat login lagi ke sistem.')
@@ -400,6 +357,46 @@ class FreelanceResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * End a contract (account switched off, later schedules removed) or take the freelancer back on.
+     *
+     * @return list<Action>
+     */
+    public static function contractActions(): array
+    {
+        return [
+            Action::make('endContract')
+                ->label('Akhiri Kontrak')
+                ->icon('heroicon-o-arrow-right-start-on-rectangle')
+                ->color('danger')
+                ->visible(fn (Freelancer $record): bool => app(WorkerAccountService::class)->isActive($record))
+                ->requiresConfirmation()
+                ->modalHeading(fn (Freelancer $record): string => "Akhiri kontrak {$record->full_name}?")
+                ->modalDescription('Akun dinonaktifkan dan jadwal setelah hari ini dihapus. Bisa diaktifkan lagi kapan saja.')
+                ->modalSubmitActionLabel('Akhiri')
+                ->successNotificationTitle('Kontrak diakhiri')
+                ->action(function (Freelancer $record, Action $action): void {
+                    app(WorkerAccountService::class)->endContract($record);
+                    $action->success();
+                }),
+
+            Action::make('reactivate')
+                ->label('Aktifkan Lagi')
+                ->icon('heroicon-o-arrow-path')
+                ->color('success')
+                ->visible(fn (Freelancer $record): bool => ! app(WorkerAccountService::class)->isActive($record))
+                ->requiresConfirmation()
+                ->modalHeading(fn (Freelancer $record): string => "Aktifkan lagi {$record->full_name}?")
+                ->modalDescription('Status kembali Aktif dan akun yang sama bisa dipakai lagi.')
+                ->modalSubmitActionLabel('Aktifkan')
+                ->successNotificationTitle('Freelancer aktif lagi')
+                ->action(function (Freelancer $record, Action $action): void {
+                    app(WorkerAccountService::class)->reactivate($record);
+                    $action->success();
+                }),
+        ];
     }
 
     public static function getPages(): array

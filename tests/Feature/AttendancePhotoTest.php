@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Support\SelfieUploadToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -29,8 +30,12 @@ class AttendancePhotoTest extends TestCase
                 'success' => true,
             ]);
 
-        $path = $response->json('path');
-        $this->assertNotNull($path);
+        $this->assertNull($response->json('path'));
+
+        $token = $response->json('token');
+        $this->assertNotNull($token);
+
+        $path = SelfieUploadToken::resolve($token, $user);
         Storage::disk(config('filesystems.default'))->assertExists($path);
     }
 }

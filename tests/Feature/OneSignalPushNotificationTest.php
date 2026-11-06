@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Models\ApprovalFlow;
 use App\Models\Company;
 use App\Models\CompanyPolicy;
-use App\Models\DeviceToken;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\JobLevel;
@@ -13,7 +12,7 @@ use App\Models\JobTitle;
 use App\Models\LeaveRequest;
 use App\Models\User;
 use App\Notifications\ApprovalRequestedNotification;
-use App\Notifications\Channels\ExpoPushChannel;
+use App\Notifications\Channels\OneSignalChannel;
 use App\Services\ApprovalFlowService;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -26,11 +25,11 @@ use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
-class ExpoPushNotificationTest extends TestCase
+class OneSignalPushNotificationTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+    private const PUSH_URL = 'https://api.onesignal.com/notifications?c=push';
 
     private Company $company;
 
@@ -100,20 +99,18 @@ class ExpoPushNotificationTest extends TestCase
             ]);
         }
 
-        DeviceToken::query()->create(['user_id' => $this->employeeUser->id, 'token' => 'ExponentPushToken[employee]', 'platform' => 'android']);
-        DeviceToken::query()->create(['user_id' => $this->approverUser->id, 'token' => 'ExponentPushToken[approver-phone]', 'platform' => 'ios']);
-        DeviceToken::query()->create(['user_id' => $this->approverUser->id, 'token' => 'ExponentPushToken[approver-tablet]', 'platform' => 'android']);
+        config(['services.onesignal.app_id' => 'app-id', 'services.onesignal.rest_api_key' => 'rest-key']);
     }
 
     /**
-     * Stub the Expo Push API. Only the first stub registered for a URL answers, so each test calls
+     * Stub the OneSignal API. Only the first stub registered for a URL answers, so each test calls
      * this once, before anything sends a push.
      *
      * @param  array<string, mixed>|null  $body
      */
-    private function fakeExpo(?array $body = null, int $status = 200): void
+    private function fakeOneSignal(?array $body = null, int $status = 200): void
     {
-        Http::fake([self::PUSH_URL => Http::response($body ?? ['data' => [['status' => 'ok', 'id' => 'ticket-1']]], $status)]);
+        Http::fake([self::PUSH_URL => Http::response($body ?? ['id' => 'notification-1'], $status)]);
     }
 
     private function submitLeaveRequest(): LeaveRequest
@@ -142,35 +139,40 @@ class ExpoPushNotificationTest extends TestCase
             ->all();
     }
 
+    /**
+     * @return list<string>
+     */
+    private function targets(Request $request): array
+    {
+        return $request->data()['include_aliases']['external_id'];
+    }
+
     public function test_approvers_of_the_first_stage_get_a_push_when_a_request_is_submitted(): void
     {
-        $this->fakeExpo();
+        $this->fakeOneSignal();
         $leave = $this->submitLeaveRequest();
 
         $requests = $this->pushRequests();
         $this->assertCount(1, $requests);
 
         $payload = $requests[0]->data();
-        $this->assertEqualsCanonicalizing(['ExponentPushToken[approver-phone]', 'ExponentPushToken[approver-tablet]'], $payload['to']);
-        $this->assertSame('Pengajuan baru menunggu persetujuan Anda', $payload['title']);
-        $this->assertSame('Pengajuan Cuti / Izin dari Pekerja Push menunggu persetujuan Anda.', $payload['body']);
-        $this->assertSame('default', $payload['sound']);
-        $this->assertSame('default', $payload['channelId']);
+        $this->assertSame([(string) $this->approverUser->id], $this->targets($requests[0]));
+        $this->assertSame('app-id', $payload['app_id']);
+        $this->assertSame('push', $payload['target_channel']);
+        $this->assertSame('Pengajuan baru menunggu persetujuan Anda', $payload['headings']['en']);
+        $this->assertSame('Pengajuan Cuti / Izin dari Pekerja Push menunggu persetujuan Anda.', $payload['contents']['id']);
         $this->assertSame([
             'kind' => 'approval_requested',
             'request_type' => 'leave',
             'request_id' => $leave->id,
             'step_order' => 1,
         ], $payload['data']);
-        $this->assertTrue($requests[0]->hasHeader('Accept', 'application/json'));
-        $this->assertFalse($requests[0]->hasHeader('Authorization'));
+        $this->assertTrue($requests[0]->hasHeader('Authorization', 'Key rest-key'));
     }
 
     public function test_the_next_stage_approver_gets_a_push_and_the_requester_gets_the_final_outcome(): void
     {
-        $this->fakeExpo();
-        DeviceToken::query()->create(['user_id' => $this->bodUser->id, 'token' => 'ExponentPushToken[bod]', 'platform' => 'ios']);
-
+        $this->fakeOneSignal();
         $leave = $this->submitLeaveRequest();
 
         $service = app(ApprovalFlowService::class);
@@ -178,29 +180,27 @@ class ExpoPushNotificationTest extends TestCase
 
         $requests = $this->pushRequests();
         $this->assertCount(2, $requests);
-        $stageTwo = $requests[1]->data();
-        $this->assertSame(['ExponentPushToken[bod]'], $stageTwo['to']);
-        $this->assertSame('Pengajuan menunggu persetujuan tahap 2', $stageTwo['title']);
-        $this->assertSame(2, $stageTwo['data']['step_order']);
+        $this->assertSame([(string) $this->bodUser->id], $this->targets($requests[1]));
+        $this->assertSame('Pengajuan menunggu persetujuan tahap 2', $requests[1]->data()['headings']['en']);
+        $this->assertSame(2, $requests[1]->data()['data']['step_order']);
 
         $service->approveStep($leave->refresh(), $this->bodUser);
 
         $requests = $this->pushRequests();
         $this->assertCount(3, $requests);
-        $resolved = $requests[2]->data();
-        $this->assertSame(['ExponentPushToken[employee]'], $resolved['to']);
-        $this->assertSame('Pengajuan Cuti / Izin disetujui', $resolved['title']);
+        $this->assertSame([(string) $this->employeeUser->id], $this->targets($requests[2]));
+        $this->assertSame('Pengajuan Cuti / Izin disetujui', $requests[2]->data()['headings']['en']);
         $this->assertSame([
             'kind' => 'approval_resolved',
             'request_type' => 'leave',
             'request_id' => $leave->id,
             'status' => 'approved',
-        ], $resolved['data']);
+        ], $requests[2]->data()['data']);
     }
 
     public function test_the_requester_gets_a_push_with_the_reason_when_the_request_is_rejected(): void
     {
-        $this->fakeExpo();
+        $this->fakeOneSignal();
         $leave = $this->submitLeaveRequest();
 
         Sanctum::actingAs($this->approverUser);
@@ -212,16 +212,16 @@ class ExpoPushNotificationTest extends TestCase
         $requests = $this->pushRequests();
         $this->assertCount(2, $requests);
         $payload = $requests[1]->data();
-        $this->assertSame(['ExponentPushToken[employee]'], $payload['to']);
-        $this->assertSame('Pengajuan Cuti / Izin ditolak', $payload['title']);
-        $this->assertSame('Pengajuan Cuti / Izin Anda ditolak: Kuota tim sudah habis', $payload['body']);
+        $this->assertSame([(string) $this->employeeUser->id], $this->targets($requests[1]));
+        $this->assertSame('Pengajuan Cuti / Izin ditolak', $payload['headings']['en']);
+        $this->assertSame('Pengajuan Cuti / Izin Anda ditolak: Kuota tim sudah habis', $payload['contents']['en']);
         $this->assertSame('rejected', $payload['data']['status']);
     }
 
-    public function test_nothing_is_sent_to_users_without_a_registered_device(): void
+    public function test_nothing_is_sent_without_a_rest_api_key(): void
     {
-        $this->fakeExpo();
-        DeviceToken::query()->delete();
+        $this->fakeOneSignal();
+        config(['services.onesignal.rest_api_key' => null]);
 
         $leave = $this->submitLeaveRequest();
         app(ApprovalFlowService::class)->rejectStep($leave, $this->approverUser, 'Tidak');
@@ -229,47 +229,32 @@ class ExpoPushNotificationTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_the_notification_is_queued_and_uses_the_expo_channel(): void
+    public function test_the_notification_is_queued_and_uses_the_onesignal_channel(): void
     {
         Notification::fake();
 
         $this->submitLeaveRequest();
 
         Notification::assertSentTo($this->approverUser, ApprovalRequestedNotification::class, function (ApprovalRequestedNotification $notification, array $channels): bool {
-            return $channels === [ExpoPushChannel::class]
+            return $channels === [OneSignalChannel::class]
                 && $notification instanceof ShouldQueue;
         });
         Notification::assertNotSentTo($this->employeeUser, ApprovalRequestedNotification::class);
         Notification::assertNotSentTo($this->bodUser, ApprovalRequestedNotification::class);
     }
 
-    public function test_tokens_that_expo_reports_as_unregistered_are_deleted(): void
+    public function test_a_user_without_a_subscribed_device_is_not_an_error(): void
     {
-        $this->fakeExpo(['data' => [
-            ['status' => 'ok', 'id' => 'ticket-1'],
-            ['status' => 'error', 'message' => 'not registered', 'details' => ['error' => 'DeviceNotRegistered']],
-        ]]);
+        $this->fakeOneSignal(['id' => '', 'errors' => ['invalid_aliases' => ['external_id' => ['x']]]]);
 
         $this->submitLeaveRequest();
 
-        $sentTo = $this->pushRequests()[0]->data()['to'];
-        $this->assertDatabaseHas('device_tokens', ['token' => $sentTo[0]]);
-        $this->assertDatabaseMissing('device_tokens', ['token' => $sentTo[1]]);
+        $this->assertCount(1, $this->pushRequests());
     }
 
-    public function test_the_expo_access_token_is_sent_when_configured(): void
+    public function test_a_failed_onesignal_request_throws_so_the_queued_job_is_retried(): void
     {
-        $this->fakeExpo();
-        config(['services.expo.access_token' => 'expo-secret']);
-
-        $this->submitLeaveRequest();
-
-        $this->assertTrue($this->pushRequests()[0]->hasHeader('Authorization', 'Bearer expo-secret'));
-    }
-
-    public function test_a_failed_expo_request_throws_so_the_queued_job_is_retried(): void
-    {
-        $this->fakeExpo(['errors' => [['code' => 'INTERNAL_SERVER_ERROR', 'message' => 'down']]], 500);
+        $this->fakeOneSignal(['errors' => ['down']], 500);
         $this->withoutExceptionHandling();
 
         $this->expectException(RequestException::class);

@@ -15,6 +15,14 @@
         $attendance = $this->todayAttendance;
         $policy = $this->companyPolicy;
         $workingHours = $this->todayWorkingHours;
+        $selfieMode = $policy?->selfieMode() ?? 'none';
+        $needsMasterFace = in_array($selfieMode, ['face', 'liveness'], true);
+        $selfieLabels = [
+            'none' => 'Tanpa foto',
+            'photo' => 'Foto selfie',
+            'face' => 'Foto + cocok wajah',
+            'liveness' => 'Liveness + cocok wajah',
+        ];
     @endphp
 
     @if(!$profile)
@@ -24,7 +32,7 @@
             <p class="mt-1 text-sm">Akun pengguna Anda belum terhubung ke data Employee. Harap hubungi Administrator untuk menghubungkan data profil Karyawan Anda.</p>
         </div>
     @else
-        @if($policy?->require_face_recognition && empty($profile->master_face_photo))
+        @if($needsMasterFace && empty($profile->master_face_photo))
             <div class="p-4 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/80 rounded-xl flex items-center justify-between gap-4 shadow-sm mb-2">
                 <div class="flex items-center gap-3">
                     <div class="p-2.5 bg-amber-500 text-white rounded-lg shadow-sm">
@@ -32,7 +40,7 @@
                     </div>
                     <div>
                         <h4 class="text-sm font-bold text-amber-900 dark:text-amber-200">Foto Master Wajah Belum Terdaftar</h4>
-                        <p class="text-xs text-amber-700 dark:text-amber-300">Badan usaha Anda mewajibkan AI Face Recognition. Silakan daftarkan Foto Master Wajah Anda dengan mengeklik tombol <span class="font-semibold underline">Foto Master Wajah</span> di pojok kanan atas.</p>
+                        <p class="text-xs text-amber-700 dark:text-amber-300">Badan usaha Anda mewajibkan verifikasi wajah saat presensi. Silakan daftarkan Foto Master Wajah Anda dengan mengeklik tombol <span class="font-semibold underline">Foto Master Wajah</span> di pojok kanan atas.</p>
                     </div>
                 </div>
             </div>
@@ -61,24 +69,25 @@
                                 {{ substr($workingHours['start_time'] ?? '08:00', 0, 5) }} - {{ substr($workingHours['end_time'] ?? '17:00', 0, 5) }}
                                 (Toleransi {{ $workingHours['late_tolerance_minutes'] ?? 15 }} menit)
                             </span>
+                            @if($workingHours['location'] ?? null)
+                                <span class="block text-xs text-gray-500">{{ collect([$workingHours['location']->name, $workingHours['section'] ?? null])->filter()->implode(' · ') }}</span>
+                            @endif
                         @endif
                     </div>
                     <div>
-                        <span class="block text-xs font-medium text-gray-500">Aturan Absensi</span>
-                        <div class="mt-1 flex flex-wrap gap-2">
-                            <span class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
-                                Foto: {{ $policy?->require_photo ? 'Wajib' : 'Opsional' }}
-                            </span>
+                        <span class="block text-xs font-medium text-gray-500">Mode Presensi</span>
+                        <span class="font-medium text-gray-900 dark:text-white">{{ $policy?->modeLabel() ?? 'Klik saja' }}</span>
+                        <div class="mt-1.5 flex flex-wrap gap-2">
                             <span class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
                                 GPS: {{ $policy?->require_gps ? 'Wajib (Geofence ' . ($policy->geofence_radius_meters ?? 100) . 'm)' : 'Tidak Wajib' }}
                             </span>
                             <span class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
-                                Face Recognition: {{ $policy?->require_face_recognition ? 'Aktif' : 'Nonaktif' }}
+                                Selfie: {{ $selfieLabels[$selfieMode] }}
                             </span>
                         </div>
                     </div>
 
-                    @if($policy?->require_face_recognition)
+                    @if($needsMasterFace)
                         <!-- Master Face Photo Preview & Edit -->
                         <div class="pt-3 border-t border-gray-100 dark:border-gray-800">
                             <span class="block text-xs font-medium text-gray-500 mb-1.5">Foto Master Biometrik</span>
@@ -143,7 +152,7 @@
                 <div class="flex items-center justify-between">
                     <div>
                         <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white">Presensi Mandiri</h3>
-                        <p class="text-xs text-gray-500">Live Camera & Realtime Verification</p>
+                        <p class="text-xs text-gray-500">{{ $policy?->modeLabel() ?? 'Klik saja' }}</p>
                     </div>
                     <span class="text-xs font-semibold px-2.5 py-1 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full border border-gray-200 dark:border-gray-700 shadow-sm">
                         {{ now()->translatedFormat('l, d F Y') }}
@@ -154,7 +163,8 @@
                 <div>
                     @if(!$attendance || !$attendance->check_out)
                         @include('filament.components.camera-capture', [
-                            'requireFaceRecognition' => $policy?->require_face_recognition ?? false,
+                            'policy' => $policy,
+                            'selfieMode' => $selfieMode,
                             'requireGps' => $policy?->require_gps ?? false,
                             'hasCheckedIn' => !empty($attendance?->check_in),
                             'hasCheckedOut' => !empty($attendance?->check_out),
@@ -185,7 +195,11 @@
                             </div>
                             <div class="mt-1.5">
                                 @if($attendance?->check_in)
-                                    @if($attendance->status === 'late')
+                                    @if($attendance->status === \App\Enums\AttendanceStatus::PendingApproval)
+                                        <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
+                                            Menunggu Persetujuan
+                                        </span>
+                                    @elseif($attendance->status === \App\Enums\AttendanceStatus::Late)
                                         <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
                                             Terlambat ({{ $attendance->late_minutes }}m)
                                         </span>

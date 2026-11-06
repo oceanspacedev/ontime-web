@@ -31,6 +31,12 @@ export interface Access {
   canResign: boolean;
   canSeeLeaveCalendar: boolean;
   canApprove: boolean;
+  /** Runs a team from the Tim tab: roster per outlet, schedules and freelancers. */
+  canManageTeam: boolean;
+  /** A Koordinator of franchise outlets. */
+  isCoordinator: boolean;
+  /** Link to the CESA waste report when the server offers it to this user. */
+  wasteUrl: string | null;
   isSuperadmin: boolean;
   /** HR gave this employee annual leave; never true for interns and freelancers. */
   hasAnnualLeave: boolean;
@@ -51,7 +57,7 @@ export function deriveAccess(user: User | null): Access {
 
   const isSuperadmin = hasRole('Superadmin');
   const isWorkerRole = hasRole('Employee') || hasRole('Intern') || hasRole('Freelancer');
-  const isApproverRole = hasRole('Approver') || hasRole('BOD') || hasRole('Admin') || isSuperadmin;
+  const isApproverRole = hasRole('Approver') || hasRole('BOD') || hasRole('Admin') || hasRole('Koordinator') || isSuperadmin;
 
   const profile = user?.employee ?? user?.intern ?? user?.freelancer ?? null;
   const profileKind: ProfileKind | null = user?.employee ? 'employee' : user?.intern ? 'intern' : user?.freelancer ? 'freelancer' : null;
@@ -80,6 +86,9 @@ export function deriveAccess(user: User | null): Access {
     canResign: profileKind === 'employee' && requestAllowed('Create:Resignation'),
     canSeeLeaveCalendar: !hasRole('Intern') || isApproverRole,
     canApprove: isApproverRole,
+    canManageTeam: user?.access?.can_manage_team === true,
+    isCoordinator: user?.access?.is_coordinator === true,
+    wasteUrl: user?.access?.waste_url ?? null,
     isSuperadmin,
     hasAnnualLeave,
     leaveTypes,

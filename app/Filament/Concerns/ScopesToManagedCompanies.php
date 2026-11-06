@@ -56,6 +56,16 @@ trait ScopesToManagedCompanies
     /**
      * Superadmin, or an Admin whose data access covers at least one company or division.
      */
+    /**
+     * A Koordinator: sees only the menus for running outlets (freelancers, shifts, schedules, attendance, approvals).
+     */
+    public static function isCoordinator(): bool
+    {
+        $user = auth()->user();
+
+        return $user !== null && DataAccessService::isCoordinator($user);
+    }
+
     public static function canManageWorkerData(): bool
     {
         return (bool) auth()->user()?->canManageWorkers();
@@ -166,14 +176,14 @@ trait ScopesToManagedCompanies
     // ── Accounts ───────────────────────────────────────────────────────────
 
     /**
-     * Roles the current user may hand out. Only Superadmin can grant Superadmin or Admin.
+     * Roles the current user may hand out. Only Superadmin can grant the manager roles.
      *
      * @return array<string, string>
      */
     public static function assignableRoleOptions(): array
     {
         return Role::query()
-            ->when(! auth()->user()?->hasRole('Superadmin'), fn (Builder $query) => $query->whereNotIn('name', [SystemRole::Superadmin->value, SystemRole::Admin->value]))
+            ->when(! auth()->user()?->hasRole('Superadmin'), fn (Builder $query) => $query->whereNotIn('name', SystemRole::managerNames()))
             ->orderBy('name')
             ->pluck('name', 'name')
             ->all();
@@ -196,7 +206,7 @@ trait ScopesToManagedCompanies
             return true;
         }
 
-        if (! $user->hasRole(SystemRole::Admin->value) || ! $user->canManageWorkers() || $account->hasAnyRole([SystemRole::Superadmin->value, SystemRole::Admin->value])) {
+        if (! $user->hasAnyRole([SystemRole::Admin->value, SystemRole::Koordinator->value]) || ! $user->canManageWorkers() || $account->hasAnyRole(SystemRole::managerNames())) {
             return false;
         }
 
@@ -224,13 +234,13 @@ trait ScopesToManagedCompanies
             return $query;
         }
 
-        if (! $user->hasRole(SystemRole::Admin->value) || ! $user->canManageWorkers()) {
+        if (! $user->hasAnyRole([SystemRole::Admin->value, SystemRole::Koordinator->value]) || ! $user->canManageWorkers()) {
             return $query->whereRaw('1 = 0');
         }
 
         return $query
             ->whereKeyNot($user->getKey())
-            ->whereDoesntHave('roles', fn (Builder $roles) => $roles->whereIn('name', [SystemRole::Superadmin->value, SystemRole::Admin->value]))
+            ->whereDoesntHave('roles', fn (Builder $roles) => $roles->whereIn('name', SystemRole::managerNames()))
             ->where(fn (Builder $scope) => $scope
                 ->when($includeUnlinked, fn (Builder $linkable) => $linkable->orWhere(fn (Builder $unlinked) => $unlinked->whereDoesntHave('employee')->whereDoesntHave('intern')->whereDoesntHave('freelancer')))
                 ->orWhereHas('employee', fn (Builder $worker) => DataAccessService::scopeWorkers($worker, $user, includeOwn: false))

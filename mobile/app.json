@@ -37,6 +37,12 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "onesignal-expo-plugin",
+        {
+          "mode": "development"
+        }
+      ],
       "expo-router",
       "expo-secure-store",
       [
@@ -61,17 +67,22 @@
         }
       ],
       "expo-document-picker",
+      "expo-font",
       [
-        "expo-notifications",
+        "@sentry/react-native/expo",
         {
-          "color": "#0F4C81",
-          "defaultChannel": "default"
+          "url": "https://de.sentry.io/",
+          "project": "ontime-mobile",
+          "organization": "developer-hof"
         }
-      ],
-      "expo-font"
+      ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "oneSignalAppId": "37e96a62-f9fc-45d5-8159-1f079b3f80f5",
+      "sentryDsn": "https://b8de05c4e574a1531c9ef59c54fcfa8e@o4510944541016064.ingest.de.sentry.io/4512383893110864"
     }
   }
 }

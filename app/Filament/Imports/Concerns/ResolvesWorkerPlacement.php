@@ -124,16 +124,60 @@ trait ResolvesWorkerPlacement
         return (int) ($jobTitle ?? JobTitle::create(['division_id' => $division->id, 'name' => $name]))->id;
     }
 
-    protected function shiftIdFromState(Company $company, mixed $value): ?int
+    /**
+     * Accepts "Pagi" or a brand shift written as "JCHICKEN · Pagi" (or "JCHICKEN | Pagi"). A name used by
+     * several brands resolves to the brand of the worker's division, then to the company-wide shift.
+     */
+    protected function shiftIdFromState(Company $company, mixed $value, ?Division $division = null): ?int
     {
-        $name = trim((string) $value);
+        $value = trim((string) $value);
 
-        if ($name === '') {
+        if ($value === '') {
             return null;
         }
 
-        return (int) (Shift::query()->where('company_id', $company->id)->whereRaw('UPPER(name) = ?', [Str::upper($name)])->value('id')
-            ?? $this->failRow("Shift \"{$name}\" tidak ditemukan di {$company->name}."));
+        $parts = array_map('trim', preg_split('/\s*[·|]\s*/u', $value, 2));
+        [$brand, $name] = count($parts) === 2 ? $parts : [null, $parts[0]];
+
+        $matches = Shift::query()
+            ->with('division')
+            ->where('company_id', $company->id)
+            ->whereRaw('UPPER(name) = ?', [Str::upper($name)])
+            ->when($brand !== null, fn ($query) => $query->whereHas('division', fn ($division) => $division->whereRaw('UPPER(name) = ?', [Str::upper($brand)])))
+            ->get();
+
+        if ($matches->count() > 1) {
+            $ownBrands = $this->divisionAndAncestorIds($division);
+            $narrowed = $matches->filter(fn (Shift $shift): bool => in_array((int) $shift->division_id, $ownBrands, true));
+            $companyWide = $matches->whereNull('division_id');
+            $matches = match (true) {
+                $narrowed->isNotEmpty() => $narrowed,
+                $companyWide->isNotEmpty() => $companyWide,
+                default => $matches,
+            };
+        }
+
+        return match ($matches->count()) {
+            1 => (int) $matches->first()->id,
+            0 => $this->failRow("Shift \"{$value}\" tidak ditemukan di {$company->name}."),
+            default => $this->failRow("Shift \"{$name}\" ada di beberapa brand. Tulis lengkap, misalnya \"{$matches->first()->qualifiedName()}\"."),
+        };
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function divisionAndAncestorIds(?Division $division): array
+    {
+        $ids = [];
+        $current = $division;
+
+        while ($current && ! in_array((int) $current->id, $ids, true)) {
+            $ids[] = (int) $current->id;
+            $current = $current->parent_id ? Division::query()->find($current->parent_id) : null;
+        }
+
+        return $ids;
     }
 
     /**
@@ -175,7 +219,7 @@ trait ResolvesWorkerPlacement
         $record->setAttribute('division_id', $division->id);
 
         if (filled($this->data['shift'] ?? null)) {
-            $record->setAttribute('shift_id', $this->shiftIdFromState($company, $this->data['shift']));
+            $record->setAttribute('shift_id', $this->shiftIdFromState($company, $this->data['shift'], $division));
         } elseif ($movedCompany) {
             $record->setAttribute('shift_id', null);
         }

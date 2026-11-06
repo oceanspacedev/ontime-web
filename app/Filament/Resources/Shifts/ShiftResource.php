@@ -4,7 +4,9 @@ namespace App\Filament\Resources\Shifts;
 
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\Shifts\Pages\ManageShifts;
+use App\Models\Division;
 use App\Models\Shift;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -15,9 +17,10 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
-use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -46,61 +49,91 @@ class ShiftResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'name';
 
+    /**
+     * Company admins manage every shift; a Koordinator manages the shifts of their brands.
+     */
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageCompanyData() || (static::isCoordinator() && static::canManageWorkerData());
     }
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with('company')->withCount('employees'));
+        $query = parent::getEloquentQuery()->with(['company', 'division'])->withCount('employees');
+
+        if (! static::isCoordinator()) {
+            return static::scopeToManagedCompanies($query);
+        }
+
+        $brandIds = DataAccessService::coordinatedDivisionIds(auth()->user());
+
+        return static::scopeToPlaceableCompanies($query)->when($brandIds !== null, fn (Builder $brandShifts) => $brandShifts->whereIn('division_id', $brandIds));
     }
 
     public static function form(Schema $schema): Schema
     {
         return $schema
+            ->columns(2)
             ->components([
-                Grid::make(2)->schema([
-                    Select::make('company_id')
-                        ->label('Badan Usaha')
-                        ->options(fn (): array => static::managedCompanyOptions())
-                        ->searchable()
-                        ->required()
-                        ->live(),
+                Select::make('company_id')
+                    ->label('Badan Usaha')
+                    ->options(fn (): array => static::shiftCompanyOptions())
+                    ->searchable()
+                    ->required()
+                    ->live()
+                    ->afterStateUpdated(fn (Set $set) => $set('division_id', null))
+                    ->columnSpanFull(),
 
-                    TextInput::make('name')
-                        ->label('Nama Shift')
-                        ->placeholder('Contoh: Pagi, Siang, Malam')
-                        ->required()
-                        ->maxLength(100)
-                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule->where('company_id', $get('company_id'))),
+                Select::make('division_id')
+                    ->label('Brand')
+                    ->options(fn (Get $get): array => static::brandOptions($get('company_id')))
+                    ->searchable()
+                    ->placeholder('Semua brand')
+                    ->required(fn (): bool => static::isCoordinator())
+                    ->columnSpanFull(),
 
-                    TimePicker::make('start_time')
-                        ->label('Jam Masuk')
-                        ->seconds(false)
-                        ->required(),
+                TextInput::make('name')
+                    ->label('Nama Shift')
+                    ->placeholder('Pagi')
+                    ->required()
+                    ->maxLength(100)
+                    ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule
+                        ->where('company_id', $get('company_id'))
+                        ->when(
+                            filled($get('division_id')),
+                            fn (Unique $rule): Unique => $rule->where('division_id', $get('division_id')),
+                            fn (Unique $rule): Unique => $rule->whereNull('division_id'),
+                        ))
+                    ->validationMessages(['unique' => 'Nama shift ini sudah dipakai di brand yang sama.']),
 
-                    TimePicker::make('end_time')
-                        ->label('Jam Pulang')
-                        ->seconds(false)
-                        ->helperText('Boleh lebih kecil dari jam masuk untuk shift yang melewati tengah malam.')
-                        ->required(),
+                TextInput::make('code')
+                    ->label('Kode')
+                    ->placeholder('P')
+                    ->maxLength(20),
 
-                    TextInput::make('late_tolerance_minutes')
-                        ->label('Toleransi Terlambat (menit)')
-                        ->numeric()
-                        ->minValue(0)
-                        ->maxValue(240)
-                        ->helperText('Kosongkan untuk mengikuti toleransi di kebijakan badan usaha.'),
+                TimePicker::make('start_time')
+                    ->label('Jam Masuk')
+                    ->seconds(false)
+                    ->required(),
 
-                    TextInput::make('code')
-                        ->label('Kode (opsional)')
-                        ->maxLength(20),
+                TimePicker::make('end_time')
+                    ->label('Jam Pulang')
+                    ->seconds(false)
+                    ->helperText('Boleh lewat tengah malam.')
+                    ->required(),
 
-                    Toggle::make('is_active')
-                        ->label('Aktif')
-                        ->default(true),
-                ]),
+                TextInput::make('late_tolerance_minutes')
+                    ->label('Toleransi Terlambat')
+                    ->numeric()
+                    ->minValue(0)
+                    ->maxValue(240)
+                    ->suffix('menit')
+                    ->placeholder('Ikut kebijakan'),
+
+                Toggle::make('is_active')
+                    ->label('Aktif')
+                    ->default(true)
+                    ->inline(false),
             ]);
     }
 
@@ -114,6 +147,11 @@ class ShiftResource extends Resource
                     ->label('Badan Usaha')
                     ->sortable()
                     ->searchable(),
+
+                TextColumn::make('division.name')
+                    ->label('Brand')
+                    ->placeholder('Semua brand')
+                    ->sortable(),
 
                 TextColumn::make('name')
                     ->label('Shift')
@@ -139,13 +177,19 @@ class ShiftResource extends Resource
             ->filters([
                 SelectFilter::make('company_id')
                     ->label('Badan Usaha')
-                    ->options(fn (): array => static::managedCompanyOptions(activeOnly: false)),
+                    ->options(fn (): array => static::shiftCompanyOptions(activeOnly: false)),
+
+                SelectFilter::make('division_id')
+                    ->label('Brand')
+                    ->relationship('division', 'name', fn (Builder $query): Builder => $query->whereIn('id', Shift::query()->whereNotNull('division_id')->select('division_id'))),
 
                 TernaryFilter::make('is_active')
                     ->label('Status Aktif'),
             ])
             ->recordActions([
-                EditAction::make(),
+                EditAction::make()
+                    ->slideOver()
+                    ->modalWidth(Width::Medium),
                 DeleteAction::make(),
             ])
             ->toolbarActions([
@@ -153,6 +197,49 @@ class ShiftResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * Companies whose shifts the user manages: company admins their companies, a Koordinator the companies of their brands.
+     *
+     * @return array<int, string>
+     */
+    public static function shiftCompanyOptions(bool $activeOnly = true): array
+    {
+        return static::isCoordinator() ? static::placeableCompanyOptions($activeOnly) : static::managedCompanyOptions($activeOnly);
+    }
+
+    /**
+     * Active divisions of a managed company, labelled with their full path ("F&B > JCHICKEN").
+     *
+     * @return array<int, string>
+     */
+    public static function brandOptions(int|string|null $companyId): array
+    {
+        if (! $companyId || ! in_array((int) $companyId, array_map('intval', array_keys(static::shiftCompanyOptions())), true)) {
+            return [];
+        }
+
+        $coordinatedBrandIds = static::isCoordinator() ? DataAccessService::coordinatedDivisionIds(auth()->user()) : null;
+
+        $divisions = Division::query()->where('company_id', $companyId)->get(['id', 'parent_id', 'name', 'is_active'])->keyBy('id');
+
+        return $divisions
+            ->where('is_active', true)
+            ->when($coordinatedBrandIds !== null, fn ($brands) => $brands->whereIn('id', $coordinatedBrandIds))
+            ->mapWithKeys(function (Division $division) use ($divisions): array {
+                $names = [];
+                $node = $division;
+
+                while ($node && count($names) < 10) {
+                    array_unshift($names, $node->name);
+                    $node = $node->parent_id ? $divisions->get($node->parent_id) : null;
+                }
+
+                return [$division->id => implode(' > ', $names)];
+            })
+            ->sort()
+            ->all();
     }
 
     public static function getPages(): array

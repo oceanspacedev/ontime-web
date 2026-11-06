@@ -48,7 +48,14 @@ export default function AppTabsLayout() {
           sceneStyle: { backgroundColor: colors.background },
         }}>
         <Tabs.Screen name="index" options={{ title: 'Beranda', tabBarIcon: tabIcon('home', 'home-outline') }} />
-        <Tabs.Screen name="history" options={{ title: 'Riwayat', tabBarIcon: tabIcon('time', 'time-outline') }} />
+        {/* At most five tabs: a team runner gets Tim here, and Riwayat stays reachable from the Beranda menu. */}
+        <Tabs.Protected guard={access.canManageTeam}>
+          <Tabs.Screen name="team" options={{ title: 'Tim', tabBarIcon: tabIcon('people', 'people-outline') }} />
+        </Tabs.Protected>
+        <Tabs.Screen
+          name="history"
+          options={{ title: 'Riwayat', tabBarIcon: tabIcon('time', 'time-outline'), ...(access.canManageTeam ? { href: null } : {}) }}
+        />
         <Tabs.Screen name="requests" options={{ title: 'Pengajuan', tabBarIcon: tabIcon('document-text', 'document-text-outline') }} />
         <Tabs.Protected guard={access.canApprove}>
           <Tabs.Screen

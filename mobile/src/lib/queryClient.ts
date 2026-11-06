@@ -28,4 +28,10 @@ export const queryKeys = {
   requestDetail: (type: string, id: number) => ['requests', type, id] as const,
   approvals: ['approvals', 'pending'] as const,
   calendar: (month: number, year: number) => ['calendar', month, year] as const,
+  team: ['team'] as const,
+  teamRoster: (date: string) => ['team', 'roster', date] as const,
+  teamOptions: ['team', 'options'] as const,
+  teamWorkers: (search: string) => ['team', 'workers', search] as const,
+  teamFreelancers: (status: string, search: string) => ['team', 'freelancers', status, search] as const,
+  teamRecap: (month: string) => ['team', 'recap', month] as const,
 };

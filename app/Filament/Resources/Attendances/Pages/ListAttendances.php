@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Attendances\Pages;
 
+use App\Filament\Actions\TeamRecapAction;
 use App\Filament\Resources\Attendances\AttendanceResource;
 use Filament\Resources\Pages\ListRecords;
 
@@ -11,6 +12,8 @@ class ListAttendances extends ListRecords
 
     protected function getHeaderActions(): array
     {
-        return [];
+        return [
+            TeamRecapAction::make(),
+        ];
     }
 }

@@ -1,9 +1,11 @@
 import * as SecureStore from 'expo-secure-store';
 import { create } from 'zustand';
 
+import { logout } from './api/auth';
 import { configureApi } from './api/client';
 import type { User } from './api/types';
-import { unregisterPushToken } from './push';
+import { forgetPushUser } from './onesignal';
+import { takeStoredPushToken } from './push';
 
 const TOKEN_KEY = 'ontime.token';
 const USER_KEY = 'ontime.user';
@@ -21,7 +23,11 @@ interface SessionState {
   hydrate: () => Promise<void>;
   signIn: (token: string, user: User) => Promise<void>;
   setUser: (user: User) => Promise<void>;
-  signOut: () => Promise<void>;
+  /**
+   * Ends the session on this device right away, then (unless revoke is false) revokes it on the
+   * server in the background. Pass revoke: false when the server already refused the token.
+   */
+  signOut: (options?: { revoke?: boolean }) => Promise<void>;
   setBaseUrl: (url: string) => Promise<void>;
 }
 
@@ -94,18 +100,33 @@ export const useSession = create<SessionState>((set, get) => ({
     await writeSecure(USER_KEY, JSON.stringify(user));
   },
 
-  signOut: async () => {
-    if (get().status === 'signedOut') {
+  signOut: async ({ revoke = true } = {}) => {
+    const { status, token, baseUrl } = get();
+    if (status === 'signedOut') {
       return;
     }
-    // Needs the session token, so it runs before the token is dropped.
-    await unregisterPushToken();
+    // Cleared before anything is awaited, so overlapping calls (several 401s at once) do it once
+    // and the user never waits on the network to leave.
     set({ token: null, user: null, status: 'signedOut' });
-    await Promise.all([writeSecure(TOKEN_KEY, null), writeSecure(USER_KEY, null)]);
+    // This device stops receiving the signed-out user's pushes right away.
+    forgetPushUser();
+
+    const [pushToken] = await Promise.all([takeStoredPushToken(), writeSecure(TOKEN_KEY, null), writeSecure(USER_KEY, null)]);
+
+    if (revoke && token) {
+      // Captured token and server: the session is already gone locally and the server may change next.
+      logout({ token, baseUrl }, pushToken).catch(() => {
+        // Offline or already revoked; the token also ends by itself after long disuse.
+      });
+    }
   },
 
   setBaseUrl: async (url) => {
     const normalized = normalizeBaseUrl(url);
+    // A session belongs to the server that issued it; never send its token to another one.
+    if (normalized !== get().baseUrl && get().status === 'signedIn') {
+      await get().signOut();
+    }
     set({ baseUrl: normalized });
     await writeSecure(BASE_URL_KEY, normalized);
   },
@@ -115,6 +136,6 @@ configureApi({
   getBaseUrl: () => useSession.getState().baseUrl,
   getToken: () => useSession.getState().token,
   onUnauthenticated: () => {
-    void useSession.getState().signOut();
+    void useSession.getState().signOut({ revoke: false });
   },
 });

@@ -2,8 +2,10 @@
 
 use App\Filament\Auth\Pages\EmailLogin;
 use App\Filament\Auth\Pages\PhoneLogin;
+use App\Http\Controllers\AppEmailLoginController;
 use App\Http\Controllers\AttendancePhotoController;
 use App\Http\Controllers\CoreSsoController;
+use App\Http\Controllers\TeamRecapDownloadController;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
 use Illuminate\Support\Facades\Route;
@@ -34,7 +36,19 @@ Route::get('email-login/link/{token}', EmailLogin::class)
     ])
     ->name('email-login.link');
 
+// Magic link from the mobile app's login email: hands the token to the app; see AppEmailLoginController.
+Route::get('app/email-login/{token}', AppEmailLoginController::class)
+    ->where('token', '[A-Za-z0-9]{64}')
+    ->name('app-login.link');
+
 Route::get('/auth/redirect', [CoreSsoController::class, 'redirect'])->name('sso.redirect');
 Route::get('/auth/callback', [CoreSsoController::class, 'callback'])->name('sso.callback');
 
+// Selfies for the panel's "Presensi Mandiri": the controller requires the panel (web guard) login and
+// answers with an upload token instead of the storage path (see App\Support\SelfieUploadToken).
 Route::post('/upload-selfie', [AttendancePhotoController::class, 'upload'])->name('upload.selfie');
+
+// Monthly team recap for the app: a signed, short-lived link the phone's browser can open.
+Route::get('/exports/team-recap/{user}', TeamRecapDownloadController::class)
+    ->middleware('signed')
+    ->name('exports.team-recap');

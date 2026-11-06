@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\AttendanceStatus;
 use App\Exports\AttendanceReportExport;
+use App\Filament\Actions\TeamRecapAction;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\CompanyPolicy;
@@ -49,9 +50,21 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
 
     protected static ?int $navigationSort = 3;
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return ! DataAccessService::isCoordinator(auth()->user());
+    }
+
     protected string $view = 'filament.pages.laporan-absensi';
 
     public ?array $filterData = [];
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            TeamRecapAction::make(),
+        ];
+    }
 
     public function mount(): void
     {

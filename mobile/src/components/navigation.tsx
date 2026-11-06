@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import type { Tabs } from 'expo-router/js-tabs';
 import type { ComponentProps, ReactNode } from 'react';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IconButton, Text } from '@/components/ui';
+import { bottomGap, IconButton, Text } from '@/components/ui';
 import { elevation, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
 
 /* -------------------------------------------------------------------------------------------------
@@ -41,7 +41,7 @@ export function StackHeader({ title, canGoBack, modal = false, right, onBack }: 
   };
 
   return (
-    <View style={[styles.header, { paddingTop: modal ? spacing.lg : insets.top + spacing.sm }]}>
+    <View style={[styles.header, { paddingTop: modal && Platform.OS === 'ios' ? spacing.lg : insets.top + spacing.sm }]}>
       {canGoBack || modal ? (
         <IconButton icon={modal ? 'close' : 'chevron-back'} onPress={goBack} accessibilityLabel={modal ? 'Tutup' : 'Kembali'} />
       ) : null}
@@ -81,6 +81,7 @@ const useHeaderStyles = makeStyles((c) => ({
 
 type TabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>['tabBar']>>[0];
 
+
 /**
  * Pill-shaped tab bar floating above the content, icons only. The active tab sits on a soft red
  * pill. Screens inside the tabs add bottom space through FloatingTabBarContext.
@@ -91,7 +92,7 @@ export function FloatingTabBar({ state, descriptors, navigateToTab, emitter }: T
   const insets = useSafeAreaInsets();
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: Math.max(insets.bottom - 6, spacing.md) }]}>
+    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: bottomGap(insets.bottom) - (Platform.OS === 'ios' ? 6 : 0) }]}>
       <View style={styles.bar}>
         {state.routes.map((route, index) => {
           const descriptor = descriptors[route.key];
@@ -99,6 +100,10 @@ export function FloatingTabBar({ state, descriptors, navigateToTab, emitter }: T
             return null;
           }
           const options = descriptor.options;
+          // A tab with href null stays a route (reachable from links) but is left out of the bar.
+          if ((options as { href?: unknown }).href === null) {
+            return null;
+          }
           const focused = state.index === index;
           const label = options.title ?? route.name;
           const badge = options.tabBarBadge;

@@ -7,6 +7,7 @@ use App\Filament\Resources\ResignationResource\Pages;
 use App\Models\Employee;
 use App\Models\Resignation;
 use App\Services\ApprovalFlowService;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -47,7 +48,7 @@ class ResignationResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return static::canViewAny();
+        return static::canViewAny() && ! DataAccessService::isCoordinator(auth()->user());
     }
 
     /**

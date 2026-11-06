@@ -11,11 +11,23 @@ enum SystemRole: string
     case Superadmin = 'Superadmin';
     /** Admin: manages workers and settings inside their own data access (see DataAccessService). */
     case Admin = 'Admin';
+    /** Koordinator: runs the outlets of the brands in their data access (freelancers, shifts, schedules), no company settings. */
+    case Koordinator = 'Koordinator';
     case Bod = 'BOD';
     case Approver = 'Approver';
     case Employee = 'Employee';
     case Intern = 'Intern';
     case Freelancer = 'Freelancer';
+
+    /**
+     * Roles that manage workers. Only Superadmin may grant them or manage their accounts.
+     *
+     * @return list<string>
+     */
+    public static function managerNames(): array
+    {
+        return [self::Superadmin->value, self::Admin->value, self::Koordinator->value];
+    }
 
     /**
      * @return list<string>

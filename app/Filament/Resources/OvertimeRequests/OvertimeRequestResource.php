@@ -8,6 +8,7 @@ use App\Filament\Resources\OvertimeRequests\Pages\EditOvertimeRequest;
 use App\Filament\Resources\OvertimeRequests\Pages\ListOvertimeRequests;
 use App\Models\OvertimeRequest;
 use App\Services\ApprovalFlowService;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Carbon\Carbon;
 use Filament\Actions\Action;
@@ -51,9 +52,12 @@ class OvertimeRequestResource extends Resource
 
     protected static ?int $navigationSort = 3;
 
+    /**
+     * Koordinators handle requests from Approval Saya, so the list stays out of their menu.
+     */
     public static function shouldRegisterNavigation(): bool
     {
-        return true;
+        return ! DataAccessService::isCoordinator(auth()->user());
     }
 
     public static function canViewAny(): bool

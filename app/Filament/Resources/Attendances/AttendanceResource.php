@@ -16,6 +16,7 @@ use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
@@ -179,6 +180,36 @@ class AttendanceResource extends Resource
                     ->state(fn (Attendance $record): string => $record->is_out_of_bounds ? 'Luar Geofence' : 'Normal')
                     ->color(fn (Attendance $record): string => $record->is_out_of_bounds ? 'warning' : 'gray'),
 
+                TextColumn::make('is_mock_location')
+                    ->label('Lokasi Palsu')
+                    ->badge()
+                    ->state(fn (Attendance $record): string => $record->is_mock_location ? 'Lokasi palsu' : '—')
+                    ->color(fn (Attendance $record): string => $record->is_mock_location ? 'danger' : 'gray'),
+
+                TextColumn::make('face_result')
+                    ->label('Verifikasi Wajah')
+                    ->badge()
+                    ->state(fn (Attendance $record): string => static::faceResultLabel($record))
+                    ->color(fn (Attendance $record): string => match ($record->is_face_verified) {
+                        true => 'success',
+                        false => 'danger',
+                        default => 'gray',
+                    })
+                    ->tooltip(fn (Attendance $record): ?string => $record->face_verification_notes)
+                    ->toggleable(),
+
+                TextColumn::make('liveness_result')
+                    ->label('Liveness')
+                    ->badge()
+                    ->state(fn (Attendance $record): string => static::livenessResultLabel($record))
+                    ->color(fn (Attendance $record): string => match ($record->liveness_verified) {
+                        true => 'success',
+                        false => 'danger',
+                        default => 'gray',
+                    })
+                    ->tooltip(fn (Attendance $record): ?string => $record->liveness_notes)
+                    ->toggleable(),
+
                 ImageColumn::make('check_in_photo')
                     ->label('Foto Masuk')
                     ->circular()
@@ -252,6 +283,11 @@ class AttendanceResource extends Resource
                     ->label('Luar Geofence')
                     ->query(fn (Builder $query) => $query->where('is_out_of_bounds', true))
                     ->toggle(),
+
+                Filter::make('is_mock_location')
+                    ->label('Lokasi Palsu')
+                    ->query(fn (Builder $query) => $query->where('is_mock_location', true))
+                    ->toggle(),
             ])
             ->actions([
                 ViewAction::make(),
@@ -268,6 +304,86 @@ class AttendanceResource extends Resource
                 'intern.company', 'intern.user',
                 'freelancer.company', 'freelancer.user',
             ]));
+    }
+
+    /**
+     * Read-only view used by the table's view action: the attendance plus its verification results.
+     */
+    public static function infolist(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                Section::make('Informasi Absensi')
+                    ->schema([
+                        Grid::make(2)->schema([
+                            TextEntry::make('date')->label('Tanggal')->date('d M Y'),
+                            TextEntry::make('status')->label('Status')->badge(),
+                            TextEntry::make('check_in')->label('Check In')->dateTime('H:i:s')->placeholder('—'),
+                            TextEntry::make('check_out')->label('Check Out')->dateTime('H:i:s')->placeholder('—'),
+                            TextEntry::make('late_minutes')
+                                ->label('Keterlambatan')
+                                ->formatStateUsing(fn (?int $state): string => $state ? "{$state} menit" : '—'),
+                            TextEntry::make('notes')->label('Catatan')->placeholder('—'),
+                        ]),
+                    ]),
+
+                Section::make('Hasil Verifikasi')
+                    ->schema([
+                        Grid::make(2)->schema([
+                            TextEntry::make('location_result')
+                                ->label('Lokasi')
+                                ->badge()
+                                ->state(fn (Attendance $record): string => match (true) {
+                                    (bool) $record->is_mock_location => 'Lokasi palsu',
+                                    (bool) $record->is_out_of_bounds => 'Luar geofence',
+                                    default => 'Normal',
+                                })
+                                ->color(fn (Attendance $record): string => match (true) {
+                                    (bool) $record->is_mock_location => 'danger',
+                                    (bool) $record->is_out_of_bounds => 'warning',
+                                    default => 'gray',
+                                }),
+                            TextEntry::make('face_result')
+                                ->label('Verifikasi Wajah')
+                                ->badge()
+                                ->state(fn (Attendance $record): string => static::faceResultLabel($record))
+                                ->color(fn (Attendance $record): string => match ($record->is_face_verified) {
+                                    true => 'success',
+                                    false => 'danger',
+                                    default => 'gray',
+                                })
+                                ->helperText(fn (Attendance $record): ?string => $record->face_verification_notes),
+                            TextEntry::make('liveness_result')
+                                ->label('Liveness')
+                                ->badge()
+                                ->state(fn (Attendance $record): string => static::livenessResultLabel($record))
+                                ->color(fn (Attendance $record): string => match ($record->liveness_verified) {
+                                    true => 'success',
+                                    false => 'danger',
+                                    default => 'gray',
+                                })
+                                ->helperText(fn (Attendance $record): ?string => $record->liveness_notes),
+                        ]),
+                    ]),
+            ]);
+    }
+
+    public static function faceResultLabel(Attendance $record): string
+    {
+        return match ($record->is_face_verified) {
+            true => "Cocok ({$record->face_match_score}%)",
+            false => "Tidak cocok ({$record->face_match_score}%)",
+            default => '—',
+        };
+    }
+
+    public static function livenessResultLabel(Attendance $record): string
+    {
+        return match ($record->liveness_verified) {
+            true => 'Lolos',
+            false => 'Gagal',
+            default => '—',
+        };
     }
 
     public static function getPages(): array

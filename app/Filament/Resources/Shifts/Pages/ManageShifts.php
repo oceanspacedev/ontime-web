@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Shifts\Pages;
 use App\Filament\Resources\Shifts\ShiftResource;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ManageRecords;
+use Filament\Support\Enums\Width;
 
 class ManageShifts extends ManageRecords
 {
@@ -13,7 +14,9 @@ class ManageShifts extends ManageRecords
     protected function getHeaderActions(): array
     {
         return [
-            CreateAction::make(),
+            CreateAction::make()
+                ->slideOver()
+                ->modalWidth(Width::Medium),
         ];
     }
 }

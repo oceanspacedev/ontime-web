@@ -4,7 +4,9 @@ namespace App\Http\Resources\Api\V1;
 
 use App\Models\Company;
 use App\Services\AnnualLeaveService;
+use App\Services\DataAccessService;
 use App\Support\StorageUrl;
+use App\Support\WasteReport;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -25,6 +27,11 @@ class UserResource extends JsonResource
             'master_face_verified_at' => $masterFaceVerifiedAt,
             'roles' => $this->getRoleNames(),
             'permissions' => $this->getAllPermissions()->pluck('name')->values(),
+            'access' => [
+                'can_manage_team' => $this->resource->canManageWorkers(),
+                'is_coordinator' => DataAccessService::isCoordinator($this->resource),
+                'waste_url' => WasteReport::urlFor($this->resource),
+            ],
             'employee' => $this->employee ? [
                 'id' => $this->employee->id,
                 'nip' => $this->employee->nip,
@@ -109,6 +116,12 @@ class UserResource extends JsonResource
                 'require_gps' => (bool) $company->policy->require_gps,
                 'require_photo' => (bool) $company->policy->require_photo,
                 'require_face_recognition' => (bool) $company->policy->require_face_recognition,
+                'require_liveness' => (bool) $company->policy->require_liveness,
+                'selfie_mode' => $company->policy->selfieMode(),
+                'mock_location_action' => $company->policy->mock_location_action ?? 'reject',
+                'face_match_threshold' => (int) ($company->policy->face_match_threshold ?? 60),
+                'face_fail_action' => $company->policy->face_fail_action ?? 'reject',
+                'mode_label' => $company->policy->modeLabel(),
                 'late_tolerance_minutes' => (int) $company->policy->late_tolerance_minutes,
                 'work_start_time' => $company->policy->work_start_time,
                 'work_end_time' => $company->policy->work_end_time,
