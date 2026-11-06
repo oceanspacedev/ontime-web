@@ -29,6 +29,8 @@ final class OutletRosterService
 
     public const STATE_MISSING = 'belum';
 
+    public const STATE_UPCOMING = 'nanti';
+
     public const STATE_DAY_OFF = 'libur';
 
     public const STATE_LABELS = [
@@ -37,6 +39,7 @@ final class OutletRosterService
         self::STATE_DONE => 'Pulang',
         self::STATE_WAITING => 'Menunggu persetujuan',
         self::STATE_MISSING => 'Belum absen',
+        self::STATE_UPCOMING => 'Belum mulai',
         self::STATE_DAY_OFF => 'Libur',
     ];
 
@@ -155,12 +158,22 @@ final class OutletRosterService
     {
         return match (true) {
             $schedule->is_day_off => self::STATE_DAY_OFF,
-            $attendance?->check_in === null => self::STATE_MISSING,
+            $attendance?->check_in === null => $this->hasStarted($schedule) ? self::STATE_MISSING : self::STATE_UPCOMING,
             $attendance->check_out !== null => self::STATE_DONE,
             $attendance->status === AttendanceStatus::PendingApproval => self::STATE_WAITING,
             $attendance->status === AttendanceStatus::Late => self::STATE_LATE,
             default => self::STATE_PRESENT,
         };
+    }
+
+    /**
+     * Whether the shift has begun, so a missing check-in is late rather than still to come.
+     */
+    private function hasStarted(ShiftSchedule $schedule): bool
+    {
+        $start = $schedule->date->copy()->setTimeFromTimeString((string) ($schedule->shift?->start_time ?? '00:00'));
+
+        return now()->greaterThanOrEqualTo($start);
     }
 
     /**

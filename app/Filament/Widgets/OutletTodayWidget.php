@@ -56,6 +56,7 @@ class OutletTodayWidget extends TableWidget
                         OutletRosterService::STATE_PRESENT, OutletRosterService::STATE_DONE => 'success',
                         OutletRosterService::STATE_LATE, OutletRosterService::STATE_WAITING => 'warning',
                         OutletRosterService::STATE_MISSING => 'danger',
+                        OutletRosterService::STATE_UPCOMING => 'info',
                         default => 'gray',
                     }),
 

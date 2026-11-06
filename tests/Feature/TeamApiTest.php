@@ -186,6 +186,19 @@ class TeamApiTest extends TestCase
             ->assertJsonValidationErrors(['full_name' => 'Nama wajib diisi.', 'phone', 'company_location_id']);
     }
 
+    public function test_coordinator_opens_an_account_for_a_freelancer_without_one(): void
+    {
+        $this->postJson("/api/v1/team/freelancers/{$this->bayu->id}/account")
+            ->assertCreated()
+            ->assertJsonPath('data.has_account', true)
+            ->assertJsonPath('account.email', strtolower($this->bayu->freelancer_number).'@freelance.local');
+
+        $this->assertTrue($this->bayu->fresh()->user->hasRole('Freelancer'));
+
+        $this->postJson("/api/v1/team/freelancers/{$this->bayu->id}/account")->assertStatus(409);
+        $this->postJson("/api/v1/team/freelancers/{$this->outsider->id}/account")->assertNotFound();
+    }
+
     public function test_freelancers_end_and_come_back_with_the_same_account(): void
     {
         $user = User::factory()->create(['is_active' => true]);

@@ -7,6 +7,7 @@ const STATE_LABELS: Record<RosterState, string> = {
   pulang: 'Pulang',
   menunggu: 'Menunggu',
   belum: 'Belum absen',
+  nanti: 'Belum mulai',
   libur: 'Libur',
 };
 
@@ -16,6 +17,7 @@ const STATE_TONES: Record<RosterState, Tone> = {
   terlambat: 'warning',
   menunggu: 'warning',
   belum: 'danger',
+  nanti: 'gray',
   libur: 'gray',
 };
 

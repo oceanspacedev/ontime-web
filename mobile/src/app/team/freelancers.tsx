@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Alert } from 'react-native';
 
 import { Badge, Button, EmptyState, ErrorBanner, Field, Group, LoadingView, Row, Screen, Segmented } from '@/components/ui';
+import { showNewAccount } from '@/lib/accountNotice';
 import { errorMessage, teamApi, type TeamFreelancer } from '@/lib/api';
 import { formatDate } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
@@ -21,28 +22,40 @@ export default function FreelancersScreen() {
   const [search, setSearch] = useState('');
   const list = useQuery({ queryKey: queryKeys.teamFreelancers(status, search.trim()), queryFn: () => teamApi.freelancers(status, search.trim()) });
 
+  const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.team });
+
   const change = useMutation({
     mutationFn: (freelancer: TeamFreelancer) => (freelancer.is_active ? teamApi.endFreelancer(freelancer.id) : teamApi.reactivateFreelancer(freelancer.id)),
     onSuccess: async (response) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.team });
+      await refresh();
       Alert.alert(response.message);
     },
     onError: (error) => Alert.alert('Gagal', errorMessage(error)),
   });
 
-  const confirm = (freelancer: TeamFreelancer) =>
-    Alert.alert(
-      freelancer.name,
-      freelancer.is_active ? 'Akhiri kontrak? Akunnya dinonaktifkan dan jadwal setelah hari ini dihapus.' : 'Aktifkan lagi dengan akun yang sama?',
-      [
-        { text: 'Batal', style: 'cancel' },
-        {
-          text: freelancer.is_active ? 'Akhiri kontrak' : 'Aktifkan lagi',
-          style: freelancer.is_active ? 'destructive' : 'default',
-          onPress: () => change.mutate(freelancer),
-        },
-      ],
-    );
+  const openAccount = useMutation({
+    mutationFn: (freelancer: TeamFreelancer) => teamApi.createAccount(freelancer.id),
+    onSuccess: async (response) => {
+      await refresh();
+      showNewAccount(response.data.name, response.account, response.message, () => undefined);
+    },
+    onError: (error) => Alert.alert('Gagal', errorMessage(error)),
+  });
+
+  const choose = (freelancer: TeamFreelancer) =>
+    Alert.alert(freelancer.name, freelancer.is_active ? undefined : 'Aktifkan lagi dengan akun yang sama?', [
+      ...(freelancer.is_active && !freelancer.has_account ? [{ text: 'Buat akun', onPress: () => openAccount.mutate(freelancer) }] : []),
+      freelancer.is_active
+        ? { text: 'Akhiri kontrak', style: 'destructive' as const, onPress: () => confirmEnd(freelancer) }
+        : { text: 'Aktifkan lagi', onPress: () => change.mutate(freelancer) },
+      { text: 'Batal', style: 'cancel' as const },
+    ]);
+
+  const confirmEnd = (freelancer: TeamFreelancer) =>
+    Alert.alert(freelancer.name, 'Akhiri kontrak? Akunnya dinonaktifkan dan jadwal setelah hari ini dihapus.', [
+      { text: 'Batal', style: 'cancel' },
+      { text: 'Akhiri kontrak', style: 'destructive', onPress: () => change.mutate(freelancer) },
+    ]);
 
   return (
     <Screen
@@ -65,7 +78,7 @@ export default function FreelancersScreen() {
               title={freelancer.name}
               subtitle={[freelancer.number, freelancer.brand, freelancer.end_date ? `selesai ${formatDate(freelancer.end_date, 'short')}` : null].filter(Boolean).join(' · ')}
               right={freelancer.has_account ? undefined : <Badge label="Tanpa akun" tone="warning" />}
-              onPress={() => confirm(freelancer)}
+              onPress={() => choose(freelancer)}
             />
           ))}
         </Group>

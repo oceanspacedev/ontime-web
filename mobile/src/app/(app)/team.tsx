@@ -6,7 +6,7 @@ import { ScrollView } from 'react-native';
 import { DateTimeField } from '@/components/DateTimeField';
 import { ScheduleSheet, type ScheduleTarget } from '@/components/ScheduleSheet';
 import { Badge, Choice, EmptyState, ErrorBanner, Group, LoadingView, Row, Screen } from '@/components/ui';
-import { errorMessage, teamApi, type RosterEntry, type TeamRoster } from '@/lib/api';
+import { errorMessage, teamApi, type RosterEntry, type RosterOutlet, type TeamRoster } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { rosterBadge, rosterLine, shiftDate } from '@/lib/team';
@@ -21,6 +21,14 @@ function summary(roster: TeamRoster): string {
     return 'Belum ada jadwal';
   }
   return roster.date <= toDateString(new Date()) ? `${present} dari ${people} orang sudah absen` : `${people} orang terjadwal`;
+}
+
+/** Days off carry no outlet, so a group of only days off is titled "Libur". */
+function outletTitle(outlet: RosterOutlet): string {
+  if (outlet.location) {
+    return outlet.location.name;
+  }
+  return outlet.entries.every((entry) => entry.state === 'libur') ? 'Libur' : 'Tanpa outlet';
 }
 
 export default function TeamScreen() {
@@ -64,14 +72,14 @@ export default function TeamScreen() {
         <EmptyState icon="calendar-clear-outline" title="Belum ada jadwal" message="Jadwalkan pekerja untuk tanggal ini." />
       ) : (
         roster.data.outlets.map((outlet) => (
-          <Group key={outlet.location?.id ?? 'none'} title={`${outlet.location?.name ?? 'Tanpa outlet'} · ${outlet.counts.scheduled}`}>
+          <Group key={outlet.location?.id ?? 'none'} title={`${outletTitle(outlet)} · ${outlet.entries.length}`}>
             {outlet.entries.map((entry) => {
               const badge = rosterBadge(entry, date, today);
               return (
                 <Row
                   key={entry.schedule_id}
                   title={entry.worker.name}
-                  subtitle={entry.check_in ? `${rosterLine(entry)} · masuk ${entry.check_in}` : rosterLine(entry)}
+                  subtitle={entry.state === 'libur' ? undefined : entry.check_in ? `${rosterLine(entry)} · masuk ${entry.check_in}` : rosterLine(entry)}
                   right={badge ? <Badge label={badge.label} tone={badge.tone} /> : undefined}
                   onPress={() => edit(entry)}
                 />

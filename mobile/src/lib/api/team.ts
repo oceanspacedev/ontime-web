@@ -34,6 +34,10 @@ export function addFreelancer(input: NewFreelancer): Promise<NewFreelancerRespon
   return request<NewFreelancerResponse>('/team/freelancers', { method: 'POST', json: input });
 }
 
+export function createAccount(id: number): Promise<NewFreelancerResponse> {
+  return request<NewFreelancerResponse>(`/team/freelancers/${id}/account`, { method: 'POST' });
+}
+
 export function endFreelancer(id: number): Promise<{ message: string; data: TeamFreelancer }> {
   return request(`/team/freelancers/${id}/end`, { method: 'POST' });
 }

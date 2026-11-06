@@ -47,6 +47,7 @@ describe('roster helpers', () => {
     expect(rosterBadge({ state: 'belum' }, '2026-11-06', '2026-11-06')).toEqual({ label: 'Belum absen', tone: 'danger' });
     expect(rosterBadge({ state: 'belum' }, '2026-11-07', '2026-11-06')).toBeNull();
     expect(rosterBadge({ state: 'libur' }, '2026-11-07', '2026-11-06')).toEqual({ label: 'Libur', tone: 'gray' });
+    expect(rosterBadge({ state: 'nanti' }, '2026-11-06', '2026-11-06')).toEqual({ label: 'Belum mulai', tone: 'gray' });
   });
 
   it('moves a date across month ends', () => {

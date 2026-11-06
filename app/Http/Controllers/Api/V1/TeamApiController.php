@@ -200,12 +200,28 @@ class TeamApiController extends Controller
         return response()->json([
             'message' => $account['whatsapp']['api_sent'] ? 'Freelancer ditambahkan. Akun terkirim lewat WhatsApp.' : 'Freelancer ditambahkan. Kirim akun ini ke freelancer.',
             'data' => $this->freelancerData($freelancer->fresh(['division'])),
-            'account' => [
-                'email' => $account['email'],
-                'password' => $account['password'],
-                'whatsapp_sent' => (bool) $account['whatsapp']['api_sent'],
-                'whatsapp_url' => $account['whatsapp']['wa_url'] ?? null,
-            ],
+            'account' => $this->accountData($account),
+        ], 201);
+    }
+
+    public function createFreelancerAccount(Request $request, int $id): JsonResponse
+    {
+        $freelancer = $this->findWorker($this->manager($request), 'freelancer', $id);
+
+        if ($freelancer->user_id) {
+            return response()->json(['message' => 'Freelancer ini sudah punya akun.'], 409);
+        }
+
+        try {
+            $account = $this->accounts->createAccount($freelancer);
+        } catch (InvalidArgumentException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => $account['whatsapp']['api_sent'] ? 'Akun dibuat dan terkirim lewat WhatsApp.' : 'Akun dibuat. Kirim akun ini ke freelancer.',
+            'data' => $this->freelancerData($freelancer->fresh(['division'])),
+            'account' => $this->accountData($account),
         ], 201);
     }
 
@@ -257,6 +273,20 @@ class TeamApiController extends Controller
             'has_account' => $freelancer->user_id !== null,
             'start_date' => $freelancer->start_date?->toDateString(),
             'end_date' => $freelancer->end_date?->toDateString(),
+        ];
+    }
+
+    /**
+     * @param  array{email: string, password: string, whatsapp: array<string, mixed>}  $account
+     * @return array{email: string, password: string, whatsapp_sent: bool, whatsapp_url: string|null}
+     */
+    private function accountData(array $account): array
+    {
+        return [
+            'email' => $account['email'],
+            'password' => $account['password'],
+            'whatsapp_sent' => (bool) $account['whatsapp']['api_sent'],
+            'whatsapp_url' => $account['whatsapp']['wa_url'] ?? null,
         ];
     }
 

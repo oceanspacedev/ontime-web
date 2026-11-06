@@ -87,6 +87,7 @@ Route::prefix('v1')->group(function () {
         Route::put('/team/schedules', [TeamApiController::class, 'updateSchedule']);
         Route::get('/team/freelancers', [TeamApiController::class, 'freelancers']);
         Route::post('/team/freelancers', [TeamApiController::class, 'storeFreelancer']);
+        Route::post('/team/freelancers/{id}/account', [TeamApiController::class, 'createFreelancerAccount'])->whereNumber('id');
         Route::post('/team/freelancers/{id}/end', [TeamApiController::class, 'endFreelancer'])->whereNumber('id');
         Route::post('/team/freelancers/{id}/reactivate', [TeamApiController::class, 'reactivateFreelancer'])->whereNumber('id');
 

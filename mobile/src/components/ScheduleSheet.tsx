@@ -46,6 +46,18 @@ function ScheduleForm({ target, onClose, onSaved }: { target: ScheduleTarget; on
   const [outletId, setOutletId] = useState<string>(target.current?.location_id ? String(target.current.location_id) : NO_OUTLET);
   const [section, setSection] = useState(target.current?.section ?? '');
 
+  // An outlet narrows the shifts to its brand; without one every brand is listed with its name.
+  const outlet = company?.outlets.find((item) => String(item.id) === outletId) ?? null;
+  const shifts = (company?.shifts ?? []).filter((shift) => !outlet || shift.brand === null || shift.brand === outlet.brand);
+  const chooseOutlet = (value: string) => {
+    setOutletId(value);
+    const nextBrand = company?.outlets.find((item) => String(item.id) === value)?.brand;
+    const current = company?.shifts.find((shift) => String(shift.id) === shiftId);
+    if (current && value !== NO_OUTLET && current.brand !== null && current.brand !== nextBrand) {
+      setShiftId(null);
+    }
+  };
+
   const save = useMutation({
     mutationFn: () =>
       teamApi.saveSchedule({
@@ -82,13 +94,17 @@ function ScheduleForm({ target, onClose, onSaved }: { target: ScheduleTarget; on
             <Notice tone="danger" message={errorMessage(options.error)} />
           ) : company ? (
             <>
-              <Text style={styles.label}>Shift</Text>
-              <Choice options={company.shifts.map((shift) => ({ value: String(shift.id), label: shiftText(shift) }))} value={shiftId} onChange={setShiftId} />
               <Text style={styles.label}>Outlet</Text>
               <Choice
-                options={[{ value: NO_OUTLET, label: 'Lokasi mana pun' }, ...company.outlets.map((outlet) => ({ value: String(outlet.id), label: outlet.name }))]}
+                options={[...company.outlets.map((item) => ({ value: String(item.id), label: item.name })), { value: NO_OUTLET, label: 'Lokasi mana pun' }]}
                 value={outletId}
-                onChange={setOutletId}
+                onChange={chooseOutlet}
+              />
+              <Text style={styles.label}>Shift</Text>
+              <Choice
+                options={shifts.map((shift) => ({ value: String(shift.id), label: outlet || !shift.brand ? shiftText(shift) : `${shift.brand} ${shiftText(shift)}` }))}
+                value={shiftId}
+                onChange={setShiftId}
               />
               <Field label="Section" value={section} onChangeText={setSection} placeholder={company.sections.slice(0, 3).join(', ') || 'Kasir, Bar, Cook'} maxLength={50} />
             </>

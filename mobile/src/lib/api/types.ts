@@ -387,7 +387,7 @@ export interface UserAccess {
 
 export type WorkerType = 'employee' | 'intern' | 'freelancer';
 
-export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum' | 'libur';
+export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum' | 'nanti' | 'libur';
 
 export interface RosterEntry {
   schedule_id: number;
@@ -480,8 +480,15 @@ export interface NewFreelancer {
   start_date: string;
 }
 
+export interface NewAccount {
+  email: string;
+  password: string;
+  whatsapp_sent: boolean;
+  whatsapp_url: string | null;
+}
+
 export interface NewFreelancerResponse {
   message: string;
   data: TeamFreelancer;
-  account: { email: string; password: string; whatsapp_sent: boolean; whatsapp_url: string | null } | null;
+  account: NewAccount | null;
 }

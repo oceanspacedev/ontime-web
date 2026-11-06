@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Alert, Linking } from 'react-native';
 
 import { DateTimeField } from '@/components/DateTimeField';
 import { Button, Choice, ErrorBanner, Field, Group, LoadingView, Notice, Screen } from '@/components/ui';
+import { showNewAccount } from '@/lib/accountNotice';
 import { ApiError, errorMessage, teamApi } from '@/lib/api';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { toDateString } from '@/lib/format';
@@ -26,15 +26,7 @@ export default function NewFreelancerScreen() {
     mutationFn: () => teamApi.addFreelancer({ full_name: name.trim(), phone: phone.trim(), company_location_id: outletId ? Number(outletId) : null, start_date: startDate }),
     onSuccess: async (response) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.team });
-      const account = response.account;
-      if (account && !account.whatsapp_sent) {
-        Alert.alert('Freelancer ditambahkan', `Kirim akun ini ke ${response.data.name}:\n\nEmail: ${account.email}\nPassword: ${account.password}`, [
-          ...(account.whatsapp_url ? [{ text: 'Kirim lewat WhatsApp', onPress: () => Linking.openURL(account.whatsapp_url!).finally(() => router.back()) }] : []),
-          { text: 'Selesai', onPress: () => router.back() },
-        ]);
-        return;
-      }
-      Alert.alert('Freelancer ditambahkan', response.message, [{ text: 'OK', onPress: () => router.back() }]);
+      showNewAccount(response.data.name, response.account, response.message, () => router.back());
     },
     onError: (error) => setErrors(fieldErrorsFrom(error)),
   });
