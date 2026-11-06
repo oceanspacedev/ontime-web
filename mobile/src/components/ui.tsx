@@ -424,7 +424,7 @@ export function SectionTitle({ title, action, onAction }: { title: string; actio
  * `primary` red, glossy, for the one main action. `inverse` is the near-black (light) or white
  * (dark) pill from the reference screens. `secondary` is a neutral fill. `danger` is a soft red.
  */
-export type ButtonVariant = 'primary' | 'inverse' | 'secondary' | 'danger' | 'ghost';
+export type ButtonVariant = 'primary' | 'inverse' | 'secondary' | 'danger' | 'ghost' | 'whatsapp';
 
 interface ButtonProps extends Omit<PressableProps, 'style' | 'children'> {
   title: string;
@@ -479,6 +479,8 @@ function buttonForeground(c: Palette, variant: ButtonVariant): string {
       return c.danger;
     case 'ghost':
       return c.primary;
+    case 'whatsapp':
+      return c.success;
     default:
       return c.text;
   }
@@ -517,6 +519,9 @@ const useButtonStyles = makeStyles((c, dark) => ({
 
   danger: { backgroundColor: c.dangerSoft },
   dangerPressed: { opacity: 0.8 },
+  /** A soft green, so the WhatsApp sign-in reads as WhatsApp without outshining the main button. */
+  whatsapp: { backgroundColor: c.successSoft },
+  whatsappPressed: { opacity: 0.8 },
 
   ghost: { backgroundColor: 'transparent' },
   ghostPressed: { backgroundColor: c.fill },

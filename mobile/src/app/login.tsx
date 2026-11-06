@@ -58,8 +58,8 @@ export default function LoginScreen() {
                   <View style={styles.dividerLine} />
                 </View>
                 <View style={styles.alternativeRow}>
-                  <Button title="WhatsApp" variant="secondary" icon="logo-whatsapp" style={styles.alternativeButton} onPress={() => changeMode('whatsapp')} />
-                  <Button title="Link email" variant="secondary" icon="mail-outline" style={styles.alternativeButton} onPress={() => changeMode('emailLink')} />
+                  <Button title="WhatsApp" variant="whatsapp" icon="logo-whatsapp" style={styles.alternativeButton} onPress={() => changeMode('whatsapp')} />
+                  <Button title="Email" variant="secondary" icon="mail-outline" style={styles.alternativeButton} onPress={() => changeMode('emailLink')} />
                 </View>
               </>
             ) : (
