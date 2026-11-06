@@ -15,14 +15,14 @@ return [
 
         // Optional compact brand icon path from the host application's /public directory.
         // When neither a panel logo nor this icon exists, the application name is used.
-        'brand_icon' => null,
+        'brand_icon' => 'images/icon.svg',
 
         // Optional logo height. Null preserves the value configured on the panel.
         'brand_logo_height' => null,
 
         // Optional favicon path from the host application's /public directory.
         // Null preserves the favicon configured directly on the Filament panel.
-        'favicon' => null,
+        'favicon' => 'images/icon.svg',
     ],
 
 ];

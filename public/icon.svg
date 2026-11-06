@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+    <!-- Red background with rounded corners (Complete Selular ecosystem) -->
+    <rect width="512" height="512" rx="108" fill="#F22929"/>
+    <g fill="#FFFFFF">
+        <!-- Row 1: Top bar across (trapezoid slanted up to right) -->
+        <path d="M 116 112 L 396 88 L 396 152 L 116 152 Z"/>
+        <!-- Row 2: Upper left, Center 12:00 hand / T stem, and Upper right -->
+        <path d="M 116 174 H 216 V 214 H 116 Z"/>
+        <path d="M 236 174 H 276 V 214 H 236 Z"/>
+        <path d="M 296 174 H 396 V 214 H 296 Z"/>
+        <!-- Row 3: Center left, Center hub / clock core, and Center right -->
+        <path d="M 116 236 H 216 V 276 H 116 Z"/>
+        <path d="M 236 236 H 276 V 276 H 236 Z"/>
+        <path d="M 296 236 H 396 V 276 H 296 Z"/>
+        <!-- Row 4: Lower left and right rectangles (open center) -->
+        <path d="M 116 298 H 216 V 338 H 116 Z"/>
+        <path d="M 296 298 H 396 V 338 H 296 Z"/>
+        <!-- Row 5: Bottom bar across (trapezoid slanted up to right) -->
+        <path d="M 116 360 L 396 360 L 396 400 L 116 424 Z"/>
+    </g>
+</svg>
