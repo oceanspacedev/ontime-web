@@ -13,18 +13,19 @@ use App\Models\ShiftSchedule;
 use App\Services\ShiftScheduleSpreadsheet;
 use Carbon\CarbonPeriod;
 use Filament\Actions\Action;
-use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
+use Filament\Forms\Components\ToggleButtons;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
 use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
+use Filament\Support\Enums\Width;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
@@ -50,87 +51,110 @@ class ManageShiftSchedules extends ManageRecords
             Action::make('assignSchedule')
                 ->label('Atur Jadwal')
                 ->icon('heroicon-o-calendar-days')
+                ->slideOver()
+                ->modalWidth(Width::Medium)
+                ->modalIcon('heroicon-o-calendar-days')
                 ->modalHeading('Atur Jadwal Shift')
-                ->modalDescription('Tetapkan shift atau hari libur untuk beberapa pekerja sekaligus dalam rentang tanggal.')
                 ->modalSubmitActionLabel('Simpan Jadwal')
-                ->modalWidth('2xl')
                 ->schema([
-                    Select::make('company_id')
-                        ->label('Badan Usaha')
-                        ->options(fn (): array => ShiftScheduleResource::placeableCompanyOptions())
-                        ->searchable()
-                        ->required()
-                        ->live()
-                        ->afterStateUpdated(function (Set $set): void {
-                            $set('workers', []);
-                            $set('shift_id', null);
-                            $set('company_location_id', null);
-                        }),
-
-                    Select::make('workers')
-                        ->label('Pekerja')
-                        ->multiple()
-                        ->searchable()
-                        ->options(fn (Get $get): array => ShiftScheduleResource::workerOptions($get('company_id')))
-                        ->required(),
-
-                    Grid::make(2)->schema([
-                        DatePicker::make('date_from')
-                            ->label('Dari Tanggal')
-                            ->default(today())
-                            ->required(),
-
-                        DatePicker::make('date_until')
-                            ->label('Sampai Tanggal')
-                            ->default(today()->addDays(6))
-                            ->afterOrEqual('date_from')
-                            ->required(),
-                    ]),
-
-                    CheckboxList::make('weekdays')
-                        ->label('Hari')
-                        ->options([1 => 'Senin', 2 => 'Selasa', 3 => 'Rabu', 4 => 'Kamis', 5 => 'Jumat', 6 => 'Sabtu', 7 => 'Minggu'])
-                        ->default([1, 2, 3, 4, 5, 6, 7])
-                        ->columns(4)
-                        ->required(),
-
-                    Radio::make('mode')
-                        ->label('Jadwal')
-                        ->options(['shift' => 'Masuk dengan shift', 'day_off' => 'Libur'])
-                        ->default('shift')
-                        ->inline()
-                        ->live(),
-
-                    Select::make('shift_id')
-                        ->label('Shift')
-                        ->options(fn (Get $get): array => ShiftScheduleResource::shiftOptions($get('company_id')))
-                        ->searchable()
-                        ->required(fn (Get $get): bool => $get('mode') === 'shift')
-                        ->visible(fn (Get $get): bool => $get('mode') === 'shift'),
-
-                    Grid::make(2)
-                        ->visible(fn (Get $get): bool => $get('mode') === 'shift')
+                    Section::make('Pekerja')
+                        ->icon('heroicon-o-users')
+                        ->compact()
                         ->schema([
-                            Select::make('company_location_id')
-                                ->label('Outlet (opsional)')
-                                ->options(fn (Get $get): array => ShiftScheduleResource::locationOptions($get('company_id')))
+                            Select::make('company_id')
+                                ->label('Badan Usaha')
+                                ->options(fn (): array => ShiftScheduleResource::placeableCompanyOptions())
                                 ->searchable()
-                                ->placeholder('Lokasi mana pun'),
+                                ->required()
+                                ->live()
+                                ->afterStateUpdated(function (Set $set): void {
+                                    $set('workers', []);
+                                    $set('shift_id', null);
+                                    $set('company_location_id', null);
+                                }),
 
-                            TextInput::make('section')
-                                ->label('Section (opsional)')
-                                ->placeholder('Contoh: Kasir, Bar, Cook')
-                                ->datalist(fn (Get $get): array => ShiftScheduleResource::sectionSuggestions($get('company_id')))
-                                ->maxLength(50),
+                            Select::make('workers')
+                                ->label('Pekerja')
+                                ->multiple()
+                                ->searchable()
+                                ->options(fn (Get $get): array => ShiftScheduleResource::workerOptions($get('company_id')))
+                                ->required(),
                         ]),
 
-                    TextInput::make('notes')
-                        ->label('Catatan (opsional)')
-                        ->maxLength(255),
+                    Section::make('Tanggal')
+                        ->icon('heroicon-o-calendar')
+                        ->compact()
+                        ->columns(2)
+                        ->schema([
+                            DatePicker::make('date_from')
+                                ->label('Dari')
+                                ->default(today())
+                                ->required(),
 
-                    Toggle::make('overwrite')
-                        ->label('Timpa jadwal yang sudah ada pada tanggal tersebut')
-                        ->default(true),
+                            DatePicker::make('date_until')
+                                ->label('Sampai')
+                                ->default(today()->addDays(6))
+                                ->afterOrEqual('date_from')
+                                ->required(),
+
+                            ToggleButtons::make('weekdays')
+                                ->label('Hari')
+                                ->multiple()
+                                ->options([1 => 'Sen', 2 => 'Sel', 3 => 'Rab', 4 => 'Kam', 5 => 'Jum', 6 => 'Sab', 7 => 'Min'])
+                                ->default([1, 2, 3, 4, 5, 6, 7])
+                                ->inline()
+                                ->required()
+                                ->columnSpanFull(),
+                        ]),
+
+                    Section::make('Jadwal')
+                        ->icon('heroicon-o-clock')
+                        ->compact()
+                        ->columns(2)
+                        ->schema([
+                            ToggleButtons::make('mode')
+                                ->hiddenLabel()
+                                ->options(['shift' => 'Masuk', 'day_off' => 'Libur'])
+                                ->icons(['shift' => 'heroicon-o-briefcase', 'day_off' => 'heroicon-o-moon'])
+                                ->colors(['shift' => 'primary', 'day_off' => 'gray'])
+                                ->default('shift')
+                                ->inline()
+                                ->grouped()
+                                ->live()
+                                ->columnSpanFull(),
+
+                            Select::make('shift_id')
+                                ->label('Shift')
+                                ->options(fn (Get $get): array => ShiftScheduleResource::shiftOptions($get('company_id')))
+                                ->searchable()
+                                ->required(fn (Get $get): bool => $get('mode') === 'shift')
+                                ->visible(fn (Get $get): bool => $get('mode') === 'shift')
+                                ->columnSpanFull(),
+
+                            Select::make('company_location_id')
+                                ->label('Outlet')
+                                ->options(fn (Get $get): array => ShiftScheduleResource::locationOptions($get('company_id')))
+                                ->searchable()
+                                ->placeholder('Lokasi mana pun')
+                                ->visible(fn (Get $get): bool => $get('mode') === 'shift'),
+
+                            TextInput::make('section')
+                                ->label('Section')
+                                ->placeholder('Kasir, Bar, Cook')
+                                ->datalist(fn (Get $get): array => ShiftScheduleResource::sectionSuggestions($get('company_id')))
+                                ->maxLength(50)
+                                ->visible(fn (Get $get): bool => $get('mode') === 'shift'),
+
+                            TextInput::make('notes')
+                                ->label('Catatan')
+                                ->maxLength(255)
+                                ->columnSpanFull(),
+
+                            Toggle::make('overwrite')
+                                ->label('Timpa jadwal yang sudah ada')
+                                ->default(true)
+                                ->columnSpanFull(),
+                        ]),
                 ])
                 ->action(fn (array $data) => $this->assignSchedule($data)),
 

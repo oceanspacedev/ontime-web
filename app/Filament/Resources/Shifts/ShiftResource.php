@@ -16,10 +16,10 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
-use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -61,63 +61,67 @@ class ShiftResource extends Resource
     public static function form(Schema $schema): Schema
     {
         return $schema
+            ->columns(2)
             ->components([
-                Grid::make(2)->schema([
-                    Select::make('company_id')
-                        ->label('Badan Usaha')
-                        ->options(fn (): array => static::managedCompanyOptions())
-                        ->searchable()
-                        ->required()
-                        ->live()
-                        ->afterStateUpdated(fn (Set $set) => $set('division_id', null)),
+                Select::make('company_id')
+                    ->label('Badan Usaha')
+                    ->options(fn (): array => static::managedCompanyOptions())
+                    ->searchable()
+                    ->required()
+                    ->live()
+                    ->afterStateUpdated(fn (Set $set) => $set('division_id', null))
+                    ->columnSpanFull(),
 
-                    Select::make('division_id')
-                        ->label('Brand')
-                        ->options(fn (Get $get): array => static::brandOptions($get('company_id')))
-                        ->searchable()
-                        ->placeholder('Semua brand')
-                        ->nullable(),
+                Select::make('division_id')
+                    ->label('Brand')
+                    ->options(fn (Get $get): array => static::brandOptions($get('company_id')))
+                    ->searchable()
+                    ->placeholder('Semua brand')
+                    ->nullable()
+                    ->columnSpanFull(),
 
-                    TextInput::make('name')
-                        ->label('Nama Shift')
-                        ->placeholder('Contoh: Pagi, Siang, Sore Closing')
-                        ->required()
-                        ->maxLength(100)
-                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule
-                            ->where('company_id', $get('company_id'))
-                            ->when(
-                                filled($get('division_id')),
-                                fn (Unique $rule): Unique => $rule->where('division_id', $get('division_id')),
-                                fn (Unique $rule): Unique => $rule->whereNull('division_id'),
-                            ))
-                        ->validationMessages(['unique' => 'Nama shift ini sudah dipakai di brand yang sama.']),
+                TextInput::make('name')
+                    ->label('Nama Shift')
+                    ->placeholder('Pagi')
+                    ->required()
+                    ->maxLength(100)
+                    ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule
+                        ->where('company_id', $get('company_id'))
+                        ->when(
+                            filled($get('division_id')),
+                            fn (Unique $rule): Unique => $rule->where('division_id', $get('division_id')),
+                            fn (Unique $rule): Unique => $rule->whereNull('division_id'),
+                        ))
+                    ->validationMessages(['unique' => 'Nama shift ini sudah dipakai di brand yang sama.']),
 
-                    TimePicker::make('start_time')
-                        ->label('Jam Masuk')
-                        ->seconds(false)
-                        ->required(),
+                TextInput::make('code')
+                    ->label('Kode')
+                    ->placeholder('P')
+                    ->maxLength(20),
 
-                    TimePicker::make('end_time')
-                        ->label('Jam Pulang')
-                        ->seconds(false)
-                        ->helperText('Boleh lebih kecil dari jam masuk untuk shift yang melewati tengah malam.')
-                        ->required(),
+                TimePicker::make('start_time')
+                    ->label('Jam Masuk')
+                    ->seconds(false)
+                    ->required(),
 
-                    TextInput::make('late_tolerance_minutes')
-                        ->label('Toleransi Terlambat (menit)')
-                        ->numeric()
-                        ->minValue(0)
-                        ->maxValue(240)
-                        ->helperText('Kosongkan untuk mengikuti toleransi di kebijakan badan usaha.'),
+                TimePicker::make('end_time')
+                    ->label('Jam Pulang')
+                    ->seconds(false)
+                    ->helperText('Boleh lewat tengah malam.')
+                    ->required(),
 
-                    TextInput::make('code')
-                        ->label('Kode (opsional)')
-                        ->maxLength(20),
+                TextInput::make('late_tolerance_minutes')
+                    ->label('Toleransi Terlambat')
+                    ->numeric()
+                    ->minValue(0)
+                    ->maxValue(240)
+                    ->suffix('menit')
+                    ->placeholder('Ikut kebijakan'),
 
-                    Toggle::make('is_active')
-                        ->label('Aktif')
-                        ->default(true),
-                ]),
+                Toggle::make('is_active')
+                    ->label('Aktif')
+                    ->default(true)
+                    ->inline(false),
             ]);
     }
 
@@ -171,7 +175,9 @@ class ShiftResource extends Resource
                     ->label('Status Aktif'),
             ])
             ->recordActions([
-                EditAction::make(),
+                EditAction::make()
+                    ->slideOver()
+                    ->modalWidth(Width::Medium),
                 DeleteAction::make(),
             ])
             ->toolbarActions([
