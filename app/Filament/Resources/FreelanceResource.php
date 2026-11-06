@@ -8,8 +8,8 @@ use App\Filament\Resources\FreelanceResource\Pages;
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Employee;
 use App\Models\Freelancer;
-use App\Models\User;
-use App\Services\WhatsAppNotificationService;
+use App\Services\DataAccessService;
+use App\Services\WorkerAccountService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -19,6 +19,7 @@ use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
@@ -27,13 +28,14 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Hash;
-use Spatie\Permission\Models\Role;
+use Illuminate\Support\HtmlString;
+use InvalidArgumentException;
 use UnitEnum;
 
 class FreelanceResource extends Resource
@@ -76,7 +78,7 @@ class FreelanceResource extends Resource
                                 ->schema([
                                     TextInput::make('freelancer_number')
                                         ->label('Nomor Freelance')
-                                        ->required()
+                                        ->placeholder('Otomatis')
                                         ->unique(ignoreRecord: true)
                                         ->maxLength(50),
 
@@ -196,12 +198,21 @@ class FreelanceResource extends Resource
                             Section::make('Akun')
                                 ->icon('heroicon-o-key')
                                 ->schema([
+                                    Toggle::make('create_account')
+                                        ->label('Buat akun login')
+                                        ->helperText('Password dikirim lewat WhatsApp.')
+                                        ->default(true)
+                                        ->live()
+                                        ->dehydrated(false)
+                                        ->visibleOn('create'),
+
                                     Select::make('user_id')
                                         ->label('Akun User')
                                         ->placeholder('Belum ada akun')
                                         ->options(fn (?Freelancer $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
                                         ->searchable()
-                                        ->nullable(),
+                                        ->nullable()
+                                        ->hidden(fn (Get $get, string $operation): bool => $operation === 'create' && (bool) $get('create_account')),
                                 ]),
 
                             Section::make('Foto Master Wajah')
@@ -311,88 +322,32 @@ class FreelanceResource extends Resource
                     ->icon('heroicon-o-user-plus')
                     ->color('success')
                     ->visible(fn (Freelancer $record): bool => ! $record->user_id)
-                    ->modalHeading(fn (Freelancer $record) => "Buat Akun User untuk {$record->full_name}")
-                    ->modalDescription('Tinjau kredensial dan role yang akan dibuat untuk akun pekerja freelance ini.')
+                    ->modalHeading(fn (Freelancer $record) => "Buat Akun {$record->full_name}")
+                    ->modalWidth(Width::Medium)
                     ->schema([
                         TextInput::make('email')
-                            ->label('Alamat Email Login')
+                            ->label('Email Login')
                             ->email()
                             ->default(fn (Freelancer $record) => $record->email ?: strtolower($record->freelancer_number).'@freelance.local')
                             ->required(),
                         Select::make('role')
-                            ->label('Role Akses')
+                            ->label('Role')
                             ->options(fn (): array => static::assignableRoleOptions())
                             ->default('Freelancer')
                             ->required(),
-                        TextInput::make('password')
-                            ->label('Password Awal')
-                            ->default('password123')
-                            ->required(),
                     ])
-                    ->action(function (Freelancer $record, array $data) {
-                        $email = $data['email'];
-                        $roleName = $data['role'] ?? 'Freelancer';
-                        $password = $data['password'];
-
-                        if (User::where('email', $email)->exists()) {
-                            Notification::make()
-                                ->title('Gagal Membuat Akun')
-                                ->body("Email {$email} sudah digunakan oleh akun user lain.")
-                                ->danger()
-                                ->send();
-
-                            return;
-                        }
-
-                        $user = User::create([
-                            'name' => $record->full_name,
-                            'email' => $email,
-                            'phone' => $record->phone,
-                            'password' => Hash::make($password),
-                        ]);
-
-                        abort_unless(array_key_exists($roleName, static::assignableRoleOptions()), 403);
-
-                        if ($role = Role::firstOrCreate(['name' => $roleName])) {
-                            $user->assignRole($role);
-                        }
-
-                        $record->update(['user_id' => $user->id]);
-
-                        $waResult = WhatsAppNotificationService::sendAccountCredentials(
-                            $record->full_name,
-                            $record->phone,
-                            $email,
-                            $password,
-                            $roleName
-                        );
-
-                        $waStatusNote = $waResult['api_sent']
-                            ? "\n✅ Notifikasi WhatsApp telah otomatis terkirim via WAG Gateway."
-                            : ($waResult['api_error'] ? "\n⚠️ WAG Gateway: {$waResult['api_error']}" : "\n⚠️ Nomor HP belum diisi.");
-
-                        $notification = Notification::make()
-                            ->title('Akun User Berhasil Dibuat!')
-                            ->body("Kredensial Login {$record->full_name} (Role: {$roleName}):\nEmail: {$email}\nNo. HP: ".($record->phone ?? '-')."\nPassword: {$password}\nMetode Login: Email + Password atau WhatsApp OTP{$waStatusNote}")
-                            ->success();
-
-                        if (! $waResult['api_sent'] && ! empty($waResult['wa_url'])) {
-                            $notification->actions([
-                                Action::make('send_wa')
-                                    ->label('Kirim via WA Web/App (Fallback)')
-                                    ->url($waResult['wa_url'], shouldOpenInNewTab: true)
-                                    ->button()
-                                    ->color('warning'),
-                            ]);
-                        }
-
-                        $notification->send();
+                    ->action(function (Freelancer $record, array $data): void {
+                        abort_unless(array_key_exists($data['role'], static::assignableRoleOptions()), 403);
+                        static::openAccount($record, $data['email'], $data['role']);
                     }),
+
+                ...static::contractActions(),
+
                 Action::make('deleteUser')
                     ->label('Hapus Akun')
                     ->icon('heroicon-o-user-minus')
                     ->color('danger')
-                    ->visible(fn (Freelancer $record): bool => (bool) $record->user_id && static::canManageAccount($record->user))
+                    ->visible(fn (Freelancer $record): bool => (bool) $record->user_id && static::canManageAccount($record->user) && ! DataAccessService::isCoordinator(auth()->user()))
                     ->requiresConfirmation()
                     ->modalHeading(fn (Freelancer $record) => "Hapus Akun User {$record->full_name}")
                     ->modalDescription('Apakah Anda yakin ingin menghapus akun user ini? Pengguna ini tidak akan dapat login lagi ke sistem.')
@@ -425,6 +380,82 @@ class FreelanceResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * Create the login account and show the credentials once, with a WhatsApp fallback link.
+     */
+    public static function openAccount(Freelancer $freelancer, ?string $email = null, ?string $role = null): void
+    {
+        try {
+            $account = app(WorkerAccountService::class)->createAccount($freelancer, $email, $role);
+        } catch (InvalidArgumentException $exception) {
+            Notification::make()->title('Akun belum dibuat')->body($exception->getMessage())->danger()->send();
+
+            return;
+        }
+
+        $whatsapp = $account['whatsapp'];
+        $notification = Notification::make()
+            ->title('Akun dibuat')
+            ->body(new HtmlString(collect([
+                'Email: '.e($account['email']),
+                'Password: '.e($account['password']),
+                $whatsapp['api_sent'] ? 'Terkirim lewat WhatsApp.' : 'Belum terkirim lewat WhatsApp.',
+            ])->implode('<br>')))
+            ->success()
+            ->persistent();
+
+        if (! $whatsapp['api_sent'] && ! empty($whatsapp['wa_url'])) {
+            $notification->actions([
+                Action::make('sendWhatsApp')
+                    ->label('Kirim via WhatsApp')
+                    ->url($whatsapp['wa_url'], shouldOpenInNewTab: true)
+                    ->button(),
+            ]);
+        }
+
+        $notification->send();
+    }
+
+    /**
+     * End a contract (account switched off, later schedules removed) or take the freelancer back on.
+     *
+     * @return list<Action>
+     */
+    public static function contractActions(): array
+    {
+        return [
+            Action::make('endContract')
+                ->label('Akhiri Kontrak')
+                ->icon('heroicon-o-arrow-right-start-on-rectangle')
+                ->color('danger')
+                ->visible(fn (Freelancer $record): bool => app(WorkerAccountService::class)->isActive($record))
+                ->requiresConfirmation()
+                ->modalHeading(fn (Freelancer $record): string => "Akhiri kontrak {$record->full_name}?")
+                ->modalDescription('Akun dinonaktifkan dan jadwal setelah hari ini dihapus. Bisa diaktifkan lagi kapan saja.')
+                ->modalSubmitActionLabel('Akhiri')
+                ->successNotificationTitle('Kontrak diakhiri')
+                ->action(function (Freelancer $record, Action $action): void {
+                    app(WorkerAccountService::class)->endContract($record);
+                    $action->success();
+                }),
+
+            Action::make('reactivate')
+                ->label('Aktifkan Lagi')
+                ->icon('heroicon-o-arrow-path')
+                ->color('success')
+                ->visible(fn (Freelancer $record): bool => ! app(WorkerAccountService::class)->isActive($record))
+                ->requiresConfirmation()
+                ->modalHeading(fn (Freelancer $record): string => "Aktifkan lagi {$record->full_name}?")
+                ->modalDescription('Status kembali Aktif dan akun yang sama bisa dipakai lagi.')
+                ->modalSubmitActionLabel('Aktifkan')
+                ->successNotificationTitle('Freelancer aktif lagi')
+                ->action(function (Freelancer $record, Action $action): void {
+                    app(WorkerAccountService::class)->reactivate($record);
+                    $action->success();
+                }),
+        ];
     }
 
     public static function getPages(): array

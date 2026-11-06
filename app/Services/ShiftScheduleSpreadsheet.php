@@ -69,6 +69,9 @@ class ShiftScheduleSpreadsheet
     /** @var Collection<int, Shift>|null */
     private ?Collection $shifts = null;
 
+    /** @var list<int>|null Brands a coordinator is limited to while importing. */
+    private ?array $brandIds = null;
+
     /**
      * Write the schedules of a company between two dates to a temporary .xlsx file and return its path.
      */
@@ -175,12 +178,19 @@ class ShiftScheduleSpreadsheet
     public function import(User $user, Company $company, string $path): array
     {
         $this->shifts = null;
+        $this->brandIds = null;
         $issues = [];
         /** @var array<string, array{column: string, worker_id: int, date: string, action: string, shift_id: int|null, location_id: int|null, section: string|null, origin: string}> $entries */
         $entries = [];
         $workers = $this->managedWorkers($user, $company);
         $workerIndex = $this->workerIndex($workers);
-        $locations = CompanyLocation::query()->with('division')->where('company_id', $company->id)->get();
+        $brandIds = DataAccessService::coordinatedDivisionIds($user);
+        $this->brandIds = $brandIds;
+        $locations = CompanyLocation::query()
+            ->with('division')
+            ->where('company_id', $company->id)
+            ->when($brandIds !== null, fn (Builder $outlets) => $outlets->whereIn('division_id', $brandIds))
+            ->get();
         $allDates = [];
 
         // Keep empty rows so the row keys are the Excel row numbers shown in issues.
@@ -391,7 +401,12 @@ class ShiftScheduleSpreadsheet
      */
     private function matchShifts(string $text, Company $company): Collection
     {
-        $this->shifts ??= Shift::query()->with('division')->active()->where('company_id', $company->id)->get();
+        $this->shifts ??= Shift::query()
+            ->with('division')
+            ->active()
+            ->where('company_id', $company->id)
+            ->when($this->brandIds !== null, fn (Builder $shifts) => $shifts->where(fn (Builder $own) => $own->whereIn('division_id', $this->brandIds)->orWhereNull('division_id')))
+            ->get();
 
         if (preg_match('/^(\d{1,2})[:.](\d{2})\s*-\s*(\d{1,2})[:.](\d{2})$/', $text, $time)) {
             $start = sprintf('%02d:%s', $time[1], $time[2]);

@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
 Schedule::command('sanctum:prune-idle')->daily();
+Schedule::command('workers:close-expired-contracts')->dailyAt('00:15');

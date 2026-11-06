@@ -10,6 +10,7 @@ use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -210,10 +211,13 @@ class ShiftScheduleResource extends Resource
             return [];
         }
 
+        $brandIds = DataAccessService::coordinatedDivisionIds(auth()->user());
+
         return Shift::query()
             ->with('division')
             ->active()
             ->where('company_id', $companyId)
+            ->when($brandIds !== null, fn (Builder $shifts) => $shifts->where(fn (Builder $own) => $own->whereIn('division_id', $brandIds)->orWhereNull('division_id')))
             ->orderBy('start_time')
             ->get()
             ->sortBy(fn (Shift $shift): string => ($shift->division?->name ?? '').'|'.$shift->start_time)
@@ -232,9 +236,12 @@ class ShiftScheduleResource extends Resource
             return [];
         }
 
+        $brandIds = DataAccessService::coordinatedDivisionIds(auth()->user());
+
         return CompanyLocation::query()
             ->where('company_id', $companyId)
             ->where('is_active', true)
+            ->when($brandIds !== null, fn (Builder $outlets) => $outlets->whereIn('division_id', $brandIds))
             ->orderBy('name')
             ->pluck('name', 'id')
             ->all();

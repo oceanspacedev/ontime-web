@@ -153,7 +153,7 @@ class UserResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageWorkerData();
+        return static::canManageWorkerData() && ! static::isCoordinator();
     }
 
     public static function canEdit(Model $record): bool

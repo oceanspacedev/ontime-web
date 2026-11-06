@@ -301,6 +301,10 @@ class AttendanceCheckService
             throw new AttendanceRuleException('Profil pengguna tidak ditemukan.', 422);
         }
 
+        if (! app(WorkerAccountService::class)->isActive($profile)) {
+            throw new AttendanceRuleException('Status kerja Anda tidak aktif. Hubungi koordinator atau HR.', 403);
+        }
+
         return $profile;
     }
 

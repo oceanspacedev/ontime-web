@@ -234,8 +234,8 @@ class ApprovalFlowService
             return ! $isOwnRequest;
         }
 
-        // Admin Override: same authority, limited to the workers inside their data access
-        if ($workerProfile && $user->hasRole('Admin') && $user->canManageWorker($workerProfile)) {
+        // Admin and Koordinator Override: same authority, limited to the workers inside their data access
+        if ($workerProfile && $user->hasAnyRole(['Admin', 'Koordinator']) && $user->canManageWorker($workerProfile)) {
             return ! $isOwnRequest;
         }
 

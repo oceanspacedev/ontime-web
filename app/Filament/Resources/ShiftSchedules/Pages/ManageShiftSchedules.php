@@ -4,11 +4,9 @@ namespace App\Filament\Resources\ShiftSchedules\Pages;
 
 use App\Filament\Resources\ShiftSchedules\ShiftScheduleResource;
 use App\Models\Company;
-use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
-use App\Models\Shift;
 use App\Models\ShiftSchedule;
 use App\Services\ShiftScheduleSpreadsheet;
 use Carbon\CarbonPeriod;
@@ -305,13 +303,13 @@ class ManageShiftSchedules extends ManageRecords
         $isDayOff = ($data['mode'] ?? 'shift') === 'day_off';
         $shiftId = $isDayOff ? null : (int) $data['shift_id'];
 
-        if (! $isDayOff && ! Shift::query()->whereKey($shiftId)->where('company_id', $companyId)->exists()) {
+        if (! $isDayOff && ! array_key_exists($shiftId, ShiftScheduleResource::shiftOptions($companyId))) {
             abort(422, 'Shift tidak termasuk badan usaha yang dipilih.');
         }
 
         $locationId = $isDayOff || blank($data['company_location_id'] ?? null) ? null : (int) $data['company_location_id'];
 
-        if ($locationId && ! CompanyLocation::query()->whereKey($locationId)->where('company_id', $companyId)->exists()) {
+        if ($locationId && ! array_key_exists($locationId, ShiftScheduleResource::locationOptions($companyId))) {
             abort(422, 'Outlet tidak termasuk badan usaha yang dipilih.');
         }
 

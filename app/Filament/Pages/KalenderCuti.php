@@ -30,6 +30,11 @@ class KalenderCuti extends Page implements HasForms
 
     protected static ?int $navigationSort = 7;
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return ! DataAccessService::isCoordinator(auth()->user());
+    }
+
     protected string $view = 'filament.pages.kalender-cuti';
 
     public static function canAccess(): bool

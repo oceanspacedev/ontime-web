@@ -6,6 +6,7 @@ use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Resources\Shifts\Pages\ManageShifts;
 use App\Models\Division;
 use App\Models\Shift;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -48,14 +49,25 @@ class ShiftResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'name';
 
+    /**
+     * Company admins manage every shift; a Koordinator manages the shifts of their brands.
+     */
     public static function canViewAny(): bool
     {
-        return static::canManageCompanyData();
+        return static::canManageCompanyData() || (static::isCoordinator() && static::canManageWorkerData());
     }
 
     public static function getEloquentQuery(): Builder
     {
-        return static::scopeToManagedCompanies(parent::getEloquentQuery()->with(['company', 'division'])->withCount('employees'));
+        $query = parent::getEloquentQuery()->with(['company', 'division'])->withCount('employees');
+
+        if (! static::isCoordinator()) {
+            return static::scopeToManagedCompanies($query);
+        }
+
+        $brandIds = DataAccessService::coordinatedDivisionIds(auth()->user());
+
+        return static::scopeToPlaceableCompanies($query)->when($brandIds !== null, fn (Builder $brandShifts) => $brandShifts->whereIn('division_id', $brandIds));
     }
 
     public static function form(Schema $schema): Schema
@@ -65,7 +77,7 @@ class ShiftResource extends Resource
             ->components([
                 Select::make('company_id')
                     ->label('Badan Usaha')
-                    ->options(fn (): array => static::managedCompanyOptions())
+                    ->options(fn (): array => static::shiftCompanyOptions())
                     ->searchable()
                     ->required()
                     ->live()
@@ -77,7 +89,7 @@ class ShiftResource extends Resource
                     ->options(fn (Get $get): array => static::brandOptions($get('company_id')))
                     ->searchable()
                     ->placeholder('Semua brand')
-                    ->nullable()
+                    ->required(fn (): bool => static::isCoordinator())
                     ->columnSpanFull(),
 
                 TextInput::make('name')
@@ -165,7 +177,7 @@ class ShiftResource extends Resource
             ->filters([
                 SelectFilter::make('company_id')
                     ->label('Badan Usaha')
-                    ->options(fn (): array => static::managedCompanyOptions(activeOnly: false)),
+                    ->options(fn (): array => static::shiftCompanyOptions(activeOnly: false)),
 
                 SelectFilter::make('division_id')
                     ->label('Brand')
@@ -188,20 +200,33 @@ class ShiftResource extends Resource
     }
 
     /**
+     * Companies whose shifts the user manages: company admins their companies, a Koordinator the companies of their brands.
+     *
+     * @return array<int, string>
+     */
+    public static function shiftCompanyOptions(bool $activeOnly = true): array
+    {
+        return static::isCoordinator() ? static::placeableCompanyOptions($activeOnly) : static::managedCompanyOptions($activeOnly);
+    }
+
+    /**
      * Active divisions of a managed company, labelled with their full path ("F&B > JCHICKEN").
      *
      * @return array<int, string>
      */
     public static function brandOptions(int|string|null $companyId): array
     {
-        if (! $companyId || ! in_array((int) $companyId, array_map('intval', array_keys(static::managedCompanyOptions())), true)) {
+        if (! $companyId || ! in_array((int) $companyId, array_map('intval', array_keys(static::shiftCompanyOptions())), true)) {
             return [];
         }
+
+        $coordinatedBrandIds = static::isCoordinator() ? DataAccessService::coordinatedDivisionIds(auth()->user()) : null;
 
         $divisions = Division::query()->where('company_id', $companyId)->get(['id', 'parent_id', 'name', 'is_active'])->keyBy('id');
 
         return $divisions
             ->where('is_active', true)
+            ->when($coordinatedBrandIds !== null, fn ($brands) => $brands->whereIn('id', $coordinatedBrandIds))
             ->mapWithKeys(function (Division $division) use ($divisions): array {
                 $names = [];
                 $node = $division;

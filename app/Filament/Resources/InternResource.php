@@ -54,7 +54,7 @@ class InternResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageWorkerData();
+        return static::canManageWorkerData() && ! static::isCoordinator();
     }
 
     public static function getEloquentQuery(): Builder

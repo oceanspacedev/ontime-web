@@ -12,6 +12,7 @@ use App\Models\Intern;
 use App\Models\LeaveRequest;
 use App\Services\AnnualLeaveService;
 use App\Services\ApprovalFlowService;
+use App\Services\DataAccessService;
 use App\Services\FileNamingService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -56,9 +57,12 @@ class LeaveRequestResource extends Resource
 
     protected static ?int $navigationSort = 2;
 
+    /**
+     * Koordinators handle requests from Approval Saya, so the list stays out of their menu.
+     */
     public static function shouldRegisterNavigation(): bool
     {
-        return true;
+        return ! DataAccessService::isCoordinator(auth()->user());
     }
 
     public static function canViewAny(): bool

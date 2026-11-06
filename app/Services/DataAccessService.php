@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\DataScope;
+use App\Enums\SystemRole;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\Freelancer;
@@ -327,7 +328,33 @@ final class DataAccessService
 
     public static function isManager(User $user): bool
     {
-        return $user->hasAnyRole(['Superadmin', 'Admin']);
+        return $user->hasAnyRole(SystemRole::managerNames());
+    }
+
+    /**
+     * A Koordinator who is not also an Admin: manages the workers, shifts and schedules of their
+     * brands but no company settings.
+     */
+    public static function isCoordinator(?User $user): bool
+    {
+        return $user !== null && $user->hasRole(SystemRole::Koordinator->value) && ! $user->hasAnyRole([SystemRole::Superadmin->value, SystemRole::Admin->value]);
+    }
+
+    /**
+     * Brand divisions (with their sub-divisions) a coordinator works with. Null when the user is not
+     * limited to brands: not a coordinator, or a coordinator whose data access is whole companies.
+     *
+     * @return list<int>|null
+     */
+    public static function coordinatedDivisionIds(User $user): ?array
+    {
+        if (! self::isCoordinator($user)) {
+            return null;
+        }
+
+        $filter = self::workerFilter($user);
+
+        return $filter === null || $filter['divisions'] === [] ? null : $filter['divisions'];
     }
 
     /**
@@ -381,7 +408,7 @@ final class DataAccessService
      */
     public static function manageableCompanyIds(User $user): ?array
     {
-        if (! self::isManager($user)) {
+        if (! self::isManager($user) || self::isCoordinator($user)) {
             return [];
         }
 

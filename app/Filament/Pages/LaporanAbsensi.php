@@ -49,6 +49,11 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
 
     protected static ?int $navigationSort = 3;
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return ! DataAccessService::isCoordinator(auth()->user());
+    }
+
     protected string $view = 'filament.pages.laporan-absensi';
 
     public ?array $filterData = [];
