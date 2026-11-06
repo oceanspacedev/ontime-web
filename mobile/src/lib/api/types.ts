@@ -383,6 +383,8 @@ export interface UserAccess {
   /** Runs a team: roster, schedules and freelancers (Koordinator, Admin, Superadmin). */
   can_manage_team: boolean;
   is_coordinator: boolean;
+  /** CESA food waste report link, for coordinators and F&B crew; null for everyone else. */
+  waste_url?: string | null;
 }
 
 export type WorkerType = 'employee' | 'intern' | 'freelancer';

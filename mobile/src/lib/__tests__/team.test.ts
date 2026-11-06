@@ -25,9 +25,11 @@ describe('deriveAccess', () => {
     expect(deriveAccess(user({ roles: ['Admin'] })).canManageTeam).toBe(false);
   });
 
-  it('marks coordinators for the outlet shortcuts', () => {
-    expect(deriveAccess(user({ roles: ['Koordinator'], access: { can_manage_team: true, is_coordinator: true } })).isCoordinator).toBe(true);
-    expect(deriveAccess(user({ roles: ['Admin'], access: { can_manage_team: true, is_coordinator: false } })).isCoordinator).toBe(false);
+  it('offers the Waste shortcut only when the server sends a link', () => {
+    const url = 'https://cesa.example/waste';
+    expect(deriveAccess(user({ roles: ['Freelancer'], access: { can_manage_team: false, is_coordinator: false, waste_url: url } })).wasteUrl).toBe(url);
+    expect(deriveAccess(user({ roles: ['Admin'], access: { can_manage_team: true, is_coordinator: false, waste_url: null } })).wasteUrl).toBeNull();
+    expect(deriveAccess(user({ roles: ['Employee'] })).wasteUrl).toBeNull();
   });
 
   it('lets a coordinator approve requests', () => {

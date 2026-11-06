@@ -99,8 +99,10 @@ return [
     ],
 
     'cesa' => [
-        // Food waste report for the F&B outlets, linked from the panel menu.
+        // Food waste report for the F&B outlets, linked from the panel menu and the app.
         'waste_url' => env('CESA_WASTE_URL', 'https://cesa.completeselular.com/waste'),
+        // Brand divisions whose crew report waste; a worker anywhere below one of them gets the link.
+        'waste_brands' => array_values(array_filter(array_map('trim', explode(',', (string) env('CESA_WASTE_BRANDS', 'JCHICKEN,MOMOYO,LUUCA'))))),
     ],
 
 ];

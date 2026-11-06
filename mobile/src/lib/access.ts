@@ -33,8 +33,10 @@ export interface Access {
   canApprove: boolean;
   /** Runs a team from the Tim tab: roster per outlet, schedules and freelancers. */
   canManageTeam: boolean;
-  /** A Koordinator of franchise outlets: gets outlet shortcuts such as the Waste report. */
+  /** A Koordinator of franchise outlets. */
   isCoordinator: boolean;
+  /** Link to the CESA waste report when the server offers it to this user. */
+  wasteUrl: string | null;
   isSuperadmin: boolean;
   /** HR gave this employee annual leave; never true for interns and freelancers. */
   hasAnnualLeave: boolean;
@@ -86,6 +88,7 @@ export function deriveAccess(user: User | null): Access {
     canApprove: isApproverRole,
     canManageTeam: user?.access?.can_manage_team === true,
     isCoordinator: user?.access?.is_coordinator === true,
+    wasteUrl: user?.access?.waste_url ?? null,
     isSuperadmin,
     hasAnnualLeave,
     leaveTypes,

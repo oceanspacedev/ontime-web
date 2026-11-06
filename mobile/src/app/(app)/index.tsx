@@ -24,9 +24,6 @@ interface MenuItem {
   badge?: number;
 }
 
-/** Food waste report on CESA, used by the F&B outlets (JChicken, Momoyo, Luuca). */
-const WASTE_URL = 'https://cesa.completeselular.com/waste';
-
 function openMenuItem(item: MenuItem): void {
   if (typeof item.href === 'object' && 'external' in item.href) {
     void Linking.openURL(item.href.external);
@@ -98,7 +95,7 @@ export default function HomeScreen() {
     ...(access.canSeeLeaveCalendar ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
     ...(access.canApprove ? [{ key: 'approvals', label: 'Persetujuan', icon: 'checkmark-done-outline', href: '/approvals', badge: pendingCount } as MenuItem] : []),
     ...(access.canUseAttendance ? [{ key: 'face', label: 'Master Wajah', icon: 'scan-outline', href: '/attendance/master-face' } as MenuItem] : []),
-    ...(access.isCoordinator ? [{ key: 'waste', label: 'Waste', icon: 'trash-outline', href: { external: WASTE_URL } } as MenuItem] : []),
+    ...(access.wasteUrl ? [{ key: 'waste', label: 'Waste', icon: 'trash-outline', href: { external: access.wasteUrl } } as MenuItem] : []),
   ];
 
   const displayName = access.profileName || user?.name;

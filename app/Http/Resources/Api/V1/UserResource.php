@@ -6,6 +6,7 @@ use App\Models\Company;
 use App\Services\AnnualLeaveService;
 use App\Services\DataAccessService;
 use App\Support\StorageUrl;
+use App\Support\WasteReport;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -29,6 +30,7 @@ class UserResource extends JsonResource
             'access' => [
                 'can_manage_team' => $this->resource->canManageWorkers(),
                 'is_coordinator' => DataAccessService::isCoordinator($this->resource),
+                'waste_url' => WasteReport::urlFor($this->resource),
             ],
             'employee' => $this->employee ? [
                 'id' => $this->employee->id,
