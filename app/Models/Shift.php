@@ -91,19 +91,25 @@ class Shift extends Model
     }
 
     /**
-     * "Pagi (08:00 - 17:00)", or "JCHICKEN · Pagi (08:00 - 17:00)" for a brand shift.
+     * "Pagi", or "JCHICKEN · Pagi" for a brand shift. Written this way in exports and accepted by imports.
      */
-    public function label(): string
+    public function qualifiedName(): string
     {
-        $label = sprintf('%s (%s - %s)', $this->name, substr((string) $this->start_time, 0, 5), substr((string) $this->end_time, 0, 5));
-
         if (! $this->division_id) {
-            return $label;
+            return $this->name;
         }
 
         // Uses the eager-loaded brand when present and a plain query otherwise (never lazy loading).
         $brand = $this->relationLoaded('division') ? $this->division : $this->division()->first();
 
-        return $brand ? "{$brand->name} · {$label}" : $label;
+        return $brand ? "{$brand->name} · {$this->name}" : $this->name;
+    }
+
+    /**
+     * "Pagi (08:00 - 17:00)", or "JCHICKEN · Pagi (08:00 - 17:00)" for a brand shift.
+     */
+    public function label(): string
+    {
+        return sprintf('%s (%s - %s)', $this->qualifiedName(), substr((string) $this->start_time, 0, 5), substr((string) $this->end_time, 0, 5));
     }
 }

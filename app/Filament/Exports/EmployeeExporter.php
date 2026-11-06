@@ -25,7 +25,7 @@ class EmployeeExporter extends Exporter
             ExportColumn::make('division')->label('Divisi')->state(fn (Employee $record): ?string => $record->division?->pathName()),
             ExportColumn::make('jobLevel.name')->label('Level Jabatan'),
             ExportColumn::make('jobTitle.name')->label('Posisi'),
-            ExportColumn::make('shift.name')->label('Shift'),
+            ExportColumn::make('shift')->label('Shift')->state(fn (Employee $record): ?string => $record->shift?->qualifiedName()),
             ExportColumn::make('email')->label('Email'),
             ExportColumn::make('phone')->label('Telepon'),
             ExportColumn::make('gender')->label('Jenis Kelamin')->formatStateUsing(fn (?string $state): ?string => match ($state) {
@@ -50,7 +50,7 @@ class EmployeeExporter extends Exporter
 
     public static function modifyQuery(Builder $query): Builder
     {
-        return $query->with(['company', 'division.parent.parent.parent', 'jobLevel', 'jobTitle', 'shift', 'user']);
+        return $query->with(['company', 'division.parent.parent.parent', 'jobLevel', 'jobTitle', 'shift.division', 'user']);
     }
 
     public function getFileName(Export $export): string

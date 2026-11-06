@@ -26,7 +26,7 @@ class FreelancerExporter extends Exporter
             ExportColumn::make('division')->label('Divisi')->state(fn (Freelancer $record): ?string => $record->division?->pathName()),
             ExportColumn::make('supervisor.nip')->label('PIC (NIP)'),
             ExportColumn::make('supervisor.full_name')->label('Nama PIC'),
-            ExportColumn::make('shift.name')->label('Shift'),
+            ExportColumn::make('shift')->label('Shift')->state(fn (Freelancer $record): ?string => $record->shift?->qualifiedName()),
             ExportColumn::make('email')->label('Email'),
             ExportColumn::make('phone')->label('Telepon'),
             ExportColumn::make('start_date')->label('Tanggal Mulai')->formatStateUsing(fn ($state): ?string => $state?->format('Y-m-d')),
@@ -44,7 +44,7 @@ class FreelancerExporter extends Exporter
 
     public static function modifyQuery(Builder $query): Builder
     {
-        return $query->with(['company', 'division.parent.parent.parent', 'supervisor', 'shift', 'user']);
+        return $query->with(['company', 'division.parent.parent.parent', 'supervisor', 'shift.division', 'user']);
     }
 
     public function getFileName(Export $export): string
