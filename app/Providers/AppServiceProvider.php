@@ -9,6 +9,7 @@ use App\Services\Face\CompreFaceVerifier;
 use App\Services\Face\FaceVerifier;
 use App\Support\IdleApiTokens;
 use App\Support\ObservabilityAccess;
+use App\Support\StorageUrl;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -17,6 +18,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -39,6 +41,12 @@ class AppServiceProvider extends ServiceProvider
         Model::preventLazyLoading(! app()->isProduction());
 
         ObservabilityAccess::register();
+
+        foreach (config('filesystems.disks') as $name => $disk) {
+            if (($disk['driver'] ?? null) === 'local' && ($disk['serve'] ?? false)) {
+                StorageUrl::serveInline(Storage::disk($name));
+            }
+        }
 
         Gate::before(function ($user, string $ability) {
             return $user->hasRole('Superadmin') ? true : null;

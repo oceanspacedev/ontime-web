@@ -214,27 +214,7 @@ class="space-y-3">
                 @php
                     $statePath = $getStatePath();
                     $state = data_get($this, $statePath);
-                    $initialUrl = '';
-                    if ($state) {
-                        try {
-                            $disk = config('filesystems.default');
-                            if ($disk === 's3') {
-                                $initialUrl = \Illuminate\Support\Facades\Storage::disk('s3')->temporaryUrl($state, now()->addMinutes(60));
-                            } elseif (\Illuminate\Support\Facades\Storage::disk($disk)->exists($state)) {
-                                $initialUrl = \Illuminate\Support\Facades\Storage::disk($disk)->url($state);
-                            } elseif (\Illuminate\Support\Facades\Storage::disk('public')->exists($state)) {
-                                $initialUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($state);
-                            } else {
-                                $initialUrl = \Illuminate\Support\Facades\Storage::url($state);
-                            }
-                        } catch (\Exception $e) {
-                            try {
-                                $initialUrl = \Illuminate\Support\Facades\Storage::url($state);
-                            } catch (\Exception $ex) {
-                                $initialUrl = '';
-                            }
-                        }
-                    }
+                    $initialUrl = is_string($state) ? (\App\Support\StorageUrl::for($state) ?? '') : '';
                 @endphp
                 <img :src="previewUrl || '{{ $initialUrl }}'"
                      class="w-full h-full object-cover" />

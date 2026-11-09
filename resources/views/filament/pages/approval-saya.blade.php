@@ -7,14 +7,7 @@
         $pendingResignations = $this->pendingResignations;
         $totalPending = $pendingLeaves->count() + $pendingOvertimes->count() + $pendingCorrections->count() + $pendingGeofences->count() + $pendingResignations->count();
 
-        $disk = config('filesystems.default');
-        $getFileUrl = function (?string $path) use ($disk) {
-            if (! $path) return null;
-            if (str_starts_with($path, 'http')) return $path;
-            return $disk === 's3'
-                ? \Illuminate\Support\Facades\Storage::disk('s3')->temporaryUrl($path, now()->addMinutes(60))
-                : \Illuminate\Support\Facades\Storage::disk($disk)->url($path);
-        };
+        $getFileUrl = fn (?string $path): ?string => \App\Support\StorageUrl::for($path);
     @endphp
 
     <x-filament::section class="mb-6">
