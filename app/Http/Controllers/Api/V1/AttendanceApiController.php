@@ -13,9 +13,9 @@ use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
 use App\Services\FileNamingService;
 use App\Services\WorkScheduleService;
+use App\Support\StorageUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
 {
@@ -191,10 +191,7 @@ class AttendanceApiController extends Controller
             'master_face_verified_at' => now(),
         ]);
 
-        $disk = config('filesystems.default');
-        $photoUrl = $disk === 's3'
-            ? Storage::disk('s3')->temporaryUrl($photoPath, now()->addDays(7))
-            : Storage::disk($disk)->url($photoPath);
+        $photoUrl = StorageUrl::for($photoPath);
 
         return response()->json([
             'message' => 'Foto Master Wajah berhasil diperbarui',

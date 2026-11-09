@@ -123,7 +123,6 @@ class AttendanceCorrectionResource extends Resource
                                 ->label('Bukti Pendukung / Lampiran (Opsional)')
                                 ->directory('correction-attachments')
                                 ->disk(config('filesystems.default'))
-                                ->visibility('public')
                                 ->getUploadedFileNameForStorageUsing(function (TemporaryUploadedFile $file): string {
                                     $employeeCode = auth()->user()?->employee?->employee_code ?? auth()->id();
 

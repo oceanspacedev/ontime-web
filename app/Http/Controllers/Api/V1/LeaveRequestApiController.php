@@ -88,7 +88,7 @@ class LeaveRequestApiController extends Controller
                 'leave-requests/attachments',
                 'LEAVE',
                 $identifier,
-                'public'
+                config('filesystems.default')
             );
         }
 
@@ -158,7 +158,7 @@ class LeaveRequestApiController extends Controller
                 'leave-requests/attachments',
                 'LEAVE',
                 $identifier,
-                'public'
+                config('filesystems.default')
             );
         }
 
