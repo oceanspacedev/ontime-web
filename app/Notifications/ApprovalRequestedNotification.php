@@ -2,8 +2,8 @@
 
 namespace App\Notifications;
 
-use App\Notifications\Channels\ExpoPushChannel;
-use App\Notifications\Messages\ExpoPushMessage;
+use App\Notifications\Channels\OneSignalChannel;
+use App\Notifications\Messages\OneSignalMessage;
 use App\Services\ApprovalFlowService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -30,12 +30,10 @@ class ApprovalRequestedNotification extends Notification implements ShouldQueue
      */
     public function via(object $notifiable): array
     {
-        return method_exists($notifiable, 'deviceTokens') && $notifiable->deviceTokens()->exists()
-            ? [ExpoPushChannel::class]
-            : [];
+        return OneSignalChannel::isConfigured() ? [OneSignalChannel::class] : [];
     }
 
-    public function toExpoPush(object $notifiable): ExpoPushMessage
+    public function toOneSignal(object $notifiable): OneSignalMessage
     {
         $label = ApprovalFlowService::requestTypeLabel($this->requestType);
 
@@ -43,12 +41,13 @@ class ApprovalRequestedNotification extends Notification implements ShouldQueue
             ? 'Pengajuan baru menunggu persetujuan Anda'
             : "Pengajuan menunggu persetujuan tahap {$this->stepOrder}";
 
-        return ExpoPushMessage::make($title, "Pengajuan {$label} dari {$this->workerName} menunggu persetujuan Anda.")
+        return OneSignalMessage::make($title, "Pengajuan {$label} dari {$this->workerName} menunggu persetujuan Anda.")
             ->data([
                 'kind' => 'approval_requested',
                 'request_type' => $this->requestType,
                 'request_id' => $this->request->getKey(),
                 'step_order' => $this->stepOrder,
-            ]);
+            ])
+            ->webUrl(url('/admin/approval-saya'));
     }
 }

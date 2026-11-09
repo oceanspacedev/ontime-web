@@ -12,6 +12,7 @@ class CompanyLocation extends Model
 
     protected $fillable = [
         'company_id',
+        'division_id',
         'name',
         'address',
         'latitude',
@@ -33,5 +34,13 @@ class CompanyLocation extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /**
+     * Brand of the outlet; its shifts come first when a schedule names this outlet.
+     */
+    public function division(): BelongsTo
+    {
+        return $this->belongsTo(Division::class);
     }
 }

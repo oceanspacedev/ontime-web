@@ -49,6 +49,10 @@ interface RequestOptions {
   /** Skip the automatic sign-out on 401, used by the login call itself. */
   skipAuthHandling?: boolean;
   timeoutMs?: number;
+  /** Send this session token instead of the current one, e.g. to revoke a session already cleared locally. */
+  token?: string | null;
+  /** Send to this server instead of the current one, so a revoke reaches the server that issued the token. */
+  baseUrl?: string;
 }
 
 export function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
@@ -83,7 +87,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const { method = 'GET', query, json, form, skipAuthHandling = false, timeoutMs = 30000 } = options;
 
   const headers: Record<string, string> = { Accept: 'application/json' };
-  const token = config.getToken();
+  const token = options.token !== undefined ? options.token : config.getToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -101,7 +105,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   let response: Response;
   try {
-    response = await fetch(buildUrl(config.getBaseUrl(), path, query), {
+    response = await fetch(buildUrl(options.baseUrl ?? config.getBaseUrl(), path, query), {
       method,
       headers,
       body,

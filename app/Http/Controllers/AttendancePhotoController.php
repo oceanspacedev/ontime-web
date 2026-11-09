@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\FileNamingService;
+use App\Support\SelfieUploadToken;
 use App\Support\StorageUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,84 +13,82 @@ use Throwable;
 
 class AttendancePhotoController extends Controller
 {
+    /**
+     * Store a selfie from the panel camera and answer with an upload token for check-in.
+     *
+     * The storage path is never returned: check-in only accepts the token, which is bound to the
+     * logged-in user and expires after {@see SelfieUploadToken::VALID_FOR_MINUTES} minutes.
+     *
+     * The login is checked here instead of with the "auth" middleware: outside "api/*" the exception
+     * handler answers guests with a redirect to a "login" route this app does not have, while the
+     * camera component needs a JSON 401.
+     */
     public function upload(Request $request): JsonResponse
     {
+        $user = $request->user('web');
+
+        if (! $user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Sesi Anda telah berakhir. Silakan login kembali.',
+            ], 401);
+        }
+
         try {
-            $user = $request->user();
-            $employeeCode = $user?->employee?->employee_code ?? (string) ($user?->id ?? 'ANONYMOUS');
-
+            $employeeCode = $user->employee?->employee_code ?? (string) $user->id;
             $disk = config('filesystems.default');
+            $path = null;
 
-            // Option 1: File upload via FormData ('photo')
             if ($request->hasFile('photo')) {
                 $file = $request->file('photo');
-                if ($file && $file->isValid()) {
-                    $path = FileNamingService::storeUploadedFile(
-                        $file,
-                        'attendance-photos',
-                        'ATT',
-                        $employeeCode,
-                        $disk
-                    );
 
-                    $url = StorageUrl::for($path, $disk);
-
-                    return response()->json([
-                        'success' => true,
-                        'path' => $path,
-                        'url' => $url,
-                    ]);
+                if (! $file->isValid()) {
+                    return $this->invalidPhoto();
                 }
 
-                $errorMsg = $file ? $file->getErrorMessage() : 'File photo tidak valid.';
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Upload file foto gagal: '.$errorMsg,
-                ], 422);
-            }
-
-            // Option 2: Base64 string payload ('photo_base64')
-            $photoBase64 = $request->input('photo_base64');
-
-            if (filled($photoBase64)) {
+                $path = FileNamingService::storeUploadedFile($file, 'attendance-photos', 'ATT', $employeeCode, $disk);
+            } elseif (filled($photoBase64 = $request->input('photo_base64')) && is_string($photoBase64)) {
                 if (str_contains($photoBase64, 'base64,')) {
                     $photoBase64 = explode('base64,', $photoBase64)[1] ?? '';
                 }
 
-                $photoBase64 = str_replace(' ', '+', trim($photoBase64));
-                $decoded = base64_decode($photoBase64);
+                $decoded = base64_decode(str_replace(' ', '+', trim($photoBase64)), true);
 
-                if ($decoded !== false && strlen($decoded) > 0) {
-                    $filename = FileNamingService::generateFileName('ATT', $employeeCode, 'selfie.jpg');
-                    $path = 'attendance-photos/'.$filename;
-                    Storage::disk($disk)->put($path, $decoded);
-
-                    $url = StorageUrl::for($path, $disk);
-
-                    return response()->json([
-                        'success' => true,
-                        'path' => $path,
-                        'url' => $url,
-                    ]);
+                if ($decoded === false || $decoded === '') {
+                    return $this->invalidPhoto();
                 }
+
+                $path = 'attendance-photos/'.FileNamingService::generateFileName('ATT', $employeeCode, 'selfie.jpg');
+                Storage::disk($disk)->put($path, $decoded);
             }
 
-            $keysReceived = implode(', ', array_keys($request->all()));
+            if ($path === null) {
+                return $this->invalidPhoto();
+            }
 
             return response()->json([
-                'success' => false,
-                'message' => 'Foto tidak valid atau gagal diterima. Parameter yang diterima: '.($keysReceived ?: 'kosong'),
-            ], 422);
-        } catch (Throwable $e) {
-            Log::error('Upload selfie error: '.$e->getMessage(), [
-                'exception' => $e,
+                'success' => true,
+                'token' => SelfieUploadToken::issue($path, $user),
+                'url' => StorageUrl::for($path, $disk),
+            ]);
+        } catch (Throwable $exception) {
+            Log::error('Upload selfie error: '.$exception->getMessage(), [
+                'exception' => $exception,
+                'user_id' => $user->id,
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Terjadi kesalahan pada server: '.$e->getMessage(),
+                'message' => 'Foto selfie gagal disimpan. Coba lagi beberapa saat.',
             ], 500);
         }
+    }
+
+    private function invalidPhoto(): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'Foto selfie tidak valid atau gagal diterima. Ambil ulang foto.',
+        ], 422);
     }
 }

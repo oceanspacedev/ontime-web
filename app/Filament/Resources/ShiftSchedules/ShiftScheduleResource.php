@@ -9,6 +9,7 @@ use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Services\SchedulingOptions;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -21,6 +22,7 @@ use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
@@ -78,7 +80,7 @@ class ShiftScheduleResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $user = auth()->user();
-        $query = parent::getEloquentQuery()->with([...ShiftSchedule::workerEagerLoads(), 'shift']);
+        $query = parent::getEloquentQuery()->with([...ShiftSchedule::workerEagerLoads(), 'shift.division', 'location']);
 
         return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
@@ -95,6 +97,19 @@ class ShiftScheduleResource extends Resource
                     ->label('Shift')
                     ->options(fn (?ShiftSchedule $record): array => static::shiftOptions($record?->getWorkerProfile()?->company_id))
                     ->required(fn (Get $get): bool => ! $get('is_day_off'))
+                    ->hidden(fn (Get $get): bool => (bool) $get('is_day_off')),
+
+                Select::make('company_location_id')
+                    ->label('Outlet')
+                    ->options(fn (?ShiftSchedule $record): array => static::locationOptions($record?->getWorkerProfile()?->company_id))
+                    ->searchable()
+                    ->placeholder('Lokasi mana pun')
+                    ->hidden(fn (Get $get): bool => (bool) $get('is_day_off')),
+
+                TextInput::make('section')
+                    ->label('Section')
+                    ->datalist(fn (?ShiftSchedule $record): array => static::sectionSuggestions($record?->getWorkerProfile()?->company_id))
+                    ->maxLength(50)
                     ->hidden(fn (Get $get): bool => (bool) $get('is_day_off')),
 
                 TextInput::make('notes')
@@ -136,6 +151,11 @@ class ShiftScheduleResource extends Resource
                     ->state(fn (ShiftSchedule $record): string => $record->is_day_off ? 'Libur' : ($record->shift?->label() ?? '-'))
                     ->color(fn (ShiftSchedule $record): string => $record->is_day_off ? 'gray' : 'primary'),
 
+                TextColumn::make('location.name')
+                    ->label('Outlet')
+                    ->placeholder('-')
+                    ->description(fn (ShiftSchedule $record): ?string => $record->section),
+
                 TextColumn::make('notes')
                     ->label('Catatan')
                     ->placeholder('-')
@@ -159,11 +179,17 @@ class ShiftScheduleResource extends Resource
                         ->when($data['from'] ?? null, fn (Builder $q, $date) => $q->whereDate('date', '>=', $date))
                         ->when($data['until'] ?? null, fn (Builder $q, $date) => $q->whereDate('date', '<=', $date))),
 
+                SelectFilter::make('company_location_id')
+                    ->label('Outlet')
+                    ->relationship('location', 'name', fn (Builder $query): Builder => static::scopeToPlaceableCompanies($query)),
+
                 TernaryFilter::make('is_day_off')
                     ->label('Libur'),
             ])
             ->recordActions([
-                EditAction::make(),
+                EditAction::make()
+                    ->slideOver()
+                    ->modalWidth(Width::Medium),
                 DeleteAction::make(),
             ])
             ->toolbarActions([
@@ -180,17 +206,35 @@ class ShiftScheduleResource extends Resource
      */
     public static function shiftOptions(int|string|null $companyId): array
     {
-        if (! static::canPlaceInCompany($companyId)) {
-            return [];
-        }
+        $user = auth()->user();
 
-        return Shift::query()
-            ->active()
-            ->where('company_id', $companyId)
-            ->orderBy('start_time')
-            ->get()
-            ->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])
-            ->all();
+        return $user
+            ? app(SchedulingOptions::class)->shifts($user, $companyId)->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])->all()
+            : [];
+    }
+
+    /**
+     * Active outlets (company locations) of a company the current user may place workers in.
+     *
+     * @return array<int, string>
+     */
+    public static function locationOptions(int|string|null $companyId): array
+    {
+        $user = auth()->user();
+
+        return $user ? app(SchedulingOptions::class)->locations($user, $companyId)->pluck('name', 'id')->all() : [];
+    }
+
+    /**
+     * Sections already used in the company's schedules, offered as suggestions ("Kasir", "Bar", ...).
+     *
+     * @return list<string>
+     */
+    public static function sectionSuggestions(int|string|null $companyId): array
+    {
+        $user = auth()->user();
+
+        return $user ? app(SchedulingOptions::class)->sections($user, $companyId) : [];
     }
 
     /**

@@ -8,6 +8,7 @@ use App\Models\ApprovalRequestStep;
 use App\Models\Attendance;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
+use App\Models\Division;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\Resignation;
@@ -17,6 +18,7 @@ use App\Notifications\ApprovalResolvedNotification;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class ApprovalFlowService
@@ -33,6 +35,61 @@ class ApprovalFlowService
         'resignation' => 'Pengunduran Diri',
         'geofence' => 'Presensi Luar Geofence',
     ];
+
+    /**
+     * Roles that can act on an approval stage; a stage set to any other role could never be approved.
+     *
+     * @var list<string>
+     */
+    public const APPROVER_ROLES = ['Approver', 'BOD', 'Superadmin', 'Admin', 'Koordinator'];
+
+    /**
+     * Users who can be named as a stage's approver for the company: active, holding an approval role,
+     * and with data access reaching that company. Anyone else would approve requests they cannot see.
+     *
+     * @return array<int, string>
+     */
+    public static function approverUserOptions(int|string|null $companyId): array
+    {
+        if (blank($companyId)) {
+            return [];
+        }
+
+        return User::query()
+            ->where('is_active', true)
+            ->whereHas('roles', fn ($query) => $query->whereIn('name', self::APPROVER_ROLES))
+            ->orderBy('name')
+            ->get()
+            ->filter(function (User $user) use ($companyId): bool {
+                $companyIds = DataAccessService::placeableCompanyIds($user);
+
+                return $companyIds === null || in_array((int) $companyId, $companyIds, true);
+            })
+            ->pluck('name', 'id')
+            ->all();
+    }
+
+    /**
+     * Active users holding $role whose data access reaches $companyId (and $divisionId, for a division
+     * rule), so a stage set to that role
+     * has someone to act on it.
+     */
+    public static function hasHolderForRole(string $role, int|string|null $companyId, int|string|null $divisionId = null): bool
+    {
+        if ($companyId === null || $companyId === '') {
+            return true;
+        }
+
+        return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId, $divisionId): bool {
+            if (filled($divisionId)) {
+                return DataAccessService::canAccessPlacement($user, $companyId, $divisionId);
+            }
+
+            $companyIds = DataAccessService::placeableCompanyIds($user);
+
+            return $companyIds === null || in_array((int) $companyId, $companyIds, true);
+        });
+    }
 
     public static function requestTypeLabel(string $requestType): string
     {
@@ -58,41 +115,128 @@ class ApprovalFlowService
     }
 
     /**
-     * Give a company without any approval flow the default stages: Approver, BOD, then Superadmin
-     * for leave, overtime, correction and resignation, and a single Approver stage for geofence.
+     * Give a company without any approval flow the default: one Approver stage per request type, the
+     * person responsible for the worker's division. Companies that need BOD or more stages add them
+     * in Alur Persetujuan.
      */
     public function createDefaultFlows(Company $company): void
     {
-        if ($company->approvalFlows()->exists()) {
+        if ($company->approvalFlows()->companyWide()->exists()) {
             return;
         }
 
-        $labels = collect(self::REQUEST_TYPE_LABELS)->except('geofence')->all();
-        $stages = [['Approver', 'Persetujuan Approver'], ['BOD', 'Persetujuan BOD'], ['Superadmin', 'Persetujuan Akhir Superadmin']];
+        foreach (self::REQUEST_TYPE_LABELS as $requestType => $label) {
+            ApprovalFlow::create([
+                'company_id' => $company->id,
+                'request_type' => $requestType,
+                'step_number' => 1,
+                'step_order' => 1,
+                'name' => "Persetujuan {$label}",
+                'approver_type' => 'role',
+                'approver_role' => 'Approver',
+            ]);
+        }
+    }
 
-        foreach ($labels as $requestType => $label) {
-            foreach ($stages as $index => [$role, $stageName]) {
-                ApprovalFlow::create([
-                    'company_id' => $company->id,
-                    'request_type' => $requestType,
-                    'step_number' => $index + 1,
-                    'step_order' => $index + 1,
-                    'name' => "{$stageName} {$label}",
-                    'approver_type' => 'role',
-                    'approver_role' => $role,
-                ]);
+    /**
+     * Replace a division's own rule for the given request types with $steps, in the order given.
+     *
+     * @param  list<string>  $requestTypes
+     * @param  list<array{name?: string|null, approver_type?: string|null, approver_role?: string|null, user_id?: int|string|null}>  $steps
+     */
+    public function saveDivisionRule(Company $company, int $divisionId, array $requestTypes, array $steps): void
+    {
+        $division = Division::query()->where('company_id', $company->id)->findOrFail($divisionId);
+        $requestTypes = array_values(array_intersect($requestTypes, array_keys(self::REQUEST_TYPE_LABELS)));
+
+        if ($requestTypes === [] || $steps === []) {
+            throw ValidationException::withMessages(['steps' => 'Pilih jenis pengajuan dan isi minimal 1 tahap approval.']);
+        }
+
+        foreach ($steps as $index => $step) {
+            $type = $step['approver_type'] ?? 'role';
+            $role = $step['approver_role'] ?? null;
+
+            if (($type === 'role' && ! in_array($role, self::APPROVER_ROLES, true))
+                || ($type === 'user' && ! array_key_exists((int) ($step['user_id'] ?? 0), self::approverUserOptions($company->id)))) {
+                throw ValidationException::withMessages(['steps' => 'Tahap '.($index + 1).' belum memilih approver, atau approver-nya tidak punya akses ke badan usaha ini.']);
             }
         }
 
-        ApprovalFlow::create([
-            'company_id' => $company->id,
-            'request_type' => 'geofence',
-            'step_number' => 1,
-            'step_order' => 1,
-            'name' => 'Persetujuan Presensi Luar Geofence',
-            'approver_type' => 'role',
-            'approver_role' => 'Approver',
-        ]);
+        DB::transaction(function () use ($company, $division, $requestTypes, $steps): void {
+            foreach ($requestTypes as $requestType) {
+                ApprovalFlow::query()
+                    ->where('company_id', $company->id)
+                    ->where('division_id', $division->id)
+                    ->where('request_type', $requestType)
+                    ->delete();
+
+                foreach ($steps as $index => $step) {
+                    $isUser = ($step['approver_type'] ?? 'role') === 'user';
+
+                    ApprovalFlow::create([
+                        'company_id' => $company->id,
+                        'division_id' => $division->id,
+                        'request_type' => $requestType,
+                        'step_number' => $index + 1,
+                        'step_order' => $index + 1,
+                        'name' => filled($step['name'] ?? null) ? $step['name'] : 'Tahap '.($index + 1),
+                        'approver_type' => $isUser ? 'user' : 'role',
+                        'approver_role' => $isUser ? null : $step['approver_role'],
+                        'user_id' => $isUser ? (int) $step['user_id'] : null,
+                    ]);
+                }
+            }
+        });
+    }
+
+    /**
+     * The flow that applies to a worker: the rule of their division, else of the nearest division
+     * above it that has one, else the company-wide flow. Resolved per request type, so a division
+     * can set its own leave rule and keep the company's flow for everything else.
+     *
+     * @return Collection<int, ApprovalFlow>
+     */
+    public function flowsFor(int $companyId, int|string|null $divisionId, string $requestType): Collection
+    {
+        $flows = ApprovalFlow::query()
+            ->where('company_id', $companyId)
+            ->where('request_type', $requestType)
+            ->orderBy('step_order')
+            ->get();
+
+        foreach ($this->divisionLineage($divisionId) as $lineageDivisionId) {
+            $divisionFlows = $flows->where('division_id', $lineageDivisionId);
+
+            if ($divisionFlows->isNotEmpty()) {
+                return $divisionFlows->values();
+            }
+        }
+
+        return $flows->whereNull('division_id')->values();
+    }
+
+    /**
+     * The division and the divisions above it, nearest first.
+     *
+     * @return list<int>
+     */
+    private function divisionLineage(int|string|null $divisionId): array
+    {
+        if (! $divisionId) {
+            return [];
+        }
+
+        $parentIdsById = Division::query()->pluck('parent_id', 'id')->all();
+        $lineage = [];
+        $current = (int) $divisionId;
+
+        while ($current && ! in_array($current, $lineage, true)) {
+            $lineage[] = $current;
+            $current = (int) ($parentIdsById[$current] ?? 0);
+        }
+
+        return $lineage;
     }
 
     /**
@@ -126,10 +270,7 @@ class ApprovalFlowService
             ]);
         }
 
-        $flows = ApprovalFlow::where('company_id', $companyId)
-            ->where('request_type', $requestType)
-            ->orderBy('step_order')
-            ->get();
+        $flows = $this->flowsFor((int) $companyId, $workerProfile?->division_id, $requestType);
 
         if ($flows->isEmpty()) {
             if ($requestType === 'geofence') {
@@ -234,8 +375,8 @@ class ApprovalFlowService
             return ! $isOwnRequest;
         }
 
-        // Admin Override: same authority, limited to the workers inside their data access
-        if ($workerProfile && $user->hasRole('Admin') && $user->canManageWorker($workerProfile)) {
+        // Admin and Koordinator Override: same authority, limited to the workers inside their data access
+        if ($workerProfile && $user->hasAnyRole(['Admin', 'Koordinator']) && $user->canManageWorker($workerProfile)) {
             return ! $isOwnRequest;
         }
 
@@ -271,27 +412,31 @@ class ApprovalFlowService
 
         $currentStepOrder = (int) ($requestModel->current_step ?? 1);
         $maxSteps = (int) $requestModel->approvalSteps()->max('step_order');
+        $closesAllStages = $this->closesAllStages($user);
+        $isFinalApproval = $closesAllStages || $currentStepOrder >= $maxSteps;
 
         // The final approval turns annual leave into used quota, so the worker must still be entitled.
-        if ($requestModel instanceof LeaveRequest && $currentStepOrder >= $maxSteps
+        if ($requestModel instanceof LeaveRequest && $isFinalApproval
             && $error = app(AnnualLeaveService::class)->approvalError($requestModel)) {
             throw ValidationException::withMessages(['approve' => $error]);
         }
 
-        $step = $requestModel->approvalSteps()
-            ->where('step_order', $currentStepOrder)
-            ->first();
-
-        if ($step) {
-            $step->update([
+        $requestModel->approvalSteps()
+            ->where(fn ($steps) => $steps->where('step_order', $currentStepOrder)
+                ->when($closesAllStages, fn ($query) => $query->orWhere(fn ($later) => $later->where('step_order', '>', $currentStepOrder)->where('status', 'pending'))))
+            ->get()
+            ->each(fn ($step) => $step->update([
                 'status' => 'approved',
                 'actioned_by' => $user->id,
                 'actioned_at' => now(),
                 'notes' => $notes,
-            ]);
+            ]));
+
+        if ($closesAllStages && $currentStepOrder < $maxSteps) {
+            $requestModel->update(['current_step' => $maxSteps]);
         }
 
-        if ($currentStepOrder < $maxSteps) {
+        if (! $isFinalApproval) {
             $requestModel->update([
                 'current_step' => $currentStepOrder + 1,
             ]);
@@ -336,6 +481,15 @@ class ApprovalFlowService
 
             $this->notifyRequester($requestModel, 'approved');
         }
+    }
+
+    /**
+     * A coordinator decides for the crew of their brands, so one approval from them settles every
+     * remaining stage instead of one tap per stage. Admin and Superadmin keep acting per stage.
+     */
+    private function closesAllStages(User $user): bool
+    {
+        return $user->hasRole('Koordinator') && ! $user->hasAnyRole(['Superadmin', 'Admin']);
     }
 
     /**
@@ -413,8 +567,21 @@ class ApprovalFlowService
      */
     private function getUsersAuthorizedForCurrentStep(Model $requestModel): Collection
     {
+        $step = $requestModel->approvalSteps()->where('step_order', (int) ($requestModel->current_step ?? 1))->first();
+
+        // Coordinators decide for the crew of their brands, so they hear about every request there.
+        // Admins act on any stage too, but only hear about the stages set to them, to keep the noise down.
+        $roles = ['Approver', 'BOD', 'Superadmin', 'Koordinator'];
+
+        if ($step?->approver_type === 'role' && filled($step->approver_role)) {
+            $roles[] = $step->approver_role;
+        }
+
         return User::query()
-            ->whereHas('roles', fn ($query) => $query->whereIn('name', ['Approver', 'BOD', 'Superadmin']))
+            ->where('is_active', true)
+            ->where(fn ($query) => $query
+                ->whereHas('roles', fn ($roleQuery) => $roleQuery->whereIn('name', array_unique($roles)))
+                ->when($step?->approver_type === 'user' && $step->user_id, fn ($byUser) => $byUser->orWhere('id', $step->user_id)))
             ->get()
             ->filter(fn (User $user) => $this->isUserAuthorizedToApprove($requestModel, $user));
     }

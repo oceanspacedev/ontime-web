@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\DataScope;
+use App\Http\Resources\Api\V1\LeaveRequestResource;
 use App\Models\ApprovalFlow;
 use App\Models\Attendance;
 use App\Models\Company;
@@ -16,6 +17,7 @@ use App\Models\OvertimeRequest;
 use App\Models\User;
 use App\Support\StorageUrl;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
@@ -151,6 +153,51 @@ class ApiConsistencyTest extends TestCase
             ->assertJsonPath('data.leave_type_label', 'Izin')
             ->assertJsonPath('data.start_date', '2026-12-01')
             ->assertJsonPath('data.total_steps', 2);
+    }
+
+    public function test_leave_attachments_from_the_app_go_to_the_default_disk(): void
+    {
+        config(['filesystems.default' => 's3']);
+        Storage::fake('s3');
+        Storage::fake('public');
+        Sanctum::actingAs($this->salesWorker->user);
+
+        $leaveId = $this->post('/api/v1/leave-requests', [
+            'leave_type' => 'permission',
+            'start_date' => '2026-12-01',
+            'end_date' => '2026-12-01',
+            'reason' => 'Urusan keluarga',
+            'attachment' => UploadedFile::fake()->create('surat.pdf', 20, 'application/pdf'),
+        ], ['Accept' => 'application/json'])->assertCreated()->json('data.id');
+
+        $path = LeaveRequest::findOrFail($leaveId)->attachment;
+
+        Storage::disk('s3')->assertExists($path);
+        Storage::disk('public')->assertMissing($path);
+    }
+
+    public function test_older_leave_attachments_on_the_public_disk_keep_their_link(): void
+    {
+        config(['filesystems.default' => 's3']);
+        Storage::fake('s3');
+        Storage::disk('public')->put('leave-requests/attachments/uat-lama.pdf', 'pdf');
+        Storage::disk('s3')->put('leave-requests/attachments/uat-baru.pdf', 'pdf');
+
+        $older = LeaveRequest::create(['employee_id' => $this->salesWorker->id, 'leave_type' => 'permission', 'start_date' => '2026-12-01', 'end_date' => '2026-12-01', 'reason' => 'Lama', 'status' => 'pending', 'attachment' => 'leave-requests/attachments/uat-lama.pdf']);
+        $newer = LeaveRequest::create(['employee_id' => $this->salesWorker->id, 'leave_type' => 'permission', 'start_date' => '2026-12-02', 'end_date' => '2026-12-02', 'reason' => 'Baru', 'status' => 'pending', 'attachment' => 'leave-requests/attachments/uat-baru.pdf']);
+
+        try {
+            $this->assertSame(
+                Storage::disk('public')->url('leave-requests/attachments/uat-lama.pdf'),
+                (new LeaveRequestResource($older))->resolve()['attachment'],
+            );
+            $this->assertStringContainsString(
+                'leave-requests/attachments/uat-baru.pdf?expiration=',
+                (string) (new LeaveRequestResource($newer))->resolve()['attachment'],
+            );
+        } finally {
+            Storage::disk('public')->delete('leave-requests/attachments/uat-lama.pdf');
+        }
     }
 
     public function test_leave_update_cannot_bypass_the_quota(): void

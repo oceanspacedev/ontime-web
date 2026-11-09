@@ -4,7 +4,7 @@ import { View } from 'react-native';
 
 import { Badge, Button, Group, Notice, Text } from '@/components/ui';
 import type { Access } from '@/lib/access';
-import type { TodayAttendance } from '@/lib/api';
+import { type Attendance, attendanceApi, type TodayAttendance } from '@/lib/api';
 import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatTime } from '@/lib/format';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
@@ -16,12 +16,31 @@ interface Props {
 /** Group title shared with the home screen's loading state, so both render the same frame. */
 export const TODAY_GROUP_TITLE = 'Presensi Hari Ini';
 
+/** Why today's record waits for approval, in the server's own wording for approval reasons. */
+function pendingApprovalMessage(attendance: Attendance): string {
+  const reasons: string[] = [];
+  if (attendance.is_out_of_bounds) {
+    reasons.push('di luar area kantor');
+  }
+  if (attendance.is_mock_location) {
+    reasons.push('lokasi palsu terdeteksi');
+  }
+  if (attendance.is_face_verified === false) {
+    reasons.push('verifikasi wajah tidak cocok');
+  }
+  if (reasons.length === 0) {
+    return 'Presensi hari ini menunggu persetujuan atasan.';
+  }
+  return `Presensi hari ini menunggu persetujuan atasan karena ${reasons.join(' dan ')}.`;
+}
+
 export function TodayCard({ today, access }: Props) {
   const styles = useStyles();
   const { colors } = useTheme();
   const attendance = today.attendance;
   const policy = access.company?.policy ?? null;
-  const needsMasterFace = policy?.require_face_recognition && !access.masterFacePhoto;
+  const selfieMode = attendanceApi.selfieModeOf(policy);
+  const needsMasterFace = (selfieMode === 'face' || selfieMode === 'liveness') && !access.masterFacePhoto;
   const done = today.has_checked_in && today.has_checked_out;
   const schedule = today.schedule ?? null;
   const workStart = schedule?.start_time ?? policy?.work_start_time ?? null;
@@ -49,29 +68,46 @@ export function TodayCard({ today, access }: Props) {
               </Text>
             </View>
           ) : null}
+          {schedule?.outlet && !schedule.is_day_off ? (
+            <View style={styles.scheduleRow}>
+              <Ionicons name="storefront-outline" size={14} color={colors.textMuted} />
+              <Text style={styles.schedule} numberOfLines={1}>
+                {[schedule.outlet.name, schedule.section].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
+          ) : null}
         </View>
-        {attendance ? <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} /> : null}
+        {attendance ? (
+          <Badge
+            label={attendance.late_minutes ? `Telat ${attendance.late_minutes} mnt` : attendanceStatusLabel(attendance.status)}
+            tone={attendanceStatusTone(attendance.status)}
+          />
+        ) : null}
       </View>
 
-      <View style={styles.times}>
+      <View style={[styles.times, done && styles.timesLast]}>
         <TimeHalf label="Masuk" value={attendance?.check_in} icon="log-in-outline" />
         <View style={styles.divider} />
         <TimeHalf label="Pulang" value={attendance?.check_out} icon="log-out-outline" />
       </View>
 
-      {attendance?.late_minutes ? <Badge label={`Terlambat ${attendance.late_minutes} menit`} tone="warning" dot /> : null}
-
       {attendance?.status === 'pending_approval' ? (
-        <Notice tone="warning" message="Presensi hari ini menunggu persetujuan atasan karena di luar area kantor atau verifikasi wajah tidak cocok." />
+        <Notice tone="warning" message={pendingApprovalMessage(attendance)} />
       ) : null}
 
       {needsMasterFace ? (
-        <Notice tone="warning" icon="scan-outline" message="Perusahaan mewajibkan verifikasi wajah. Daftarkan foto master wajah dulu sebelum absen." />
+        <Notice
+          tone="warning"
+          icon="scan-outline"
+          message={
+            selfieMode === 'liveness'
+              ? 'Perusahaan mewajibkan verifikasi wajah dengan gerakan kepala (liveness). Daftarkan foto master wajah dulu sebelum absen.'
+              : 'Perusahaan mewajibkan verifikasi wajah. Daftarkan foto master wajah dulu sebelum absen.'
+          }
+        />
       ) : null}
 
-      {done ? (
-        <Notice tone="success" message="Presensi hari ini sudah lengkap. Sampai jumpa besok!" />
-      ) : needsMasterFace ? (
+      {done ? null : needsMasterFace ? (
         <Button title="Daftarkan Foto Master Wajah" icon="scan-outline" size="lg" onPress={() => router.push('/attendance/master-face')} />
       ) : !today.has_checked_in ? (
         <Button title="Absen Masuk" icon="log-in-outline" size="lg" onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'in' } })} />
@@ -120,6 +156,8 @@ const useStyles = makeStyles((c) => ({
     borderBottomWidth: 1,
     borderColor: c.separator,
   },
+  /** Nothing follows the times once the day is done, so no closing line. */
+  timesLast: { borderBottomWidth: 0, paddingBottom: 0 },
   half: { flex: 1, gap: 6, paddingHorizontal: spacing.xs },
   halfLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   halfLabel: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },

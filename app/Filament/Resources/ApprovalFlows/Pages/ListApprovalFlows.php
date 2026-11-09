@@ -13,7 +13,9 @@ class ListApprovalFlows extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            CreateAction::make(),
+            CreateAction::make()
+                ->label('Atur alur badan usaha')
+                ->visible(fn (): bool => ApprovalFlowResource::companiesWithoutFlowOptions() !== []),
         ];
     }
 }

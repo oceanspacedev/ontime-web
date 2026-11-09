@@ -6,6 +6,7 @@ use App\Models\LeaveRequest;
 use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Storage;
 
 class LeaveRequestResource extends JsonResource
 {
@@ -30,7 +31,7 @@ class LeaveRequestResource extends JsonResource
             'rejection_reason' => $this->rejection_reason,
             // Older app versions read rejection_note.
             'rejection_note' => $this->rejection_reason,
-            'attachment' => StorageUrl::for($this->attachment, 'public'),
+            'attachment' => StorageUrl::for($this->attachment, $this->attachmentDisk()),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'employee' => $this->employee ? $this->formatWorkerProfile($this->employee) : null,
@@ -59,5 +60,18 @@ class LeaveRequestResource extends JsonResource
             ] : null,
             'master_face_photo' => $profile->master_face_photo ?? null,
         ];
+    }
+
+    /**
+     * Attachments uploaded from the app used to land on the "public" disk whatever the default was,
+     * so those older files keep their link; everything else lives on the default disk.
+     */
+    private function attachmentDisk(): ?string
+    {
+        if (blank($this->attachment) || config('filesystems.default') === 'public') {
+            return null;
+        }
+
+        return Storage::disk('public')->exists($this->attachment) ? 'public' : null;
     }
 }

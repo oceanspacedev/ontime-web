@@ -3,13 +3,13 @@
 namespace Database\Seeders;
 
 use App\Enums\DataScope;
-use App\Models\ApprovalFlow;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\User;
+use App\Services\ApprovalFlowService;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
@@ -59,49 +59,7 @@ class DatabaseSeeder extends Seeder
                 ]);
             }
 
-            if ($comp->approvalFlows()->count() === 0) {
-                foreach (['leave' => 'Cuti / Izin', 'overtime' => 'Lembur', 'correction' => 'Koreksi Absensi', 'resignation' => 'Pengunduran Diri'] as $requestType => $label) {
-                    ApprovalFlow::create([
-                        'company_id' => $comp->id,
-                        'request_type' => $requestType,
-                        'step_number' => 1,
-                        'step_order' => 1,
-                        'name' => "Persetujuan Approver {$label}",
-                        'approver_type' => 'role',
-                        'approver_role' => 'Approver',
-                    ]);
-
-                    ApprovalFlow::create([
-                        'company_id' => $comp->id,
-                        'request_type' => $requestType,
-                        'step_number' => 2,
-                        'step_order' => 2,
-                        'name' => "Persetujuan BOD {$label}",
-                        'approver_type' => 'role',
-                        'approver_role' => 'BOD',
-                    ]);
-
-                    ApprovalFlow::create([
-                        'company_id' => $comp->id,
-                        'request_type' => $requestType,
-                        'step_number' => 3,
-                        'step_order' => 3,
-                        'name' => "Persetujuan Akhir Superadmin {$label}",
-                        'approver_type' => 'role',
-                        'approver_role' => 'Superadmin',
-                    ]);
-                }
-
-                ApprovalFlow::create([
-                    'company_id' => $comp->id,
-                    'request_type' => 'geofence',
-                    'step_number' => 1,
-                    'step_order' => 1,
-                    'name' => 'Persetujuan Presensi Luar Geofence',
-                    'approver_type' => 'role',
-                    'approver_role' => 'Approver',
-                ]);
-            }
+            app(ApprovalFlowService::class)->createDefaultFlows($comp);
         }
 
         // 6. Setup Specific Role Test Accounts for Demo

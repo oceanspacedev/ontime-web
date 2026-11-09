@@ -26,7 +26,7 @@ class InternExporter extends Exporter
             ExportColumn::make('division')->label('Divisi')->state(fn (Intern $record): ?string => $record->division?->pathName()),
             ExportColumn::make('mentor.nip')->label('Mentor (NIP)'),
             ExportColumn::make('mentor.full_name')->label('Nama Mentor'),
-            ExportColumn::make('shift.name')->label('Shift'),
+            ExportColumn::make('shift')->label('Shift')->state(fn (Intern $record): ?string => $record->shift?->qualifiedName()),
             ExportColumn::make('email')->label('Email'),
             ExportColumn::make('phone')->label('Telepon'),
             ExportColumn::make('start_date')->label('Tanggal Mulai')->formatStateUsing(fn ($state): ?string => $state?->format('Y-m-d')),
@@ -44,7 +44,7 @@ class InternExporter extends Exporter
 
     public static function modifyQuery(Builder $query): Builder
     {
-        return $query->with(['company', 'division.parent.parent.parent', 'mentor', 'shift', 'user']);
+        return $query->with(['company', 'division.parent.parent.parent', 'mentor', 'shift.division', 'user']);
     }
 
     public function getFileName(Export $export): string

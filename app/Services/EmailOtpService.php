@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Mail\EmailLoginMail;
 use App\Models\EmailOtp;
 use App\Models\User;
+use Closure;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -62,15 +63,20 @@ class EmailOtpService
 
     /**
      * Create a new code and magic link (earlier ones for this email stop working) and send them right away.
+     * $magicLinkUrl builds the button URL from the token (the web login page by default); with
+     * $includeCode false the email carries only that link, for clients that have no code field.
+     *
+     * @param  (Closure(string): string)|null  $magicLinkUrl
      *
      * @throws RuntimeException when the email cannot be sent; the record is expired first.
      */
-    public function issue(User $user, string $email, string $purpose): void
+    public function issue(User $user, string $email, string $purpose, ?Closure $magicLinkUrl = null, bool $includeCode = true): void
     {
         $expiresIn = $this->expiresIn();
         $lockKey = 'ontime:email-otp:lock:issue:'.hash('sha256', $purpose."\0".$email);
+        $magicLinkUrl ??= fn (string $token): string => route('email-login.link', ['token' => $token]);
 
-        Cache::lock($lockKey, 90)->block(10, function () use ($user, $email, $purpose, $expiresIn): void {
+        Cache::lock($lockKey, 90)->block(10, function () use ($user, $email, $purpose, $expiresIn, $magicLinkUrl, $includeCode): void {
             $otp = (string) random_int(100000, 999999);
             $token = Str::random(self::TOKEN_LENGTH);
 
@@ -95,8 +101,8 @@ class EmailOtpService
             try {
                 Mail::to($email)->send(new EmailLoginMail(
                     name: (string) $user->name,
-                    otp: $otp,
-                    loginUrl: route('email-login.link', ['token' => $token]),
+                    otp: $includeCode ? $otp : null,
+                    loginUrl: $magicLinkUrl($token),
                     expiresInMinutes: max(1, intdiv($expiresIn, 60)),
                 ));
             } catch (Throwable $exception) {
@@ -131,7 +137,11 @@ class EmailOtpService
         return $candidate ? $this->redeem($candidate, $otp, $allowInactive) : null;
     }
 
-    public function consumeMagicLink(string $token, string $purpose): ?User
+    /**
+     * With $email the token only counts when it was sent to that address. With $allowInactive the link
+     * also returns an inactive account, for callers that refuse it with their own message.
+     */
+    public function consumeMagicLink(string $token, string $purpose, ?string $email = null, bool $allowInactive = false): ?User
     {
         if (strlen($token) !== self::TOKEN_LENGTH) {
             return null;
@@ -140,9 +150,10 @@ class EmailOtpService
         $candidate = EmailOtp::query()
             ->where('token_hash', hash('sha256', $token))
             ->where('purpose', $purpose)
+            ->when($email !== null, fn ($query) => $query->where('email', $email))
             ->first(['id', 'user_id']);
 
-        return $candidate ? $this->redeem($candidate, null) : null;
+        return $candidate ? $this->redeem($candidate, null, $allowInactive) : null;
     }
 
     public function expiresIn(): int

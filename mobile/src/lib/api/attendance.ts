@@ -1,20 +1,61 @@
 import { appendFile, request } from './client';
-import type { Attendance, AttendanceStatus, Paginated, PaginationA, TodayAttendance, UploadFile } from './types';
+import type {
+  Attendance,
+  AttendanceCheckResponse,
+  AttendancePurpose,
+  AttendanceStatus,
+  CompanyPolicy,
+  LivenessChallenge,
+  Paginated,
+  PaginationA,
+  SelfieMode,
+  TodayAttendance,
+  UploadFile,
+} from './types';
 
 export function today(): Promise<TodayAttendance> {
   return request<TodayAttendance>('/attendance/today');
 }
 
+/**
+ * The selfie mode of a policy. Older servers only send the booleans, so the mode is derived from
+ * them when `selfie_mode` is missing.
+ */
+export function selfieModeOf(policy: CompanyPolicy | null | undefined): SelfieMode {
+  if (!policy) {
+    return 'none';
+  }
+  if (policy.selfie_mode) {
+    return policy.selfie_mode;
+  }
+  if (policy.require_liveness) {
+    return 'liveness';
+  }
+  if (policy.require_face_recognition) {
+    return 'face';
+  }
+  return policy.require_photo ? 'photo' : 'none';
+}
+
+/** Starts a head-turn challenge for the next check in or check out. */
+export function livenessChallenge(purpose: AttendancePurpose): Promise<LivenessChallenge> {
+  return request<LivenessChallenge>('/attendance/liveness-challenge', { method: 'POST', json: { purpose } });
+}
+
 export interface CheckPayload {
   latitude?: number | null;
   longitude?: number | null;
+  /** GPS accuracy in metres. */
+  accuracy?: number | null;
+  /** The OS reported the position as mocked. */
+  isMocked?: boolean;
   photo?: UploadFile | null;
+  livenessChallengeId?: string | null;
+  /** One photo per challenge step, in the order of the challenge's steps. */
+  livenessFrames?: UploadFile[];
 }
 
-export interface CheckResponse {
-  message: string;
-  attendance: Attendance;
-}
+export type CheckResponse = AttendanceCheckResponse;
 
 function buildCheckForm(payload: CheckPayload): FormData {
   const form = new FormData();
@@ -24,8 +65,20 @@ function buildCheckForm(payload: CheckPayload): FormData {
   if (payload.longitude !== undefined && payload.longitude !== null) {
     form.append('longitude', String(payload.longitude));
   }
+  if (payload.accuracy !== undefined && payload.accuracy !== null) {
+    form.append('accuracy', String(Math.max(0, payload.accuracy)));
+  }
+  if (payload.isMocked !== undefined) {
+    form.append('is_mocked', payload.isMocked ? '1' : '0');
+  }
   if (payload.photo) {
     appendFile(form, 'photo', payload.photo);
+  }
+  if (payload.livenessChallengeId) {
+    form.append('liveness_challenge_id', payload.livenessChallengeId);
+  }
+  for (const frame of payload.livenessFrames ?? []) {
+    appendFile(form, 'liveness_frames[]', frame);
   }
   return form;
 }

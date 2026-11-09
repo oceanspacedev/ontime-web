@@ -1,6 +1,7 @@
 export type RoleName =
   | 'Superadmin'
   | 'Admin'
+  | 'Koordinator'
   | 'BOD'
   | 'Approver'
   | 'Employee'
@@ -30,6 +31,15 @@ export interface CompanyLocation {
   radius_meters: number;
 }
 
+/**
+ * How a worker proves presence on the selfie side: no photo, a photo, a photo matched against the
+ * master face, or an active head-turn challenge plus the face match.
+ */
+export type SelfieMode = 'none' | 'photo' | 'face' | 'liveness';
+
+/** What the server does with a fake GPS or a failed face match: refuse it or send it to approval. */
+export type PolicyFailAction = 'reject' | 'approval';
+
 export interface CompanyPolicy {
   require_gps: boolean;
   require_photo: boolean;
@@ -37,6 +47,15 @@ export interface CompanyPolicy {
   late_tolerance_minutes: number;
   work_start_time: string | null;
   work_end_time: string | null;
+  /** The fields below are missing in responses from older servers. */
+  require_liveness?: boolean;
+  selfie_mode?: SelfieMode;
+  mock_location_action?: PolicyFailAction;
+  /** Minimum face similarity in percent. */
+  face_match_threshold?: number;
+  face_fail_action?: PolicyFailAction;
+  /** Human readable mode, e.g. "GPS + Liveness + Wajah". */
+  mode_label?: string;
 }
 
 export interface Company {
@@ -104,6 +123,8 @@ export interface User {
   master_face_verified_at: string | null;
   roles: RoleName[];
   permissions: string[];
+  /** Missing on servers older than the team feature. */
+  access?: UserAccess;
   employee: EmployeeProfile | null;
   intern: InternProfile | null;
   freelancer: FreelancerProfile | null;
@@ -123,6 +144,13 @@ export interface OtpRequestResponse {
   channel: OtpChannel;
   challenge_id: string;
   /** Seconds the code and challenge stay valid. */
+  expires_in: number;
+}
+
+export interface MagicLinkRequestResponse {
+  message: string;
+  challenge_id: string;
+  /** Seconds the emailed link and challenge stay valid. */
   expires_in: number;
 }
 
@@ -152,14 +180,49 @@ export interface Attendance {
   status: AttendanceStatus;
   is_corrected: boolean;
   is_out_of_bounds: boolean;
+  /** The device reported a mocked (fake) GPS position. Missing on older servers. */
+  is_mock_location?: boolean;
   is_face_verified: boolean | null;
   face_match_score: number | null;
   face_verification_notes: string | null;
+  /** Result of the head-turn challenge, null when the policy did not ask for it. Missing on older servers. */
+  liveness_verified?: boolean | null;
+  liveness_notes?: string | null;
   late_minutes: number | null;
   employee: WorkerSummary | null;
   intern: WorkerSummary | null;
   freelancer: WorkerSummary | null;
   user: { name: string; department: string } | null;
+}
+
+export type AttendancePurpose = 'check_in' | 'check_out';
+
+export interface AttendanceCheckResponse {
+  /** Already says why the record waits for approval, when it does. */
+  message: string;
+  attendance: Attendance;
+  /** Missing on older servers. */
+  requires_approval?: boolean;
+  approval_reasons?: string[];
+}
+
+export type LivenessStepKey = 'front' | 'left' | 'right';
+
+export interface LivenessStep {
+  key: LivenessStepKey;
+  /** Short title, e.g. "Tengok ke kiri". */
+  label: string;
+  /** One sentence telling the user how to move. */
+  instruction: string;
+}
+
+/** A single-use head-turn challenge; frames are sent in the order of `steps`. */
+export interface LivenessChallenge {
+  challenge_id: string;
+  steps: LivenessStep[];
+  expires_at: string;
+  /** Seconds the challenge stays valid. */
+  expires_in: number;
 }
 
 export interface TodaySchedule {
@@ -168,6 +231,9 @@ export interface TodaySchedule {
   start_time: string;
   end_time: string;
   late_tolerance_minutes: number;
+  /** Outlet the worker is scheduled at today; check-in is only accepted there. */
+  outlet?: NamedRef | null;
+  section?: string | null;
 }
 
 export interface TodayAttendance {
@@ -314,4 +380,139 @@ export interface UploadFile {
   uri: string;
   name: string;
   type: string;
+}
+
+export interface UserAccess {
+  /** Runs a team: roster, schedules and freelancers (Koordinator, Admin, Superadmin). */
+  can_manage_team: boolean;
+  is_coordinator: boolean;
+  /** CESA food waste report link, for coordinators and F&B crew; null for everyone else. */
+  waste_url?: string | null;
+}
+
+export type WorkerType = 'employee' | 'intern' | 'freelancer';
+
+export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum' | 'nanti' | 'libur';
+
+export interface RosterEntry {
+  schedule_id: number;
+  worker: { type: WorkerType; id: number; company_id: number; number: string; name: string };
+  shift: { id: number; name: string; code: string | null; label: string; start_time: string; end_time: string } | null;
+  location_id: number | null;
+  section: string | null;
+  state: RosterState;
+  check_in: string | null;
+  check_out: string | null;
+  late_minutes: number;
+}
+
+export interface RosterOutlet {
+  location: { id: number; name: string } | null;
+  counts: { scheduled: number } & Record<RosterState, number>;
+  entries: RosterEntry[];
+}
+
+export interface TeamRoster {
+  date: string;
+  outlets: RosterOutlet[];
+}
+
+export interface TeamShift {
+  id: number;
+  name: string;
+  code: string | null;
+  brand: string | null;
+  label: string;
+  start_time: string;
+  end_time: string;
+}
+
+export interface TeamOutlet {
+  id: number;
+  name: string;
+  brand: string | null;
+}
+
+export interface TeamCompany {
+  id: number;
+  name: string;
+  outlets: TeamOutlet[];
+  shifts: TeamShift[];
+  sections: string[];
+}
+
+export interface TeamOptions {
+  companies: TeamCompany[];
+}
+
+export interface TeamWorker {
+  type: WorkerType;
+  id: number;
+  company_id: number;
+  number: string;
+  name: string;
+}
+
+export type ScheduleMode = 'shift' | 'off' | 'clear';
+
+export interface ScheduleChange {
+  worker_type: WorkerType;
+  worker_id: number;
+  date: string;
+  mode: ScheduleMode;
+  shift_id?: number | null;
+  company_location_id?: number | null;
+  section?: string | null;
+}
+
+export interface TeamFreelancer {
+  id: number;
+  company_id: number;
+  number: string;
+  name: string;
+  phone: string | null;
+  brand: string | null;
+  status: string;
+  is_active: boolean;
+  has_account: boolean;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+export interface NewFreelancer {
+  full_name: string;
+  phone: string;
+  company_location_id: number | null;
+  start_date: string;
+}
+
+export interface NewAccount {
+  email: string;
+  password: string;
+  whatsapp_sent: boolean;
+  whatsapp_url: string | null;
+}
+
+export interface NewFreelancerResponse {
+  message: string;
+  data: TeamFreelancer;
+  account: NewAccount | null;
+}
+
+export interface TeamRecapRow {
+  worker: { type: WorkerType; id: number; number: string; name: string; company: string | null; division: string | null };
+  outlet: string | null;
+  scheduled_days: number;
+  present_days: number;
+  late_days: number;
+  late_minutes: number;
+  absent_days: number;
+  off_days: number;
+  scheduled_hours: number;
+  worked_hours: number;
+}
+
+export interface TeamRecap {
+  month: string;
+  data: TeamRecapRow[];
 }

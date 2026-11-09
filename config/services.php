@@ -53,13 +53,26 @@ return [
         'expires_in' => (int) env('EMAIL_LOGIN_EXPIRES_IN', 600),
     ],
 
-    // Expo Push API for the mobile app. EXPO_ACCESS_TOKEN is only needed once "enhanced push
-    // security" is enabled for the Expo project.
-    'expo' => [
-        'push_url' => env('EXPO_PUSH_URL') ?: 'https://exp.host/--/api/v2/push/send',
-        'access_token' => env('EXPO_ACCESS_TOKEN'),
-        'connect_timeout' => (float) env('EXPO_CONNECT_TIMEOUT', 5),
-        'timeout' => (float) env('EXPO_API_TIMEOUT', 15),
+    // Where the email login link sends the mobile app. Expo Go in development needs its own URL,
+    // e.g. exp://127.0.0.1:8081/--/
+    'mobile_app' => [
+        'deep_link' => env('MOBILE_APP_DEEP_LINK', 'ontime://'),
+        // Store pages sent with a new account's login details. A link left empty is not sent.
+        'play_store_url' => env('MOBILE_APP_PLAY_STORE_URL', 'https://play.google.com/store/apps/details?id=co.id.oceanspace.ontime'),
+        'app_store_url' => env('MOBILE_APP_APP_STORE_URL'),
+    ],
+
+    // OneSignal push for the mobile app. The App ID is public (also in mobile/app.json); the REST API
+    // key is secret and only lives here. Without the key no push is sent.
+    'onesignal' => [
+        'app_id' => env('ONESIGNAL_APP_ID', '37e96a62-f9fc-45d5-8159-1f079b3f80f5'),
+        // The web panel can use a separate OneSignal app, since a web app is tied to one exact site URL
+        // (for example a localhost app while developing). Same app as the phones by default.
+        'web_app_id' => env('ONESIGNAL_WEB_APP_ID') ?: env('ONESIGNAL_APP_ID', '37e96a62-f9fc-45d5-8159-1f079b3f80f5'),
+        'rest_api_key' => env('ONESIGNAL_REST_API_KEY'),
+        'api_url' => env('ONESIGNAL_API_URL', 'https://api.onesignal.com/notifications?c=push'),
+        'connect_timeout' => (float) env('ONESIGNAL_CONNECT_TIMEOUT', 5),
+        'timeout' => (float) env('ONESIGNAL_TIMEOUT', 15),
     ],
 
     'google' => [
@@ -71,6 +84,32 @@ return [
         'client_secret' => env('CORE_CLIENT_SECRET'),
         'redirect' => env('CORE_REDIRECT_URI'),
         'webhook_secret' => env('CORE_WEBHOOK_SECRET'),
+    ],
+
+    // Face matching and liveness for attendance selfies.
+    'face' => [
+        // basic: built-in pixel comparison, not real face recognition. compreface: self-hosted CompreFace.
+        'driver' => env('FACE_DRIVER', 'basic'),
+        'compreface' => [
+            'url' => env('COMPREFACE_URL'), // e.g. http://compreface:8000
+            'verification_key' => env('COMPREFACE_VERIFICATION_KEY'),
+            'detection_key' => env('COMPREFACE_DETECTION_KEY'),
+            'timeout' => (int) env('COMPREFACE_TIMEOUT', 15),
+            'det_prob_threshold' => (float) env('COMPREFACE_DET_PROB_THRESHOLD', 0.8),
+        ],
+        'liveness' => [
+            'ttl_seconds' => (int) env('LIVENESS_TTL_SECONDS', 180),
+            'front_max_yaw' => 15, // degrees, |yaw| allowed for the "hadap depan" frame
+            'side_min_yaw' => 20, // degrees, |yaw| needed for each "tengok" frame
+            'max_pitch' => 25, // degrees, |pitch| allowed on every frame
+        ],
+    ],
+
+    'cesa' => [
+        // Food waste report for the F&B outlets, linked from the panel menu and the app.
+        'waste_url' => env('CESA_WASTE_URL', 'https://cesa.completeselular.com/waste'),
+        // Brand divisions whose crew report waste; a worker anywhere below one of them gets the link.
+        'waste_brands' => array_values(array_filter(array_map('trim', explode(',', (string) env('CESA_WASTE_BRANDS', 'JCHICKEN,MOMOYO,LUUCA'))))),
     ],
 
 ];

@@ -8,6 +8,8 @@
         $profile = $employee ?? $intern ?? $freelancer;
         $attendance = $this->todayAttendance;
         $policy = $this->companyPolicy;
+        $selfieMode = $policy?->selfieMode() ?? 'none';
+        $needsMasterFace = in_array($selfieMode, ['face', 'liveness'], true);
     @endphp
 
     @if($profile)
@@ -16,15 +18,15 @@
             <div class="flex items-center justify-between flex-wrap gap-2">
                 <div>
                     <h3 class="text-base sm:text-lg font-bold text-gray-950 dark:text-white">Presensi Mandiri Realtime</h3>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">Silakan lakukan Check In / Check Out via Kamera</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">Mode presensi: <span class="font-semibold text-gray-700 dark:text-gray-200">{{ $policy?->modeLabel() ?? 'Klik saja' }}</span></p>
                 </div>
                 <span class="text-xs font-semibold px-2.5 py-1 bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-gray-300 rounded-full border border-gray-200 dark:border-gray-700 shadow-sm">
                     {{ now()->translatedFormat('l, d F Y') }}
                 </span>
             </div>
 
-            <!-- Notice Photo Master jika Face Rec aktif namun belum daftar -->
-            @if($policy?->require_face_recognition && empty($profile->master_face_photo))
+            <!-- Master face notice when the selfie mode matches faces and none is registered -->
+            @if($needsMasterFace && empty($profile->master_face_photo))
                 <div class="p-3 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/80 rounded-xl flex items-center justify-between gap-3 text-xs">
                     <div class="flex items-center gap-2">
                         <svg class="w-5 h-5 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
@@ -37,7 +39,8 @@
             <div>
                 @if(!$attendance || !$attendance->check_out)
                     @include('filament.components.camera-capture', [
-                        'requireFaceRecognition' => $policy?->require_face_recognition ?? false,
+                        'policy' => $policy,
+                        'selfieMode' => $selfieMode,
                         'requireGps' => $policy?->require_gps ?? false,
                         'hasCheckedIn' => !empty($attendance?->check_in),
                         'hasCheckedOut' => !empty($attendance?->check_out),
@@ -68,7 +71,11 @@
                         </div>
                         <div class="mt-1.5">
                             @if($attendance?->check_in)
-                                @if($attendance->status === 'late')
+                                @if($attendance->status === \App\Enums\AttendanceStatus::PendingApproval)
+                                    <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
+                                        Menunggu Persetujuan
+                                    </span>
+                                @elseif($attendance->status === \App\Enums\AttendanceStatus::Late)
                                     <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
                                         Terlambat ({{ $attendance->late_minutes }}m)
                                     </span>

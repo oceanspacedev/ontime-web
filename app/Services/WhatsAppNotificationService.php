@@ -120,35 +120,46 @@ class WhatsAppNotificationService
     }
 
     /**
-     * Format and send WhatsApp notification for user account credentials.
-     * Uses purpose = 'notification'.
+     * The welcome message for a new account: where to get the app, then how to sign in.
+     */
+    public static function accountCredentialsMessage(string $name, ?string $phone, string $email, string $password): string
+    {
+        $stores = collect([
+            'Android' => config('services.mobile_app.play_store_url'),
+            'iPhone' => config('services.mobile_app.app_store_url'),
+        ])->filter()->map(fn (string $url, string $platform): string => "{$platform}: {$url}");
+
+        $lines = ["Halo {$name}, akun OnTime Anda sudah aktif.", ''];
+
+        if ($stores->isNotEmpty()) {
+            array_push($lines, '*1. Pasang aplikasi OnTime*', ...$stores->values()->all());
+            $lines[] = '';
+        }
+
+        array_push(
+            $lines,
+            $stores->isNotEmpty() ? '*2. Masuk*' : '*Masuk ke aplikasi OnTime*',
+            "Email: {$email}",
+            "Kata sandi: {$password}",
+        );
+
+        if (static::normalizePhoneNumber($phone)) {
+            $lines[] = 'Atau tekan tombol *WhatsApp* di halaman masuk dan pakai nomor ini.';
+        }
+
+        array_push($lines, '', 'Jangan bagikan kata sandi ini ke siapa pun.');
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Send a new account's welcome message.
      *
      * @return array{success: bool, api_sent: bool, api_error: string|null, message: string, phone: string|null, wa_url: string|null}
      */
-    public static function sendAccountCredentials(string $name, ?string $phone, string $email, string $password, string $role): array
+    public static function sendAccountCredentials(string $name, ?string $phone, string $email, string $password): array
     {
-        $normalizedPhone = static::normalizePhoneNumber($phone);
-
-        $message = "Halo {$name},\n\n"
-            ."Akun Anda untuk sistem OnTime telah berhasil dibuat!\n\n"
-            ."Detail Kredensial Login Anda:\n"
-            ."- Email: {$email}\n"
-            .($normalizedPhone ? "- No. HP: {$normalizedPhone}\n" : '')
-            ."- Password: {$password}\n"
-            ."- Role Akses: {$role}\n\n"
-            ."Anda dapat melakukan login ke sistem melalui 2 cara:\n"
-            ."1. Login Email & Password:\n"
-            ."   - Masukkan Email: {$email}\n"
-            ."   - Masukkan Password: {$password}\n\n"
-            ."2. Login via WhatsApp OTP:\n"
-            ."   - Buka halaman login sistem\n"
-            ."   - Pilih opsi 'Login via WhatsApp'\n"
-            .'   - Masukkan Nomor WhatsApp Anda: '.($normalizedPhone ?: ($phone ?: '-'))."\n"
-            ."   - Masukkan kode OTP yang dikirimkan ke WhatsApp ini untuk verifikasi dan masuk.\n\n"
-            ."Mohon segera login dan jaga kerahasiaan kredensial Anda.\n\n"
-            .'Terima kasih.';
-
-        return static::sendMessage($phone, $message, 'notification');
+        return static::sendMessage($phone, static::accountCredentialsMessage($name, $phone, $email, $password), 'notification');
     }
 
     /**

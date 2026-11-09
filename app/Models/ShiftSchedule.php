@@ -19,7 +19,9 @@ class ShiftSchedule extends Model
         'intern_id',
         'freelancer_id',
         'shift_id',
+        'company_location_id',
         'is_day_off',
+        'section',
         'notes',
         'created_by',
     ];
@@ -29,6 +31,8 @@ class ShiftSchedule extends Model
         static::saving(function (ShiftSchedule $schedule): void {
             if ($schedule->is_day_off) {
                 $schedule->shift_id = null;
+                $schedule->company_location_id = null;
+                $schedule->section = null;
             }
         });
     }
@@ -59,6 +63,14 @@ class ShiftSchedule extends Model
     public function shift(): BelongsTo
     {
         return $this->belongsTo(Shift::class);
+    }
+
+    /**
+     * Outlet the worker works at that day.
+     */
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(CompanyLocation::class, 'company_location_id');
     }
 
     public function creator(): BelongsTo

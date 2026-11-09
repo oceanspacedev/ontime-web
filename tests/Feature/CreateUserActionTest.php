@@ -63,9 +63,7 @@ class CreateUserActionTest extends TestCase
 
         Livewire::test(EmployeeResource\Pages\ListEmployees::class)
             ->callTableAction('createUser', $employee, [
-                'email' => 'budi.santoso@company.com',
                 'role' => 'Approver',
-                'password' => 'secret123',
             ])
             ->assertHasNoTableActionErrors()
             ->assertNotified();
@@ -82,7 +80,8 @@ class CreateUserActionTest extends TestCase
             $body = json_encode($request->data());
 
             return (str_contains($request->url(), 'waghub.mekayastudio.com') || str_contains($request->url(), 'messages'))
-                && str_contains($body, 'Login via WhatsApp OTP')
+                && str_contains($body, 'https:\\/\\/play.google.com\\/store\\/apps\\/details?id=co.id.oceanspace.ontime')
+                && str_contains($body, 'Kata sandi')
                 && str_contains($body, 'budi.santoso@company.com');
         });
     }

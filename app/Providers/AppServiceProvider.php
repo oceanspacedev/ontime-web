@@ -4,10 +4,15 @@ namespace App\Providers;
 
 use App\Enums\SystemRole;
 use App\Services\Core\CoreSsoProvider;
+use App\Services\Face\BasicFaceVerifier;
+use App\Services\Face\CompreFaceVerifier;
+use App\Services\Face\FaceVerifier;
+use App\Support\IdleApiTokens;
 use App\Support\ObservabilityAccess;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -23,7 +28,10 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        $this->app->bind(FaceVerifier::class, fn (Application $app): FaceVerifier => match (config('services.face.driver')) {
+            'compreface' => $app->make(CompreFaceVerifier::class),
+            default => $app->make(BasicFaceVerifier::class),
+        });
     }
 
     public function boot(): void
@@ -36,9 +44,12 @@ class AppServiceProvider extends ServiceProvider
             return $user->hasRole('Superadmin') ? true : null;
         });
 
-        // API tokens of deactivated accounts (for example after an approved resignation) stop working.
+        // API tokens of deactivated accounts (for example after an approved resignation) stop working,
+        // and so do tokens left unused for longer than sanctum.idle_expiration.
         Sanctum::authenticateAccessTokensUsing(
-            fn (PersonalAccessToken $token, bool $isValid): bool => $isValid && $token->tokenable?->is_active !== false,
+            fn (PersonalAccessToken $token, bool $isValid): bool => $isValid
+                && $token->tokenable?->is_active !== false
+                && ! IdleApiTokens::isIdle($token),
         );
 
         if (class_exists(Socialite::class)) {
@@ -52,6 +63,25 @@ class AppServiceProvider extends ServiceProvider
         $this->protectSystemRoles();
         $this->explainBlockedDeletions();
         $this->limitOtpLogin();
+        $this->limitPasswordLogin();
+    }
+
+    /**
+     * Password guessing on the API login: 5 tries a minute per email from one address, 20 a minute
+     * per address overall.
+     */
+    private function limitPasswordLogin(): void
+    {
+        $tooMany = fn (Request $request, array $headers) => response()->json(
+            ['message' => 'Terlalu banyak percobaan masuk. Silakan coba lagi sebentar lagi.', 'retry_after' => (int) ($headers['Retry-After'] ?? 60)],
+            429,
+            $headers,
+        );
+
+        RateLimiter::for('api-login', fn (Request $request): array => [
+            Limit::perMinute(5)->by('api-login:'.mb_strtolower(trim((string) $request->input('email'))).'|'.$request->ip())->response($tooMany),
+            Limit::perMinute(20)->by('api-login-ip:'.$request->ip())->response($tooMany),
+        ]);
     }
 
     /**

@@ -22,6 +22,7 @@ class Attendance extends Model
         'intern_id',
         'freelancer_id',
         'shift_id',
+        'company_location_id',
         'date',
         'check_in',
         'check_out',
@@ -36,9 +37,13 @@ class Attendance extends Model
         'notes',
         'is_corrected',
         'is_out_of_bounds',
+        'is_mock_location',
         'is_face_verified',
         'face_match_score',
         'face_verification_notes',
+        'liveness_verified',
+        'liveness_notes',
+        'liveness_frames',
         'current_step',
         'rejection_reason',
     ];
@@ -55,8 +60,11 @@ class Attendance extends Model
             'check_out_lng' => 'decimal:7',
             'is_corrected' => 'boolean',
             'is_out_of_bounds' => 'boolean',
+            'is_mock_location' => 'boolean',
             'is_face_verified' => 'boolean',
             'face_match_score' => 'integer',
+            'liveness_verified' => 'boolean',
+            'liveness_frames' => 'array',
             'current_step' => 'integer',
             'status' => AttendanceStatus::class,
         ];
@@ -70,6 +78,14 @@ class Attendance extends Model
     public function shift(): BelongsTo
     {
         return $this->belongsTo(Shift::class);
+    }
+
+    /**
+     * Outlet the worker was scheduled at when checking in.
+     */
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(CompanyLocation::class, 'company_location_id');
     }
 
     public function employee(): BelongsTo

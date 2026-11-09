@@ -6,7 +6,7 @@ Aplikasi presensi dan pengajuan karyawan untuk banyak badan usaha. Panel admin d
 
 - **Struktur organisasi:** badan usaha, divisi bertingkat, lokasi dan cabang dengan geofence, tingkat jabatan, dan posisi.
 - **Pekerja:** karyawan, peserta magang, dan freelancer. Akun login bisa dibuat dari data pekerja, dan info akunnya dikirim lewat WhatsApp.
-- **Presensi:** check-in dan check-out dengan foto, GPS, dan geofence. Absen di luar geofence masuk alur persetujuan.
+- **Presensi:** delapan mode per badan usaha dari GPS (geofence dan deteksi lokasi palsu) dan verifikasi selfie (tanpa foto, foto, foto + wajah, atau liveness gerak kepala + wajah). Aturannya sama di aplikasi mobile dan panel web. Absen di luar geofence, lokasi palsu, atau wajah tidak cocok bisa dialihkan ke alur persetujuan.
 - **Jadwal dan shift:** master shift per badan usaha, shift default per pekerja, dan jadwal massal per tanggal.
 - **Pengajuan:** cuti dan izin dengan kuota tahunan, lembur dengan durasi aktual, koreksi absensi, dan pengunduran diri.
 - **Persetujuan bertingkat:** tahap diatur per badan usaha dan jenis pengajuan, dengan notifikasi di panel untuk penyetuju.
@@ -102,6 +102,11 @@ Semua kunci di bawah ini boleh dikosongkan di lokal.
 | `MAIL_MAILER` (misalnya `smtp`), `MAIL_FROM_ADDRESS` | Login dengan email: satu email berisi kode OTP dan magic link. Tidak tampil selama `MAIL_MAILER=log`. |
 | `CORE_WEBHOOK_SECRET` | Sinkronisasi karyawan dari Core HR. Webhook ditolak selama kosong. |
 | `CORE_CLIENT_ID`, `CORE_CLIENT_SECRET`, `CORE_REDIRECT_URI` | Tombol login lewat akun Core (SSO). |
+| `FACE_DRIVER` | Mesin verifikasi wajah presensi. `basic` (bawaan) hanya membandingkan warna piksel foto yang diperkecil, jadi **bukan pengenalan wajah sungguhan**: cahaya dan latar belakang berpengaruh sebesar wajah. `compreface` memakai CompreFace dan wajib untuk mode liveness. |
+| `COMPREFACE_URL`, `COMPREFACE_VERIFICATION_KEY`, `COMPREFACE_DETECTION_KEY` | Alamat CompreFace (misalnya `http://compreface:8000`) dan API key layanan "Verification" (cocokkan wajah) serta "Detection" (arah kepala untuk liveness) dari dashboard CompreFace. Opsional: `COMPREFACE_TIMEOUT` (15 detik), `COMPREFACE_DET_PROB_THRESHOLD` (0.8). |
+| `LIVENESS_TTL_SECONDS` | Masa berlaku satu tantangan liveness (gerak kepala), bawaan 180 detik. |
+
+[CompreFace](https://github.com/exadel-inc/CompreFace) berjalan sebagai layanan Docker terpisah yang di-host sendiri, tidak lewat paket composer. Pasang dengan `docker compose` dari repositorinya, buat satu layanan Verification dan satu layanan Detection di dashboard-nya, lalu isi kuncinya di `.env`. Selama `FACE_DRIVER=basic`, panel menandai mode "Foto + Wajah" sebagai tidak akurat dan mode liveness tidak bisa dipilih. Bila CompreFace tidak bisa dihubungi, check-in di mode wajah dan liveness ditolak dengan 503 sampai layanannya kembali.
 
 ## Login
 

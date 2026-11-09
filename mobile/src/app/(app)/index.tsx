@@ -1,25 +1,35 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { router, type Href } from 'expo-router';
-import { Pressable, View } from 'react-native';
+import { Linking, Pressable, View } from 'react-native';
 
 import { TODAY_GROUP_TITLE, TodayCard } from '@/components/TodayCard';
 import { Avatar, ErrorBanner, Group, IconButton, type IconName, LoadingView, Notice, ProgressBar, QuickAction, Row, Screen, SectionTitle, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { approvalsApi, attendanceApi, errorMessage, requestsApi } from '@/lib/api';
+import { approvalsApi, attendanceApi, errorMessage, requestsApi, teamApi } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
-import { greeting } from '@/lib/format';
+import { greeting, toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
+import { rosterSummary, teamAttention } from '@/lib/team';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface MenuItem {
   key: string;
   label: string;
   icon: IconName;
-  href: Href;
+  /** A screen in the app, or an external page opened in the browser. */
+  href: Href | { external: string };
   badge?: number;
+}
+
+function openMenuItem(item: MenuItem): void {
+  if (typeof item.href === 'object' && 'external' in item.href) {
+    void Linking.openURL(item.href.external);
+    return;
+  }
+  router.push(item.href);
 }
 
 /** Quick action tiles per row on the home screen. */
@@ -60,24 +70,32 @@ export default function HomeScreen() {
     queryFn: approvalsApi.pending,
     enabled: access.canApprove,
   });
+  const todayDate = toDateString(new Date());
+  const team = useQuery({
+    queryKey: queryKeys.teamRoster(todayDate),
+    queryFn: () => teamApi.roster(todayDate),
+    enabled: access.canManageTeam,
+  });
 
   const refresh = () => {
     refreshUser.mutate();
     void today.refetch();
     void leaves.refetch();
     void pending.refetch();
+    void team.refetch();
   };
 
   const pendingCount = countPending(pending.data);
 
+  // Only what the bottom bar does not already offer: Riwayat and Persetujuan have their own tabs.
   const menu: MenuItem[] = [
-    { key: 'history', label: 'Riwayat', icon: 'calendar-outline', href: '/history' },
     ...(access.canRequestLeave ? [{ key: 'leave', label: 'Cuti / Izin', icon: 'sunny-outline', href: '/request/leave/new' } as MenuItem] : []),
     ...(access.canRequestOvertime ? [{ key: 'overtime', label: 'Lembur', icon: 'moon-outline', href: '/request/overtime/new' } as MenuItem] : []),
     ...(access.canRequestCorrection ? [{ key: 'correction', label: 'Koreksi', icon: 'create-outline', href: '/request/correction/new' } as MenuItem] : []),
     ...(access.canSeeLeaveCalendar ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
-    ...(access.canApprove ? [{ key: 'approvals', label: 'Persetujuan', icon: 'checkmark-done-outline', href: '/approvals', badge: pendingCount } as MenuItem] : []),
-    ...(access.canUseAttendance ? [{ key: 'face', label: 'Master Wajah', icon: 'scan-outline', href: '/attendance/master-face' } as MenuItem] : []),
+    // Team runners have Tim in the bar instead of Riwayat, so Riwayat stays reachable here.
+    ...(access.canManageTeam && access.canUseAttendance ? [{ key: 'history', label: 'Riwayat', icon: 'calendar-outline', href: '/history' } as MenuItem] : []),
+    ...(access.wasteUrl ? [{ key: 'waste', label: 'Waste', icon: 'trash-outline', href: { external: access.wasteUrl } } as MenuItem] : []),
   ];
 
   const displayName = access.profileName || user?.name;
@@ -106,11 +124,9 @@ export default function HomeScreen() {
               .join(' · ') || access.roles.join(', ')}
           </Text>
         </View>
-        {access.canApprove ? (
+        {access.canApprove && pendingCount > 0 ? (
           <IconButton icon="notifications-outline" onPress={() => router.push('/approvals')} badge={pendingCount} accessibilityLabel="Persetujuan" />
-        ) : (
-          <IconButton icon="person-outline" onPress={() => router.push('/profile')} accessibilityLabel="Profil" />
-        )}
+        ) : null}
       </View>
 
       {access.canUseAttendance ? (
@@ -127,13 +143,24 @@ export default function HomeScreen() {
         <Notice tone="info" message="Akun ini tidak terhubung ke profil pekerja, jadi presensi dan pengajuan pribadi tidak tersedia. Menu lain tetap bisa dipakai sesuai role." />
       )}
 
+      {access.canManageTeam && team.data ? (
+        <Group title="Tim hari ini">
+          <Row
+            icon="people-outline"
+            title={rosterSummary(team.data)}
+            subtitle={teamAttention(team.data)}
+            onPress={() => router.push('/team')}
+          />
+        </Group>
+      ) : null}
+
       <View style={styles.menu}>
         <SectionTitle title="Menu" />
         {toRows(menu).map((row, rowIndex) => (
           <View key={rowIndex} style={styles.menuRow}>
             {row.map((item, slot) =>
               item ? (
-                <QuickAction key={item.key} icon={item.icon} label={item.label} badge={item.badge} onPress={() => router.push(item.href)} />
+                <QuickAction key={item.key} icon={item.icon} label={item.label} badge={item.badge} onPress={() => openMenuItem(item)} />
               ) : (
                 <View key={`empty-${slot}`} style={styles.menuSpacer} />
               ),

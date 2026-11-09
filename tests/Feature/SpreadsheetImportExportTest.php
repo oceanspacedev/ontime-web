@@ -11,6 +11,7 @@ use App\Models\Employee;
 use App\Models\Intern;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
+use App\Models\Shift;
 use App\Models\User;
 use Filament\Actions\Exports\Models\Export;
 use Filament\Actions\Imports\Exceptions\RowImportFailedException;
@@ -124,6 +125,35 @@ class SpreadsheetImportExportTest extends TestCase
         $this->runEmployeeRow(['2026.03.03.03', 'AMBIGU', 'TOP', 'DEPO BANDUNG', 'STAFF', 'SALES', '', '', '', '', '']);
     }
 
+    public function test_brand_shift_names_resolve_to_the_worker_brand_or_the_written_brand(): void
+    {
+        $luuca = Division::create(['company_id' => $this->top->id, 'name' => 'LUUCA', 'is_active' => true]);
+        $salesMorning = Shift::create(['company_id' => $this->top->id, 'division_id' => $this->depo->parent_id, 'name' => 'Pagi', 'start_time' => '08:00', 'end_time' => '17:00']);
+        $luucaMorning = Shift::create(['company_id' => $this->top->id, 'division_id' => $luuca->id, 'name' => 'Pagi', 'start_time' => '09:00', 'end_time' => '18:00']);
+
+        $this->runEmployeeRow(['2026.04.04.04', 'SHIFT BRAND SENDIRI', 'TOP', 'DEPO BANDUNG', 'STAFF', 'SALES', '', '', '', '', ''], shift: 'Pagi');
+        $this->runEmployeeRow(['2026.05.05.05', 'SHIFT BRAND LAIN', 'TOP', 'DEPO BANDUNG', 'STAFF', 'SALES', '', '', '', '', ''], shift: 'luuca · pagi');
+        $this->runEmployeeRow(['2026.06.06.06', 'SHIFT PIPA', 'TOP', 'DEPO BANDUNG', 'STAFF', 'SALES', '', '', '', '', ''], shift: 'LUUCA | Pagi');
+
+        $this->assertSame($salesMorning->id, Employee::where('nip', '2026.04.04.04')->value('shift_id'), 'The brand above the worker division wins.');
+        $this->assertSame($luucaMorning->id, Employee::where('nip', '2026.05.05.05')->value('shift_id'));
+        $this->assertSame($luucaMorning->id, Employee::where('nip', '2026.06.06.06')->value('shift_id'));
+        $this->assertSame('LUUCA · Pagi', $luucaMorning->qualifiedName());
+    }
+
+    public function test_shift_name_used_by_other_brands_only_must_name_the_brand(): void
+    {
+        foreach (['JCHICKEN', 'MOMOYO'] as $brand) {
+            $division = Division::create(['company_id' => $this->top->id, 'name' => $brand, 'is_active' => true]);
+            Shift::create(['company_id' => $this->top->id, 'division_id' => $division->id, 'name' => 'Siang', 'start_time' => '13:00', 'end_time' => '22:00']);
+        }
+
+        $this->expectException(RowImportFailedException::class);
+        $this->expectExceptionMessage('ada di beberapa brand');
+
+        $this->runEmployeeRow(['2026.07.07.07', 'AMBIGU', 'TOP', 'DEPO BANDUNG', 'STAFF', 'SALES', '', '', '', '', ''], shift: 'Siang');
+    }
+
     public function test_company_admin_cannot_import_into_other_companies(): void
     {
         $admin = User::factory()->create();
@@ -198,11 +228,17 @@ class SpreadsheetImportExportTest extends TestCase
     /**
      * @param  list<string>  $values  in the order of self::HEADER
      */
-    private function runEmployeeRow(array $values, ?User $user = null): void
+    private function runEmployeeRow(array $values, ?User $user = null, ?string $shift = null): void
     {
         $import = Import::create(['file_name' => 'karyawan.csv', 'file_path' => 'karyawan.csv', 'importer' => EmployeeImporter::class, 'total_rows' => 1, 'user_id' => ($user ?? $this->superadmin)->id]);
         $columns = array_combine(['nip', 'full_name', 'company', 'division', 'job_level', 'job_title', 'email', 'phone', 'gender', 'birth_date', 'status'], self::HEADER);
+        $row = array_combine(self::HEADER, $values);
 
-        ($import->getImporter($columns, []))(array_combine(self::HEADER, $values));
+        if ($shift !== null) {
+            $columns['shift'] = 'Shift';
+            $row['Shift'] = $shift;
+        }
+
+        ($import->getImporter($columns, []))($row);
     }
 }

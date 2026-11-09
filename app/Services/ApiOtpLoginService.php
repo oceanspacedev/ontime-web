@@ -18,6 +18,10 @@ use Throwable;
  * A challenge id stands in for the browser session the web pages use: it records which channel and
  * which number or address a code was sent to, so the client only has to send the id and the code
  * back. Like the web pages, a request never reveals whether the number or address has an account.
+ *
+ * The email link login works the same way: the email carries only a link that opens the app, and the
+ * app sends the link's token together with the challenge id it kept. A token on its own, say from an
+ * email opened on another device, logs nobody in.
  */
 class ApiOtpLoginService
 {
@@ -26,6 +30,9 @@ class ApiOtpLoginService
     public const CHANNEL_EMAIL = 'email';
 
     public const CHANNELS = [self::CHANNEL_WHATSAPP, self::CHANNEL_EMAIL];
+
+    /** Challenge channel of the email link login; not one a client can pick for a code. */
+    private const CHANNEL_EMAIL_LINK = 'email-link';
 
     private const OTP_PURPOSE = 'login';
 
@@ -58,6 +65,45 @@ class ApiOtpLoginService
             self::CHANNEL_EMAIL => $this->requestEmail($destination, $ip),
             default => $this->failure('invalid_destination'),
         };
+    }
+
+    /**
+     * Email a link that opens the app and open a challenge for it. Same statuses as request().
+     *
+     * @return array{ok: bool, status: string, challenge_id: string|null, expires_in: int, retry_after: int}
+     */
+    public function requestMagicLink(string $destination, string $ip): array
+    {
+        return $this->requestEmail($destination, $ip, magicLinkOnly: true);
+    }
+
+    /**
+     * Check the token from the email link against its challenge. Same statuses as verify().
+     *
+     * @return array{ok: bool, status: string, user: User|null, retry_after: int}
+     */
+    public function verifyMagicLink(string $challengeId, string $token): array
+    {
+        $challenge = $this->loadChallenge($challengeId);
+        if ($challenge === null || $challenge['channel'] !== self::CHANNEL_EMAIL_LINK) {
+            return $this->verifyFailure('expired');
+        }
+
+        $email = $this->destination($challenge);
+        if ($email === null) {
+            $this->forgetChallenge($challengeId);
+
+            return $this->verifyFailure('expired');
+        }
+
+        $user = $this->emailOtpService->consumeMagicLink($token, EmailOtp::PURPOSE_LOGIN, $email, allowInactive: true);
+        if ($user === null) {
+            return $this->verifyFailure('invalid');
+        }
+
+        $this->forgetChallenge($challengeId);
+
+        return $this->verified($user);
     }
 
     /**
@@ -122,7 +168,7 @@ class ApiOtpLoginService
     /**
      * @return array{ok: bool, status: string, challenge_id: string|null, expires_in: int, retry_after: int}
      */
-    private function requestEmail(string $destination, string $ip): array
+    private function requestEmail(string $destination, string $ip, bool $magicLinkOnly = false): array
     {
         $email = EmailOtpService::normalizeEmail($destination);
         if ($email === null) {
@@ -149,7 +195,13 @@ class ApiOtpLoginService
         $user = $this->emailOtpService->findUser($email, includeInactive: true);
         if ($user !== null) {
             try {
-                $this->emailOtpService->issue($user, $email, EmailOtp::PURPOSE_LOGIN);
+                $this->emailOtpService->issue(
+                    $user,
+                    $email,
+                    EmailOtp::PURPOSE_LOGIN,
+                    $magicLinkOnly ? fn (string $token): string => route('app-login.link', ['token' => $token]) : null,
+                    includeCode: ! $magicLinkOnly,
+                );
             } catch (Throwable) {
                 return $this->failure('delivery_failed');
             }
@@ -158,7 +210,7 @@ class ApiOtpLoginService
         $expiresIn = $this->emailOtpService->expiresIn();
 
         return $this->storeChallenge([
-            'channel' => self::CHANNEL_EMAIL,
+            'channel' => $magicLinkOnly ? self::CHANNEL_EMAIL_LINK : self::CHANNEL_EMAIL,
             'destination_encrypted' => Crypt::encryptString($email),
             'expires_at' => now()->addSeconds($expiresIn)->toIso8601String(),
         ], $expiresIn);

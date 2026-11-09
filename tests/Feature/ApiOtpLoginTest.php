@@ -27,6 +27,10 @@ class ApiOtpLoginTest extends TestCase
 
     private const VERIFY_URL = '/api/v1/auth/otp/verify';
 
+    private const LINK_REQUEST_URL = '/api/v1/auth/magic-link/request';
+
+    private const LINK_VERIFY_URL = '/api/v1/auth/magic-link/verify';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -268,6 +272,154 @@ class ApiOtpLoginTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    // --- Email link -----------------------------------------------------------------------------
+
+    public function test_user_logs_in_with_the_link_emailed_to_the_app(): void
+    {
+        $user = User::factory()->create(['email' => 'pekerja@contoh.id', 'email_verified_at' => null]);
+        $user->assignRole('Employee');
+
+        $challengeId = $this->requestAppLink('Pekerja@Contoh.id')
+            ->assertOk()
+            ->assertJsonStructure(['message', 'challenge_id', 'expires_in'])
+            ->json('challenge_id');
+
+        Mail::assertSent(EmailLoginMail::class, fn (EmailLoginMail $mail): bool => $mail->hasTo('pekerja@contoh.id')
+            && $mail->otp === null
+            && $mail->envelope()->subject === 'Link masuk '.config('app.name')
+            && str_starts_with($mail->loginUrl, url('app/email-login').'/'));
+
+        $verified = $this->verifyAppLink($challengeId, $this->sentAppLinkToken())
+            ->assertOk()
+            ->assertJsonPath('token_type', 'Bearer')
+            ->assertJsonPath('user.id', $user->id)
+            ->assertJsonStructure(['token', 'user']);
+
+        $this->withToken($verified->json('token'))->getJson('/api/v1/auth/me')->assertOk();
+        $this->assertNotNull($user->fresh()->email_verified_at);
+    }
+
+    public function test_app_link_can_only_be_used_once(): void
+    {
+        User::factory()->create(['email' => 'pekerja@contoh.id']);
+        $challengeId = $this->requestAppLink('pekerja@contoh.id')->json('challenge_id');
+        $token = $this->sentAppLinkToken();
+
+        $this->verifyAppLink($challengeId, $token)->assertOk();
+        $this->verifyAppLink($challengeId, $token)
+            ->assertStatus(401)
+            ->assertJsonPath('message', 'Link masuk tidak valid atau sudah kedaluwarsa. Minta link baru dari aplikasi.');
+    }
+
+    public function test_app_link_only_works_with_the_challenge_it_was_sent_for(): void
+    {
+        User::factory()->create(['email' => 'korban@contoh.id']);
+        User::factory()->create(['email' => 'lain@contoh.id']);
+
+        $otherChallengeId = $this->requestAppLink('lain@contoh.id')->json('challenge_id');
+        $victimChallengeId = $this->requestAppLink('korban@contoh.id')->json('challenge_id');
+        $victimToken = $this->sentAppLinkToken();
+
+        $this->verifyAppLink($otherChallengeId, $victimToken)->assertStatus(401);
+        $this->verifyAppLink('otp_'.str_repeat('a', 48), $victimToken)->assertStatus(401);
+        $this->assertDatabaseCount('personal_access_tokens', 0);
+
+        // The failed tries did not use the link up for the device that asked for it.
+        $this->verifyAppLink($victimChallengeId, $victimToken)->assertOk();
+    }
+
+    public function test_link_and_code_challenges_are_not_interchangeable(): void
+    {
+        User::factory()->create(['email' => 'pekerja@contoh.id']);
+
+        $linkChallengeId = $this->requestAppLink('pekerja@contoh.id')->json('challenge_id');
+        $this->verify($linkChallengeId, '123456')->assertStatus(401);
+
+        $codeChallengeId = $this->requestEmailCode('pekerja@contoh.id')->json('challenge_id');
+        $codeEmail = Mail::sent(EmailLoginMail::class)->last();
+        $this->assertNotNull($codeEmail->otp);
+        $codeToken = basename(parse_url($codeEmail->loginUrl, PHP_URL_PATH));
+
+        $this->verifyAppLink($codeChallengeId, $codeToken)->assertStatus(401);
+    }
+
+    public function test_unknown_email_gets_a_link_challenge_but_no_email(): void
+    {
+        $this->requestAppLink('tidak-ada@contoh.id')
+            ->assertOk()
+            ->assertJsonStructure(['challenge_id', 'expires_in']);
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_inactive_account_is_refused_with_403_after_a_valid_app_link(): void
+    {
+        User::factory()->create(['email' => 'pekerja@contoh.id', 'is_active' => false]);
+        $challengeId = $this->requestAppLink('pekerja@contoh.id')->json('challenge_id');
+
+        $this->verifyAppLink($challengeId, $this->sentAppLinkToken())
+            ->assertStatus(403)
+            ->assertJsonPath('message', 'Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.');
+        $this->assertDatabaseCount('personal_access_tokens', 0);
+    }
+
+    public function test_expired_app_link_is_refused(): void
+    {
+        User::factory()->create(['email' => 'pekerja@contoh.id']);
+        $challengeId = $this->requestAppLink('pekerja@contoh.id')->json('challenge_id');
+        $token = $this->sentAppLinkToken();
+
+        $this->travel(11)->minutes();
+
+        $this->verifyAppLink($challengeId, $token)->assertStatus(401);
+    }
+
+    public function test_app_link_is_unavailable_when_no_real_mailer_is_configured(): void
+    {
+        config(['mail.default' => 'log', 'mail.mailers.log.transport' => 'log']);
+
+        $this->requestAppLink('pekerja@contoh.id')->assertStatus(503);
+        Mail::assertNothingSent();
+    }
+
+    public function test_app_link_bodies_are_validated(): void
+    {
+        $this->postJson(self::LINK_REQUEST_URL, ['email' => 'bukan-email'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['email' => 'Alamat email tidak valid.']);
+        $this->postJson(self::LINK_VERIFY_URL, ['challenge_id' => 'otp_x', 'token' => 'pendek'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['token']);
+        $this->postJson(self::LINK_VERIFY_URL, ['token' => str_repeat('a', 64)])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['challenge_id']);
+    }
+
+    public function test_link_page_opens_the_app_without_using_the_token(): void
+    {
+        config(['services.mobile_app.deep_link' => 'ontime://']);
+        User::factory()->create(['email' => 'pekerja@contoh.id']);
+        $challengeId = $this->requestAppLink('pekerja@contoh.id')->json('challenge_id');
+        $token = $this->sentAppLinkToken();
+
+        $this->get(Mail::sent(EmailLoginMail::class)->last()->loginUrl)
+            ->assertOk()
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertSee('ontime://email-login?token='.$token, escape: false);
+
+        $this->verifyAppLink($challengeId, $token)->assertOk();
+    }
+
+    public function test_link_page_follows_the_configured_deep_link(): void
+    {
+        config(['services.mobile_app.deep_link' => 'exp://127.0.0.1:8081/--/']);
+        $token = str_repeat('a', 64);
+
+        $this->get(route('app-login.link', ['token' => $token]))
+            ->assertOk()
+            ->assertSee('exp://127.0.0.1:8081/--/email-login?token='.$token, escape: false);
+    }
+
     // --- Common ---------------------------------------------------------------------------------
 
     public function test_request_body_is_validated(): void
@@ -321,6 +473,24 @@ class ApiOtpLoginTest extends TestCase
     private function requestEmailCode(string $email): TestResponse
     {
         return $this->postJson(self::REQUEST_URL, ['channel' => 'email', 'email' => $email]);
+    }
+
+    private function requestAppLink(string $email): TestResponse
+    {
+        return $this->postJson(self::LINK_REQUEST_URL, ['email' => $email]);
+    }
+
+    private function verifyAppLink(string $challengeId, string $token): TestResponse
+    {
+        return $this->postJson(self::LINK_VERIFY_URL, ['challenge_id' => $challengeId, 'token' => $token]);
+    }
+
+    /**
+     * The token at the end of the link in the last login email.
+     */
+    private function sentAppLinkToken(): string
+    {
+        return basename((string) parse_url(Mail::sent(EmailLoginMail::class)->last()->loginUrl, PHP_URL_PATH));
     }
 
     private function verify(string $challengeId, string $code): TestResponse
