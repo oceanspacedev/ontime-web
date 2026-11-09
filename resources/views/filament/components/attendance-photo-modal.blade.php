@@ -1,13 +1,6 @@
 <div class="space-y-4 p-2 text-center">
     @php
-        $disk = config('filesystems.default');
-        $getPhotoUrl = function(?string $path) use ($disk) {
-            if (! $path) return null;
-            if (str_starts_with($path, 'http')) return $path;
-            return $disk === 's3' 
-                ? Storage::disk($disk)->temporaryUrl($path, now()->addMinutes(60))
-                : Storage::disk($disk)->url($path);
-        };
+        $getPhotoUrl = fn (?string $path): ?string => \App\Support\StorageUrl::for($path);
         $checkInUrl = $getPhotoUrl($record->check_in_photo);
         $checkOutUrl = $getPhotoUrl($record->check_out_photo);
     @endphp
