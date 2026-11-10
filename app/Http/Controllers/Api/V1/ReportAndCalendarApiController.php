@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
 use App\Models\LeaveRequest;
+use App\Support\StorageUrl;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -63,7 +64,7 @@ class ReportAndCalendarApiController extends Controller
                 'days_count' => $leave->days_count,
                 'status' => $leave->status,
                 'reason' => $leave->reason,
-                'master_face_photo' => $person?->master_face_photo ?? null,
+                'master_face_photo' => StorageUrl::for($person?->master_face_photo),
             ];
         });
 
