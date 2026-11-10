@@ -14,14 +14,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('company_user', function (Blueprint $table) {
-            $table->foreignId('company_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->timestamps();
+        // MySQL cannot roll back DDL, so a run that failed after the create leaves an empty, possibly
+        // half-built company_user behind. Rebuild it so the keys match; keep it if it already holds data.
+        if (Schema::hasTable('company_user') && DB::table('company_user')->doesntExist()) {
+            Schema::drop('company_user');
+        }
 
-            $table->primary(['company_id', 'user_id']);
-            $table->index('user_id');
-        });
+        if (! Schema::hasTable('company_user')) {
+            $this->createCompanyUserTable();
+        }
 
         $roles = config('permission.table_names.roles', 'roles');
 
@@ -35,5 +36,17 @@ return new class extends Migration
     public function down(): void
     {
         Schema::dropIfExists('company_user');
+    }
+
+    private function createCompanyUserTable(): void
+    {
+        Schema::create('company_user', function (Blueprint $table) {
+            $table->foreignId('company_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->timestamps();
+
+            $table->primary(['company_id', 'user_id']);
+            $table->index('user_id');
+        });
     }
 };
