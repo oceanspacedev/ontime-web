@@ -10,6 +10,7 @@ use App\Models\Company;
 use App\Models\CompanyPolicy;
 use App\Models\Division;
 use App\Services\DataAccessService;
+use App\Support\StorageUrl;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -244,14 +245,14 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
 
                 ImageColumn::make('check_in_photo')
                     ->label('Foto Check-In')
-                    ->disk(config('filesystems.default'))
+                    ->state(fn (Attendance $record): ?string => StorageUrl::for($record->check_in_photo))
                     ->square()
                     ->size(40)
                     ->defaultImageUrl(null),
 
                 ImageColumn::make('check_out_photo')
                     ->label('Foto Check-Out')
-                    ->disk(config('filesystems.default'))
+                    ->state(fn (Attendance $record): ?string => StorageUrl::for($record->check_out_photo))
                     ->square()
                     ->size(40)
                     ->defaultImageUrl(null),

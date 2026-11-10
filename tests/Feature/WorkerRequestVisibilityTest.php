@@ -19,6 +19,7 @@ use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
@@ -195,6 +196,44 @@ class WorkerRequestVisibilityTest extends TestCase
 
         $response->assertOk();
         $this->assertSame([$this->leaveCs->id], collect($response->json('data'))->pluck('id')->all());
+    }
+
+    public function test_leave_calendar_api_sends_a_link_to_the_face_photo(): void
+    {
+        config(['filesystems.default' => 'public']);
+        $this->employeeCs->employee->update(['master_face_photo' => 'master-faces/uat-cs.jpg']);
+
+        Sanctum::actingAs($this->employeeCs);
+
+        $this->getJson('/api/v1/kalender-cuti?month='.now()->month.'&year='.now()->year)
+            ->assertOk()
+            ->assertJsonPath('data.0.master_face_photo', Storage::disk('public')->url('master-faces/uat-cs.jpg'));
+    }
+
+    public function test_attendance_report_shows_photos_left_on_the_public_disk(): void
+    {
+        config(['filesystems.default' => 'local']);
+        Storage::disk('public')->put('attendance/photos/uat-lama.jpg', 'jpeg');
+
+        $bod = $this->makeEmployee($this->topFinance, 'BOD');
+        $this->grantDataAccessTo($bod, $this->top->id);
+
+        $attendance = Attendance::create([
+            'employee_id' => $this->employeeTop->employee->id,
+            'date' => today(),
+            'status' => 'on_time',
+            'check_in_photo' => 'attendance/photos/uat-lama.jpg',
+        ]);
+
+        $this->actingAs($bod);
+
+        try {
+            Livewire::test(LaporanAbsensi::class)
+                ->assertTableColumnStateSet('check_in_photo', Storage::disk('public')->url('attendance/photos/uat-lama.jpg'), $attendance)
+                ->assertTableColumnStateSet('check_out_photo', null, $attendance);
+        } finally {
+            Storage::disk('public')->delete('attendance/photos/uat-lama.jpg');
+        }
     }
 
     public function test_leave_calendar_is_closed_to_interns_on_web_and_api(): void
