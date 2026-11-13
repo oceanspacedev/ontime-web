@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\DataScope;
 use App\Filament\Resources\ApprovalFlows\ApprovalFlowResource;
 use App\Filament\Resources\ApprovalFlows\Pages\EditApprovalFlow;
+use App\Filament\Resources\ApprovalFlows\Pages\ListApprovalFlows;
 use App\Models\ApprovalFlow;
 use App\Models\Company;
 use App\Models\Division;
@@ -103,6 +104,65 @@ class ApprovalNotificationRecipientsTest extends TestCase
 
         Livewire::test(EditApprovalFlow::class, ['record' => $this->company->id])
             ->assertSee('Belum ada pengguna aktif dengan role ini, pengajuan akan tertahan.');
+    }
+
+    public function test_admins_hear_about_a_stage_nobody_holds_when_no_coordinator_covers_the_worker(): void
+    {
+        $this->flow(['Approver']);
+        $admin = $this->user('Admin', DataScope::Companies, companyIds: [$this->company->id]);
+        $otherCompanyAdmin = $this->user('Admin', DataScope::Companies, companyIds: [Company::create(['name' => 'Lain', 'code' => 'LN', 'is_active' => true])->id]);
+        Notification::fake();
+
+        $this->leave();
+
+        Notification::assertSentTo($admin, ApprovalRequestedNotification::class);
+        Notification::assertNotSentTo($otherCompanyAdmin, ApprovalRequestedNotification::class);
+    }
+
+    public function test_unstaffed_stages_are_listed_per_company(): void
+    {
+        $this->flow(['Approver', 'BOD']);
+        $company = $this->company->fresh();
+
+        $this->assertSame(['role Approver', 'role BOD'], array_column(ApprovalFlowService::unstaffedStages($company), 'who'));
+
+        $this->user('Approver', DataScope::Companies, companyIds: [$this->company->id]);
+        $this->assertSame(['role BOD'], array_column(ApprovalFlowService::unstaffedStages($company), 'who'));
+
+        $inactive = $this->user('BOD', DataScope::Companies, companyIds: [$this->company->id]);
+        $inactive->update(['is_active' => false]);
+        $this->assertCount(1, ApprovalFlowService::unstaffedStages($company), 'An inactive holder does not count.');
+    }
+
+    public function test_a_request_waiting_too_long_is_reminded_once_a_day(): void
+    {
+        $this->flow(['Approver']);
+        $approver = $this->user('Approver', DataScope::Companies, companyIds: [$this->company->id]);
+        Notification::fake();
+        $leave = $this->leave();
+        $service = app(ApprovalFlowService::class);
+
+        $this->assertSame(0, $service->remindStalled(2), 'Just submitted.');
+
+        $leave->approvalSteps()->update(['created_at' => now()->subDays(3)]);
+        $this->assertSame(1, $service->remindStalled(2));
+        Notification::assertSentTo($approver, ApprovalRequestedNotification::class);
+
+        $this->assertSame(0, $service->remindStalled(2), 'Only once a day.');
+    }
+
+    public function test_the_flow_list_shows_which_companies_have_stages_without_holders(): void
+    {
+        $this->flow(['Approver']);
+        $this->actingAs($this->user('Superadmin', DataScope::All));
+
+        Livewire::test(ListApprovalFlows::class)
+            ->assertSee('1 tahap tanpa pemegang');
+
+        $this->user('Approver', DataScope::Companies, companyIds: [$this->company->id]);
+
+        Livewire::test(ListApprovalFlows::class)
+            ->assertSee('Lengkap');
     }
 
     /** @param list<string> $roles */

@@ -34,7 +34,13 @@ trait HasPresensiActions
             return null;
         }
 
-        return Attendance::byWorker($user)->today()->first();
+        $profile = $this->getLinkedProfile();
+
+        if (! $profile) {
+            return Attendance::byWorker($user)->today()->first();
+        }
+
+        return app(WorkScheduleService::class)->currentSegment($user, $profile, now())['attendance'];
     }
 
     public function getLinkedProfile(): mixed
@@ -47,13 +53,21 @@ trait HasPresensiActions
     /**
      * Working hours that apply today (dated schedule, default shift, or company policy).
      *
-     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null}|null
+     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null, segment: int, segment_count: int}|null
      */
     public function getTodayWorkingHoursProperty(): ?array
     {
         $profile = $this->getLinkedProfile();
 
-        return $profile ? app(WorkScheduleService::class)->resolve($profile, now()) : null;
+        $user = auth()->user();
+
+        if (! $profile || ! $user) {
+            return null;
+        }
+
+        $service = app(WorkScheduleService::class);
+
+        return $service->resolve($profile, now(), $service->currentSegment($user, $profile, now())['segment']);
     }
 
     public function getCompanyPolicyProperty(): ?CompanyPolicy

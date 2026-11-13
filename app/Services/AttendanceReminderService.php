@@ -69,7 +69,10 @@ final class AttendanceReminderService
             foreach ($this->shiftsOn($date) as $slot) {
                 $kind = $this->dueKind($slot, $now);
 
-                if ($kind === null || ! $this->claim($slot['user']->id, $date, $kind)) {
+                // The second segment of a split shift gets its own reminders ("shift_soon_2", ...).
+                $claimKey = $slot['segment'] > 1 ? "{$kind}_{$slot['segment']}" : $kind;
+
+                if ($kind === null || ! $this->claim($slot['user']->id, $date, $claimKey)) {
                     continue;
                 }
 
@@ -96,7 +99,7 @@ final class AttendanceReminderService
     /**
      * Workers with a shift on the date, their account, and that day's attendance and leave.
      *
-     * @return list<array{worker: Model, user: User, date: Carbon, shift: Shift, start: Carbon, end: Carbon, tolerance: int, location: CompanyLocation|null, attendance: Attendance|null, on_leave: bool}>
+     * @return list<array{worker: Model, user: User, date: Carbon, shift: Shift, segment: int, start: Carbon, end: Carbon, tolerance: int, location: CompanyLocation|null, attendance: Attendance|null, on_leave: bool}>
      */
     private function shiftsOn(Carbon $date): array
     {
@@ -123,7 +126,7 @@ final class AttendanceReminderService
                 continue;
             }
 
-            $attendances = Attendance::query()->whereIn($column, $workers->modelKeys())->whereDate('date', $date->toDateString())->get()->keyBy($column);
+            $attendances = Attendance::query()->whereIn($column, $workers->modelKeys())->whereDate('date', $date->toDateString())->get()->groupBy($column);
             $onLeave = LeaveRequest::query()
                 ->whereIn($column, $workers->modelKeys())
                 ->where('status', 'approved')
@@ -145,25 +148,28 @@ final class AttendanceReminderService
                     continue;
                 }
 
-                $start = $date->copy()->setTimeFromTimeString((string) $shift->start_time);
-                $end = $date->copy()->setTimeFromTimeString((string) $shift->end_time);
+                foreach ($shift->segments() as $index => $segment) {
+                    $start = $date->copy()->setTimeFromTimeString($segment['start']);
+                    $end = $date->copy()->setTimeFromTimeString($segment['end']);
 
-                if ($shift->crossesMidnight()) {
-                    $end->addDay();
+                    if ($segment['end'] <= $segment['start']) {
+                        $end->addDay();
+                    }
+
+                    $slots[] = [
+                        'worker' => $worker,
+                        'user' => $worker->user,
+                        'date' => $date,
+                        'shift' => $shift,
+                        'segment' => $index + 1,
+                        'start' => $start,
+                        'end' => $end,
+                        'tolerance' => (int) ($shift->late_tolerance_minutes ?? $worker->company?->policy?->late_tolerance_minutes ?? 15),
+                        'location' => $schedule?->location,
+                        'attendance' => $attendances->get($worker->getKey())?->firstWhere('segment', $index + 1),
+                        'on_leave' => $onLeave->has($worker->getKey()),
+                    ];
                 }
-
-                $slots[] = [
-                    'worker' => $worker,
-                    'user' => $worker->user,
-                    'date' => $date,
-                    'shift' => $shift,
-                    'start' => $start,
-                    'end' => $end,
-                    'tolerance' => (int) ($shift->late_tolerance_minutes ?? $worker->company?->policy?->late_tolerance_minutes ?? 15),
-                    'location' => $schedule?->location,
-                    'attendance' => $attendances->get($worker->getKey()),
-                    'on_leave' => $onLeave->has($worker->getKey()),
-                ];
             }
         }
 

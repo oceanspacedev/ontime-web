@@ -99,7 +99,7 @@ function ScheduleForm({ target, onClose, onSaved }: { target: ScheduleTarget; on
             <>
               <Text style={styles.label}>Outlet</Text>
               <Choice
-                options={[...company.outlets.map((item) => ({ value: String(item.id), label: item.name })), { value: NO_OUTLET, label: 'Lokasi mana pun' }]}
+                options={[...company.outlets.map((item) => ({ value: String(item.id), label: item.own_brand === false ? `${item.name} · pinjam` : item.name })), { value: NO_OUTLET, label: 'Lokasi mana pun' }]}
                 value={outletId}
                 onChange={chooseOutlet}
               />

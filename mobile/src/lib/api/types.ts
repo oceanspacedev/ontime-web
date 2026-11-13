@@ -225,9 +225,20 @@ export interface LivenessChallenge {
   expires_in: number;
 }
 
+/** One working segment of a day, "HH:MM". A split shift has two. */
+export interface ShiftSegment {
+  start: string;
+  end: string;
+}
+
 export interface TodaySchedule {
-  shift: NamedRef | null;
+  shift: (NamedRef & { code?: string | null; talenta_code?: string | null }) | null;
   is_day_off: boolean;
+  /** Segment (1 or 2) the worker is on now; start_time/end_time are that segment's hours. */
+  segment?: number;
+  segment_count?: number;
+  /** Every segment of today's shift, to show a split shift as "07:45–13:00 & 17:45–22:00". */
+  segments?: ShiftSegment[];
   start_time: string;
   end_time: string;
   late_tolerance_minutes: number;
@@ -397,13 +408,35 @@ export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum
 export interface RosterEntry {
   schedule_id: number;
   worker: { type: WorkerType; id: number; company_id: number; number: string; name: string };
-  shift: { id: number; name: string; code: string | null; label: string; start_time: string; end_time: string } | null;
+  shift: { id: number; name: string; code: string | null; label: string; start_time: string; end_time: string; talenta_code?: string | null; segments?: ShiftSegment[] } | null;
   location_id: number | null;
+  /** Brand of the worker when this day is spent at another brand's outlet. */
+  borrowed_from?: string | null;
   section: string | null;
   state: RosterState;
   check_in: string | null;
   check_out: string | null;
   late_minutes: number;
+  /** One item per segment worked so far (two for a finished split shift). */
+  attendances?: { segment: number; check_in: string | null; check_out: string | null; late_minutes: number }[];
+}
+
+export interface WeekCell {
+  schedule_id: number;
+  is_day_off: boolean;
+  shift: { id: number; name: string; code: string | null; talenta_code: string | null; label: string; segments: ShiftSegment[] } | null;
+  location_id: number | null;
+  outlet: string | null;
+  section: string | null;
+  borrowed_from?: string | null;
+}
+
+/** One week (Monday to Sunday): a line per worker, a cell per date that has a schedule. */
+export interface TeamWeek {
+  start: string;
+  end: string;
+  days: string[];
+  workers: { worker: RosterEntry['worker']; days: Record<string, WeekCell> }[];
 }
 
 export interface RosterOutlet {
@@ -425,12 +458,16 @@ export interface TeamShift {
   label: string;
   start_time: string;
   end_time: string;
+  talenta_code?: string | null;
+  segments?: ShiftSegment[];
 }
 
 export interface TeamOutlet {
   id: number;
   name: string;
   brand: string | null;
+  /** False for another brand's outlet: a worker can be lent there for a day, not placed there. */
+  own_brand?: boolean;
 }
 
 export interface TeamCompany {

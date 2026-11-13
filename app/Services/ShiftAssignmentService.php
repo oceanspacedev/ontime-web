@@ -58,11 +58,11 @@ final class ShiftAssignmentService
         $dayOff = $mode === self::MODE_DAY_OFF;
 
         if (! $dayOff) {
-            if (! $this->options->shifts($user, $worker->company_id)->contains('id', $shiftId)) {
+            if (! $this->options->shifts($user, $worker->company_id, borrowing: true)->contains('id', $shiftId)) {
                 throw ValidationException::withMessages(['shift_id' => 'Shift ini tidak bisa dipilih untuk pekerja tersebut.']);
             }
 
-            if ($locationId !== null && ! $this->options->locations($user, $worker->company_id)->contains('id', $locationId)) {
+            if ($locationId !== null && ! $this->options->locations($user, $worker->company_id, borrowing: true)->contains('id', $locationId)) {
                 throw ValidationException::withMessages(['company_location_id' => 'Outlet ini tidak bisa dipilih.']);
             }
         }

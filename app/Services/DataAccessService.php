@@ -201,6 +201,51 @@ final class DataAccessService
     }
 
     /**
+     * Whether $actor may give an account this data access: never wider than their own. Superadmin and an
+     * Admin with access to everything may give any; others only whole companies or divisions they hold
+     * themselves, or "own".
+     *
+     * @param  list<int|string>  $companyIds
+     * @param  list<int|string>  $divisionIds
+     */
+    public static function canGrantAccess(User $actor, DataScope $scope, array $companyIds = [], array $divisionIds = []): bool
+    {
+        $filter = self::workerFilter($actor);
+
+        if ($actor->hasRole('Superadmin') || ($filter === null && self::isManager($actor))) {
+            return true;
+        }
+
+        if ($filter === null) {
+            return false;
+        }
+
+        return match ($scope) {
+            DataScope::Own => true,
+            DataScope::All => false,
+            DataScope::Companies => collect($companyIds)->every(fn ($id): bool => in_array((int) $id, $filter['companies'], true)),
+            DataScope::Divisions => Division::query()->whereIn('id', $divisionIds)->get(['id', 'company_id'])->every(
+                fn (Division $division): bool => in_array((int) $division->id, $filter['divisions'], true) || in_array((int) $division->company_id, $filter['companies'], true),
+            ),
+        };
+    }
+
+    /**
+     * Whether an account's data access stays inside what $actor holds, so $actor may manage it.
+     */
+    public static function accountReachWithin(User $actor, User $account): bool
+    {
+        $scope = self::scopeOf($account);
+
+        return self::canGrantAccess(
+            $actor,
+            $scope,
+            $account->accessibleCompanies()->pluck('companies.id')->all(),
+            $account->accessibleDivisions()->pluck('divisions.id')->all(),
+        );
+    }
+
+    /**
      * Whether a company / division placement is inside the user's scope (own records excluded).
      */
     public static function canAccessPlacement(User $user, int|string|null $companyId, int|string|null $divisionId): bool

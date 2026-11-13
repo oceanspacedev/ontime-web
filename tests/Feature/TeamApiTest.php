@@ -129,12 +129,13 @@ class TeamApiTest extends TestCase
         $this->getJson('/api/v1/team/roster?date='.today()->addDay()->toDateString())->assertOk()->assertJsonCount(0, 'outlets');
     }
 
-    public function test_options_hold_only_brand_outlets_and_shifts(): void
+    public function test_options_offer_every_brand_for_lending_and_flag_the_own_ones(): void
     {
         $this->getJson('/api/v1/team/options')
             ->assertOk()
-            ->assertJsonPath('companies.0.outlets.*.name', ['JChicken Ciledug', 'Luuca Ciledug'])
-            ->assertJsonPath('companies.0.shifts.*.id', [$this->jchickenMorning->id]);
+            ->assertJsonPath('companies.0.outlets.*.name', ['JChicken Ciledug', 'Luuca Ciledug', 'Momoyo Ciledug'])
+            ->assertJsonPath('companies.0.outlets.*.own_brand', [true, true, false])
+            ->assertJsonPath('companies.0.shifts.*.id', [$this->jchickenMorning->id, $this->momoyoMorning->id]);
 
         $this->getJson('/api/v1/team/workers?search=bay')->assertOk()->assertJsonPath('data.*.name', ['Bayu Adillah']);
         $this->getJson('/api/v1/team/workers')->assertOk()->assertJsonMissing(['name' => 'Orang Momoyo']);
@@ -161,17 +162,15 @@ class TeamApiTest extends TestCase
         $this->assertFalse(ShiftSchedule::where('freelancer_id', $this->bayu->id)->exists());
     }
 
-    public function test_schedule_changes_refuse_other_brands(): void
+    public function test_a_worker_can_be_lent_to_another_brand_but_not_taken_over(): void
     {
         $date = today()->toDateString();
 
-        $this->putJson('/api/v1/team/schedules', ['worker_type' => 'freelancer', 'worker_id' => $this->bayu->id, 'date' => $date, 'mode' => 'shift', 'shift_id' => $this->momoyoMorning->id])
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors('shift_id');
+        $this->putJson('/api/v1/team/schedules', ['worker_type' => 'freelancer', 'worker_id' => $this->bayu->id, 'date' => $date, 'mode' => 'shift', 'shift_id' => $this->momoyoMorning->id, 'company_location_id' => $this->momoyoOutlet->id])
+            ->assertOk()
+            ->assertJsonPath('data.company_location_id', $this->momoyoOutlet->id);
 
-        $this->putJson('/api/v1/team/schedules', ['worker_type' => 'freelancer', 'worker_id' => $this->bayu->id, 'date' => $date, 'mode' => 'shift', 'shift_id' => $this->jchickenMorning->id, 'company_location_id' => $this->momoyoOutlet->id])
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors('company_location_id');
+        $this->putJson('/api/v1/team/schedules', ['worker_type' => 'freelancer', 'worker_id' => $this->bayu->id, 'date' => $date, 'mode' => 'clear'])->assertOk();
 
         $this->putJson('/api/v1/team/schedules', ['worker_type' => 'freelancer', 'worker_id' => $this->outsider->id, 'date' => $date, 'mode' => 'off'])
             ->assertNotFound();

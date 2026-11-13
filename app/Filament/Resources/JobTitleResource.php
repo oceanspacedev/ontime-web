@@ -36,7 +36,10 @@ class JobTitleResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return (bool) auth()->user()?->hasRole('Superadmin');
+        $user = auth()->user();
+
+        // Reference data for the whole group: Superadmin, and the Admins (HR) who manage workers.
+        return (bool) ($user?->hasRole('Superadmin') || ($user?->hasRole('Admin') && $user->canManageWorkers()));
     }
 
     public static function form(Schema $schema): Schema

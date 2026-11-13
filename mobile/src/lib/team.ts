@@ -1,4 +1,4 @@
-import type { RosterEntry, RosterState, TeamRecapRow, TeamRoster, TeamShift } from './api/types';
+import type { RosterEntry, RosterState, TeamRecapRow, TeamRoster, TeamShift, WeekCell } from './api/types';
 import { toDateString, type Tone } from './format';
 
 const STATE_LABELS: Record<RosterState, string> = {
@@ -31,17 +31,23 @@ export function rosterBadge(entry: Pick<RosterEntry, 'state'>, date: string, tod
   return { label: STATE_LABELS[entry.state], tone: STATE_TONES[entry.state] };
 }
 
+/** "08:00–17:00", or "07:45–13:00 & 17:45–22:00" for a split shift. */
+export function hoursText(shift: Pick<TeamShift, 'start_time' | 'end_time' | 'segments'>): string {
+  const segments = shift.segments?.length ? shift.segments : [{ start: shift.start_time, end: shift.end_time }];
+  return segments.map((segment) => `${segment.start}–${segment.end}`).join(' & ');
+}
+
 /** "P · 08:00–17:00", or the shift name when it has no code. */
-export function shiftText(shift: Pick<TeamShift, 'code' | 'name' | 'start_time' | 'end_time'>): string {
-  return `${shift.code || shift.name} · ${shift.start_time}–${shift.end_time}`;
+export function shiftText(shift: Pick<TeamShift, 'code' | 'name' | 'start_time' | 'end_time' | 'segments'>): string {
+  return `${shift.code || shift.name} · ${hoursText(shift)}`;
 }
 
 /** The line under a person's name: their shift and section, or "Libur". */
-export function rosterLine(entry: Pick<RosterEntry, 'shift' | 'section' | 'state'>): string {
+export function rosterLine(entry: Pick<RosterEntry, 'shift' | 'section' | 'state'> & { borrowed_from?: string | null }): string {
   if (entry.state === 'libur') {
     return 'Libur';
   }
-  const parts = [entry.shift ? shiftText(entry.shift) : 'Tanpa shift', entry.section].filter(Boolean);
+  const parts = [entry.shift ? shiftText(entry.shift) : 'Tanpa shift', entry.section, entry.borrowed_from ? `pinjam dari ${entry.borrowed_from}` : null].filter(Boolean);
   return parts.join(' · ');
 }
 
@@ -80,4 +86,22 @@ export function recapLine(row: TeamRecapRow): string {
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+/** The Monday of the week holding `date` (YYYY-MM-DD). */
+export function weekStart(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const day = new Date(y, m - 1, d).getDay();
+  return shiftDate(date, day === 0 ? -6 : 1 - day);
+}
+
+/** What one cell of the weekly grid says: the shift code ("SP"), "OFF", or "–" when nothing is scheduled. */
+export function weekCellText(cell: Pick<WeekCell, 'is_day_off' | 'shift'> | undefined): string {
+  if (!cell) {
+    return '–';
+  }
+  if (cell.is_day_off) {
+    return 'OFF';
+  }
+  return cell.shift ? cell.shift.code || cell.shift.name : '–';
 }

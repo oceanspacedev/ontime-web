@@ -47,7 +47,7 @@ class ShiftScheduleResource extends Resource
 
     protected static string|UnitEnum|null $navigationGroup = 'Jadwal & Shift';
 
-    protected static ?int $navigationSort = 2;
+    protected static ?int $navigationSort = 3;
 
     public static function canViewAny(): bool
     {
@@ -95,13 +95,13 @@ class ShiftScheduleResource extends Resource
 
                 Select::make('shift_id')
                     ->label('Shift')
-                    ->options(fn (?ShiftSchedule $record): array => static::shiftOptions($record?->getWorkerProfile()?->company_id))
+                    ->options(fn (?ShiftSchedule $record): array => static::shiftOptions($record?->getWorkerProfile()?->company_id, borrowing: true))
                     ->required(fn (Get $get): bool => ! $get('is_day_off'))
                     ->hidden(fn (Get $get): bool => (bool) $get('is_day_off')),
 
                 Select::make('company_location_id')
                     ->label('Outlet')
-                    ->options(fn (?ShiftSchedule $record): array => static::locationOptions($record?->getWorkerProfile()?->company_id))
+                    ->options(fn (?ShiftSchedule $record): array => static::locationOptions($record?->getWorkerProfile()?->company_id, borrowing: true))
                     ->searchable()
                     ->placeholder('Lokasi mana pun')
                     ->hidden(fn (Get $get): bool => (bool) $get('is_day_off')),
@@ -204,12 +204,12 @@ class ShiftScheduleResource extends Resource
      *
      * @return array<int, string>
      */
-    public static function shiftOptions(int|string|null $companyId): array
+    public static function shiftOptions(int|string|null $companyId, bool $borrowing = false): array
     {
         $user = auth()->user();
 
         return $user
-            ? app(SchedulingOptions::class)->shifts($user, $companyId)->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])->all()
+            ? app(SchedulingOptions::class)->shifts($user, $companyId, $borrowing)->mapWithKeys(fn (Shift $shift): array => [$shift->id => $shift->label()])->all()
             : [];
     }
 
@@ -218,11 +218,11 @@ class ShiftScheduleResource extends Resource
      *
      * @return array<int, string>
      */
-    public static function locationOptions(int|string|null $companyId): array
+    public static function locationOptions(int|string|null $companyId, bool $borrowing = false): array
     {
         $user = auth()->user();
 
-        return $user ? app(SchedulingOptions::class)->locations($user, $companyId)->pluck('name', 'id')->all() : [];
+        return $user ? app(SchedulingOptions::class)->locations($user, $companyId, $borrowing)->pluck('name', 'id')->all() : [];
     }
 
     /**
