@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\DataScope;
 use App\Services\DataAccessService;
 use App\Traits\HasNormalizedPhone;
+use App\Traits\PreventsDeletionWhileInUse;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -25,7 +26,19 @@ use Spatie\Permission\Traits\HasRoles;
 class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
-    use HasApiTokens, HasFactory, HasNormalizedPhone, HasRoles, Notifiable;
+    use HasApiTokens, HasFactory, HasNormalizedPhone, HasRoles, Notifiable, PreventsDeletionWhileInUse;
+
+    public function deletionBlockedReason(): ?string
+    {
+        $isNamedApprover = ApprovalFlow::query()->where('user_id', $this->id)->exists()
+            || ApprovalRequestStep::query()->where('user_id', $this->id)->where('status', 'pending')->exists();
+
+        if ($isNamedApprover) {
+            return 'Tidak dapat menghapus akun ini karena menjadi approver pada alur persetujuan. Ganti approver-nya atau nonaktifkan akun.';
+        }
+
+        return null;
+    }
 
     /**
      * The one account that owns this phone number, on the account itself or on its linked employee,

@@ -330,7 +330,7 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                     ->requiresConfirmation()
                     ->modalHeading('Hapus Data Absensi User')
                     ->modalDescription('Apakah Anda yakin ingin menghapus data absensi ini? Setelah dihapus, status absensi user pada tanggal ini akan di-reset.')
-                    ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Approver', 'BOD'])),
+                    ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
             ])
             ->bulkActions([
                 BulkActionGroup::make([
@@ -339,7 +339,7 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                         ->requiresConfirmation()
                         ->modalHeading('Hapus Absensi User Terpilih')
                         ->modalDescription('Apakah Anda yakin ingin menghapus semua data absensi terpilih?')
-                        ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Approver', 'BOD'])),
+                        ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
                 ]),
             ]);
     }

@@ -60,6 +60,12 @@ class Resignation extends Model
             return;
         }
 
+        // The employee keeps working until the last working day; the daily
+        // employees:apply-resignations command deactivates the account afterwards.
+        if ($this->last_working_day?->gte(today())) {
+            return;
+        }
+
         $employee->update(['status' => 'inactive']);
 
         if ($employee->user) {

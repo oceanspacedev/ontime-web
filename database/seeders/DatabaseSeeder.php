@@ -21,6 +21,10 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        if (app()->isProduction()) {
+            throw new \RuntimeException('DatabaseSeeder membuat akun demo dengan password umum dan tidak boleh dijalankan di production. Buat admin pertama secara manual atau pakai UatAccountSeeder.');
+        }
+
         // 1. Setup Roles
         $superadminRole = Role::firstOrCreate(['name' => 'Superadmin']);
         $bodRole = Role::firstOrCreate(['name' => 'BOD']);
