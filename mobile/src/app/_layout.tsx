@@ -131,15 +131,6 @@ function RootLayout() {
             <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
           </Stack.Protected>
 
-          <Stack.Screen
-            name="settings/server"
-            options={{
-              title: 'Alamat Server',
-              presentation: 'modal',
-              header: ({ options }) => <StackHeader title={options.title} canGoBack={false} modal />,
-              contentStyle: { backgroundColor: colors.background },
-            }}
-          />
         </Stack>
       </ThemeProvider>
     </QueryClientProvider>

@@ -73,10 +73,10 @@ export function errorMessage(error: unknown): string {
   }
   if (error instanceof Error) {
     if (error.name === 'AbortError') {
-      return 'Server tidak merespons. Periksa koneksi dan alamat server.';
+      return 'Server tidak merespons. Periksa koneksi internet Anda.';
     }
     if (/network request failed/i.test(error.message)) {
-      return 'Tidak bisa terhubung ke server. Periksa koneksi internet dan alamat server.';
+      return 'Tidak bisa terhubung ke server. Periksa koneksi internet Anda.';
     }
     return error.message;
   }
@@ -130,7 +130,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (response.status === 401 && !skipAuthHandling) {
       config.onUnauthenticated();
     }
-    const fallback = payload === null && text ? 'Server membalas bukan JSON. Periksa alamat server.' : `Permintaan gagal (${response.status}).`;
+    const fallback = payload === null && text ? 'Server membalas dengan data yang tidak dikenali. Coba lagi nanti.' : `Permintaan gagal (${response.status}).`;
     throw new ApiError(response.status, data.message ?? fallback, data.errors ?? null);
   }
 

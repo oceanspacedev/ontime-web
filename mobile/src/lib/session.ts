@@ -9,9 +9,11 @@ import { takeStoredPushToken } from './push';
 
 const TOKEN_KEY = 'ontime.token';
 const USER_KEY = 'ontime.user';
-const BASE_URL_KEY = 'ontime.baseUrl';
+/** Saved by older builds that let the user type a server address; it is erased and never read again. */
+const LEGACY_BASE_URL_KEY = 'ontime.baseUrl';
 
-export const DEFAULT_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:8000/api/v1').trim();
+/** The one server the app talks to. It is not configurable on purpose. */
+export const API_BASE_URL = 'https://ontime.oceanspace.co.id/api/v1';
 
 export type SessionStatus = 'loading' | 'signedOut' | 'signedIn';
 
@@ -28,7 +30,6 @@ interface SessionState {
    * server in the background. Pass revoke: false when the server already refused the token.
    */
   signOut: (options?: { revoke?: boolean }) => Promise<void>;
-  setBaseUrl: (url: string) => Promise<void>;
 }
 
 async function readSecure(key: string): Promise<string | null> {
@@ -51,29 +52,14 @@ async function writeSecure(key: string, value: string | null): Promise<void> {
   }
 }
 
-export function normalizeBaseUrl(input: string): string {
-  let url = input.trim().replace(/\/+$/, '');
-  if (!/^https?:\/\//i.test(url)) {
-    url = `http://${url}`;
-  }
-  if (!/\/api\/v1$/i.test(url)) {
-    url = `${url}/api/v1`;
-  }
-  return url;
-}
-
 export const useSession = create<SessionState>((set, get) => ({
   status: 'loading',
   token: null,
   user: null,
-  baseUrl: DEFAULT_BASE_URL,
+  baseUrl: API_BASE_URL,
 
   hydrate: async () => {
-    const [token, rawUser, baseUrl] = await Promise.all([
-      readSecure(TOKEN_KEY),
-      readSecure(USER_KEY),
-      readSecure(BASE_URL_KEY),
-    ]);
+    const [token, rawUser] = await Promise.all([readSecure(TOKEN_KEY), readSecure(USER_KEY), writeSecure(LEGACY_BASE_URL_KEY, null)]);
     let user: User | null = null;
     if (rawUser) {
       try {
@@ -83,7 +69,7 @@ export const useSession = create<SessionState>((set, get) => ({
       }
     }
     set({
-      baseUrl: baseUrl || DEFAULT_BASE_URL,
+      baseUrl: API_BASE_URL,
       token: token && user ? token : null,
       user: token && user ? user : null,
       status: token && user ? 'signedIn' : 'signedOut',
@@ -119,16 +105,6 @@ export const useSession = create<SessionState>((set, get) => ({
         // Offline or already revoked; the token also ends by itself after long disuse.
       });
     }
-  },
-
-  setBaseUrl: async (url) => {
-    const normalized = normalizeBaseUrl(url);
-    // A session belongs to the server that issued it; never send its token to another one.
-    if (normalized !== get().baseUrl && get().status === 'signedIn') {
-      await get().signOut();
-    }
-    set({ baseUrl: normalized });
-    await writeSecure(BASE_URL_KEY, normalized);
   },
 }));
 

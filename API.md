@@ -11,6 +11,7 @@ Dokumentasi API untuk aplikasi mobile dan integrasi pihak ketiga. Dokumen ini me
 | Lingkungan | Base URL |
 | :--- | :--- |
 | Server | `{APP_URL}/api/v1` |
+| Produksi | `https://ontime.oceanspace.co.id/api/v1` |
 | Lokal (web / iOS Simulator) | `http://127.0.0.1:8000/api/v1` |
 | Lokal (Android Emulator) | `http://10.0.2.2:8000/api/v1` |
 | HP fisik di Wi-Fi yang sama | `http://<IP-laptop>:8000/api/v1` |
