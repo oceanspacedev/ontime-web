@@ -31,6 +31,7 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -364,7 +365,9 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
     public function exportExcel(): BinaryFileResponse
     {
         $records = $this->getReportDataProperty();
+        $from = filled($this->filterData['date_from'] ?? null) ? Carbon::parse($this->filterData['date_from']) : null;
+        $to = filled($this->filterData['date_to'] ?? null) ? Carbon::parse($this->filterData['date_to']) : null;
 
-        return Excel::download(new AttendanceReportExport($records), 'laporan-rekap-absensi.xlsx');
+        return Excel::download(new AttendanceReportExport($records, $from, $to), 'laporan-rekap-absensi.xlsx');
     }
 }
