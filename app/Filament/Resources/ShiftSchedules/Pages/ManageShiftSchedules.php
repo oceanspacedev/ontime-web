@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\ShiftSchedule;
+use App\Services\ScheduleCopyService;
 use App\Services\ShiftScheduleSpreadsheet;
 use Carbon\CarbonPeriod;
 use Filament\Actions\Action;
@@ -123,7 +124,7 @@ class ManageShiftSchedules extends ManageRecords
 
                             Select::make('shift_id')
                                 ->label('Shift')
-                                ->options(fn (Get $get): array => ShiftScheduleResource::shiftOptions($get('company_id')))
+                                ->options(fn (Get $get): array => ShiftScheduleResource::shiftOptions($get('company_id'), borrowing: true))
                                 ->searchable()
                                 ->required(fn (Get $get): bool => $get('mode') === 'shift')
                                 ->visible(fn (Get $get): bool => $get('mode') === 'shift')
@@ -131,7 +132,7 @@ class ManageShiftSchedules extends ManageRecords
 
                             Select::make('company_location_id')
                                 ->label('Outlet')
-                                ->options(fn (Get $get): array => ShiftScheduleResource::locationOptions($get('company_id')))
+                                ->options(fn (Get $get): array => ShiftScheduleResource::locationOptions($get('company_id'), borrowing: true))
                                 ->searchable()
                                 ->placeholder('Lokasi mana pun')
                                 ->visible(fn (Get $get): bool => $get('mode') === 'shift'),
@@ -155,6 +156,36 @@ class ManageShiftSchedules extends ManageRecords
                         ]),
                 ])
                 ->action(fn (array $data) => $this->assignSchedule($data)),
+
+            Action::make('copyWeek')
+                ->label('Salin Minggu')
+                ->icon('heroicon-o-document-duplicate')
+                ->color('gray')
+                ->modalWidth(Width::Medium)
+                ->modalHeading('Salin Jadwal Satu Minggu')
+                ->modalDescription('Hari yang sudah terisi tidak ditimpa, dan shift yang sudah nonaktif dilewati.')
+                ->modalSubmitActionLabel('Salin')
+                ->schema([
+                    DatePicker::make('from')
+                        ->label('Salin dari minggu yang memuat tanggal')
+                        ->default(today()->subWeek())
+                        ->required(),
+
+                    DatePicker::make('to')
+                        ->label('Ke minggu yang memuat tanggal')
+                        ->default(today())
+                        ->required(),
+                ])
+                ->action(function (array $data): void {
+                    $copies = app(ScheduleCopyService::class);
+                    $result = $copies->copyWeek(auth()->user(), Carbon::parse($data['from']), Carbon::parse($data['to']));
+
+                    Notification::make()
+                        ->title($result['copied'] > 0 ? 'Jadwal disalin' : 'Tidak ada jadwal yang disalin')
+                        ->body($copies->summary($result))
+                        ->color($result['copied'] > 0 ? 'success' : 'warning')
+                        ->send();
+                }),
 
             Action::make('exportSchedule')
                 ->label('Ekspor Excel')
@@ -303,13 +334,13 @@ class ManageShiftSchedules extends ManageRecords
         $isDayOff = ($data['mode'] ?? 'shift') === 'day_off';
         $shiftId = $isDayOff ? null : (int) $data['shift_id'];
 
-        if (! $isDayOff && ! array_key_exists($shiftId, ShiftScheduleResource::shiftOptions($companyId))) {
+        if (! $isDayOff && ! array_key_exists($shiftId, ShiftScheduleResource::shiftOptions($companyId, borrowing: true))) {
             abort(422, 'Shift tidak termasuk badan usaha yang dipilih.');
         }
 
         $locationId = $isDayOff || blank($data['company_location_id'] ?? null) ? null : (int) $data['company_location_id'];
 
-        if ($locationId && ! array_key_exists($locationId, ShiftScheduleResource::locationOptions($companyId))) {
+        if ($locationId && ! array_key_exists($locationId, ShiftScheduleResource::locationOptions($companyId, borrowing: true))) {
             abort(422, 'Outlet tidak termasuk badan usaha yang dipilih.');
         }
 

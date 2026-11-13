@@ -8,6 +8,7 @@ use App\Models\Division;
 use App\Models\Shift;
 use App\Services\DataAccessService;
 use BackedEnum;
+use Closure;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -111,6 +112,12 @@ class ShiftResource extends Resource
                     ->placeholder('P')
                     ->maxLength(20),
 
+                TextInput::make('talenta_code')
+                    ->label('Kode Talenta')
+                    ->placeholder('SIFT 09 -18')
+                    ->helperText('Kode shift di Talenta, untuk mencocokkan jadwal.')
+                    ->maxLength(50),
+
                 TimePicker::make('start_time')
                     ->label('Jam Masuk')
                     ->seconds(false)
@@ -121,6 +128,24 @@ class ShiftResource extends Resource
                     ->seconds(false)
                     ->helperText('Boleh lewat tengah malam.')
                     ->required(),
+
+                TimePicker::make('second_start_time')
+                    ->label('Jam Masuk Segmen 2')
+                    ->seconds(false)
+                    ->helperText('Khusus split shift: kosongkan bila shift hanya satu segmen.')
+                    ->requiredWith('second_end_time')
+                    ->rule(fn (Get $get): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get): void {
+                        $firstEnd = substr((string) $get('end_time'), 0, 5);
+
+                        if (filled($value) && filled($firstEnd) && substr((string) $value, 0, 5) <= $firstEnd) {
+                            $fail('Segmen 2 harus dimulai setelah segmen 1 selesai.');
+                        }
+                    }),
+
+                TimePicker::make('second_end_time')
+                    ->label('Jam Pulang Segmen 2')
+                    ->seconds(false)
+                    ->requiredWith('second_start_time'),
 
                 TextInput::make('late_tolerance_minutes')
                     ->label('Toleransi Terlambat')
@@ -159,7 +184,12 @@ class ShiftResource extends Resource
 
                 TextColumn::make('hours')
                     ->label('Jam Kerja')
-                    ->state(fn (Shift $record): string => substr((string) $record->start_time, 0, 5).' - '.substr((string) $record->end_time, 0, 5).($record->crossesMidnight() ? ' (+1 hari)' : '')),
+                    ->state(fn (Shift $record): string => $record->hoursText().($record->crossesMidnight() && ! $record->hasSecondSegment() ? ' (+1 hari)' : '')),
+
+                TextColumn::make('talenta_code')
+                    ->label('Kode Talenta')
+                    ->placeholder('-')
+                    ->toggleable(),
 
                 TextColumn::make('late_tolerance_minutes')
                     ->label('Toleransi')

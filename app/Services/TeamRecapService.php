@@ -57,7 +57,7 @@ final class TeamRecapService
             ->with(['location', 'employee.company', 'employee.division', 'intern.company', 'intern.division', 'freelancer.company', 'freelancer.division'])
             ->get();
 
-        /** @var array<string, array{schedule: ShiftSchedule|null, attendance: Attendance|null}> $days */
+        /** @var array<string, array{schedule?: ShiftSchedule, attendances?: list<Attendance>}> $days */
         $days = [];
 
         foreach ($schedules as $schedule) {
@@ -68,7 +68,7 @@ final class TeamRecapService
 
         foreach ($attendances as $attendance) {
             if ($key = $this->dayKey($attendance->getWorkerProfile(), $attendance->date)) {
-                $days[$key]['attendance'] = $attendance;
+                $days[$key]['attendances'][] = $attendance;
             }
         }
 
@@ -76,7 +76,8 @@ final class TeamRecapService
 
         foreach ($days as $day) {
             $schedule = $day['schedule'] ?? null;
-            $attendance = $day['attendance'] ?? null;
+            $dayAttendances = collect($day['attendances'] ?? []);
+            $attendance = $dayAttendances->first();
             $worker = $schedule?->getWorkerProfile() ?? $attendance?->getWorkerProfile();
             $outlet = $schedule?->location ?? $attendance?->location;
             $type = $this->workerType($worker);
@@ -107,19 +108,21 @@ final class TeamRecapService
                 $row['off_days']++;
             } elseif ($schedule) {
                 $row['scheduled_days']++;
-                $row['scheduled_minutes'] += $this->shiftMinutes($schedule->shift);
+                $row['scheduled_minutes'] += $schedule->shift?->scheduledMinutes() ?? 0;
             }
 
             if ($attendance?->check_in) {
                 $row['present_days']++;
+                $lateMinutes = (int) $dayAttendances->sum('late_minutes');
 
-                if ($attendance->late_minutes > 0) {
+                // A split shift counts as one late day however many segments were late.
+                if ($lateMinutes > 0) {
                     $row['late_days']++;
-                    $row['late_minutes'] += (int) $attendance->late_minutes;
+                    $row['late_minutes'] += $lateMinutes;
                 }
 
-                if ($attendance->check_out) {
-                    $row['worked_minutes'] += (int) $attendance->check_in->diffInMinutes($attendance->check_out);
+                foreach ($dayAttendances as $segmentRow) {
+                    $row['worked_minutes'] += $segmentRow->workedMinutes() ?? 0;
                 }
             } elseif ($schedule && ! $schedule->is_day_off && $schedule->date->lessThan($today)) {
                 $row['absent_days']++;
@@ -243,21 +246,5 @@ final class TeamRecapService
             $worker instanceof Freelancer => $worker->freelancer_number,
             default => null,
         };
-    }
-
-    private function shiftMinutes(?Shift $shift): int
-    {
-        if (! $shift) {
-            return 0;
-        }
-
-        $start = Carbon::parse((string) $shift->start_time);
-        $end = Carbon::parse((string) $shift->end_time);
-
-        if ($end->lessThanOrEqualTo($start)) {
-            $end->addDay();
-        }
-
-        return (int) $start->diffInMinutes($end);
     }
 }

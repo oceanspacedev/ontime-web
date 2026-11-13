@@ -23,7 +23,7 @@ jest.mock('../push', () => ({
 // eslint-disable-next-line import/first
 import { request } from '../api/client';
 // eslint-disable-next-line import/first
-import { useSession } from '../session';
+import { API_BASE_URL, useSession } from '../session';
 
 const OLD_SERVER = 'https://lama.contoh.id/api/v1';
 const NEW_SERVER = 'https://baru.contoh.id/api/v1';
@@ -77,12 +77,11 @@ beforeEach(() => {
 describe('sign in and restore', () => {
   it('keeps the session in secure storage across app launches', async () => {
     await signInOn(OLD_SERVER);
-    await useSession.getState().setBaseUrl(OLD_SERVER);
 
     useSession.setState({ status: 'loading', token: null, user: null, baseUrl: '' });
     await useSession.getState().hydrate();
 
-    expect(useSession.getState()).toMatchObject({ status: 'signedIn', token: 'sesi-token', user: USER, baseUrl: OLD_SERVER });
+    expect(useSession.getState()).toMatchObject({ status: 'signedIn', token: 'sesi-token', user: USER, baseUrl: API_BASE_URL });
   });
 
   it('starts signed out when the stored user is unreadable', async () => {
@@ -201,33 +200,26 @@ describe('a refused token', () => {
   });
 });
 
-describe('changing the server address', () => {
-  it('signs out and revokes on the old server, never sending the token to the new one', async () => {
-    await signInOn(OLD_SERVER);
+describe('fixed server address', () => {
+  it('talks to the production server only', () => {
+    expect(API_BASE_URL).toBe('https://ontime.oceanspace.co.id/api/v1');
+  });
 
-    await useSession.getState().setBaseUrl('https://baru.contoh.id');
-    await flush();
+  it('ignores and erases an address saved by an older build, keeping the session', async () => {
+    mockSecureStore.set('ontime.baseUrl', NEW_SERVER);
+    mockSecureStore.set('ontime.token', 'sesi-token');
+    mockSecureStore.set('ontime.user', JSON.stringify(USER));
+
+    await useSession.getState().hydrate();
+
+    expect(useSession.getState()).toMatchObject({ status: 'signedIn', token: 'sesi-token', baseUrl: API_BASE_URL });
+    expect(mockSecureStore.has('ontime.baseUrl')).toBe(false);
+  });
+
+  it('sends requests to the production address', async () => {
+    await useSession.getState().hydrate();
     await request('/auth/me').catch(() => undefined);
 
-    expect(useSession.getState()).toMatchObject({ status: 'signedOut', token: null, baseUrl: NEW_SERVER });
-    expect(fetchCalls[0]).toMatchObject({ url: `${OLD_SERVER}/auth/logout`, authorization: 'Bearer sesi-token' });
-    expect(fetchCalls.filter((call) => call.url.startsWith(NEW_SERVER)).every((call) => call.authorization === null)).toBe(true);
-  });
-
-  it('keeps the session when the same server is saved again', async () => {
-    await signInOn(OLD_SERVER);
-
-    await useSession.getState().setBaseUrl('https://lama.contoh.id/');
-
-    expect(useSession.getState()).toMatchObject({ status: 'signedIn', token: 'sesi-token', baseUrl: OLD_SERVER });
-    expect(fetchCalls).toHaveLength(0);
-  });
-
-  it('just switches the server when nobody is signed in', async () => {
-    await useSession.getState().setBaseUrl('https://baru.contoh.id');
-
-    expect(useSession.getState().baseUrl).toBe(NEW_SERVER);
-    expect(fetchCalls).toHaveLength(0);
-    expect(mockSecureStore.get('ontime.baseUrl')).toBe(NEW_SERVER);
+    expect(fetchCalls[0].url).toBe(`${API_BASE_URL}/auth/me`);
   });
 });

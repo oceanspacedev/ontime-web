@@ -228,6 +228,18 @@ class ApprovalFlowResource extends Resource
                     ->label('Tahap Luar Geofence')
                     ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'geofence')->count().' Tahap')
                     ->color('warning'),
+
+                BadgeColumn::make('staffing')
+                    ->label('Pemegang Tahap')
+                    ->state(function (Company $record): string {
+                        $count = count(ApprovalFlowService::unstaffedStages($record));
+
+                        return $count === 0 ? 'Lengkap' : "{$count} tahap tanpa pemegang";
+                    })
+                    ->color(fn (string $state): string => $state === 'Lengkap' ? 'success' : 'danger')
+                    ->tooltip(fn (Company $record): ?string => collect(ApprovalFlowService::unstaffedStages($record))
+                        ->map(fn (array $stage): string => ApprovalFlowService::requestTypeLabel($stage['request_type'])." · {$stage['stage']} ({$stage['who']})")
+                        ->implode("\n") ?: null),
             ])
             ->actions([
                 EditAction::make()

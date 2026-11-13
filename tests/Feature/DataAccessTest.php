@@ -225,7 +225,7 @@ class DataAccessTest extends TestCase
         ($import->getImporter($columns, []))(['NIP' => 'NEW-2', 'Nama' => 'SALAH', 'Badan Usaha' => 'TOP', 'Divisi' => 'FINANCE', 'Level' => 'STAFF', 'Posisi' => 'KASIR']);
     }
 
-    public function test_only_superadmin_sees_the_data_access_fields(): void
+    public function test_data_access_fields_are_for_superadmin_and_admins_within_their_own_access(): void
     {
         $superadmin = User::factory()->create();
         $superadmin->assignRole('Superadmin');
@@ -245,9 +245,20 @@ class DataAccessTest extends TestCase
 
         $this->assertSame([$this->sales->id], $account->fresh()->accessibleDivisions()->pluck('divisions.id')->all());
 
+        // An Admin sets it too, but never wider than their own access: here the whole of TOP, never everything.
         $this->actingAs($admin);
         Livewire::test(EditUser::class, ['record' => $account->id])
-            ->assertFormFieldIsHidden('data_scope');
+            ->assertFormFieldIsVisible('data_scope')
+            ->fillForm(['data_scope' => DataScope::All->value])
+            ->call('save')
+            ->assertHasFormErrors(['data_scope']);
+
+        $coordinator = User::factory()->create();
+        $coordinator->assignRole('Koordinator');
+        $coordinator->grantDataAccess(DataScope::Companies, companyIds: [$this->top->id]);
+
+        $this->actingAs($coordinator);
+        $this->assertFalse(UserResource::canViewAny());
     }
 
     public function test_approvers_api_lists_who_covers_a_division(): void

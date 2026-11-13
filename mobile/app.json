@@ -15,16 +15,10 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "co.id.oceanspace.ontime",
-      "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
-        }
-      }
+      "bundleIdentifier": "co.id.oceanspace.ontime"
     },
     "android": {
       "package": "co.id.oceanspace.ontime",
-      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#F22929",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -40,7 +34,7 @@
       [
         "onesignal-expo-plugin",
         {
-          "mode": "development"
+          "mode": "production"
         }
       ],
       "expo-router",

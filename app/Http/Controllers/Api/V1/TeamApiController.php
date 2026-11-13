@@ -13,9 +13,11 @@ use App\Models\Shift;
 use App\Models\User;
 use App\Services\DataAccessService;
 use App\Services\OutletRosterService;
+use App\Services\ScheduleCopyService;
 use App\Services\SchedulingOptions;
 use App\Services\ShiftAssignmentService;
 use App\Services\TeamRecapService;
+use App\Services\WeeklyScheduleService;
 use App\Services\WorkerAccountService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -55,6 +57,17 @@ class TeamApiController extends Controller
         ]);
     }
 
+    /**
+     * The week (Monday to Sunday) holding the date, one line per worker with a cell per day.
+     */
+    public function week(Request $request, WeeklyScheduleService $weeks): JsonResponse
+    {
+        $user = $this->manager($request);
+        $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']]);
+
+        return response()->json($weeks->week($user, Carbon::parse($validated['date'] ?? today()->toDateString())));
+    }
+
     public function options(Request $request): JsonResponse
     {
         $user = $this->manager($request);
@@ -63,19 +76,23 @@ class TeamApiController extends Controller
             'companies' => $this->options->companies($user)->map(fn ($company): array => [
                 'id' => (int) $company->id,
                 'name' => $company->name,
-                'outlets' => $this->options->locations($user, $company->id)->map(fn (CompanyLocation $location): array => [
+                'outlets' => $this->options->locations($user, $company->id, borrowing: true)->map(fn (CompanyLocation $location): array => [
                     'id' => (int) $location->id,
                     'name' => $location->name,
                     'brand' => $location->division?->name,
+                    // False for another brand's outlet, which a coordinator may only lend a worker to.
+                    'own_brand' => $this->options->ownBrandIds($user) === null || in_array((int) $location->division_id, $this->options->ownBrandIds($user), true),
                 ])->values(),
-                'shifts' => $this->options->shifts($user, $company->id)->map(fn (Shift $shift): array => [
+                'shifts' => $this->options->shifts($user, $company->id, borrowing: true)->map(fn (Shift $shift): array => [
                     'id' => (int) $shift->id,
                     'name' => $shift->name,
                     'code' => $shift->code,
+                    'talenta_code' => $shift->talenta_code,
                     'brand' => $shift->division?->name,
                     'label' => $shift->label(),
                     'start_time' => substr((string) $shift->start_time, 0, 5),
                     'end_time' => substr((string) $shift->end_time, 0, 5),
+                    'segments' => $shift->segments(),
                 ])->values(),
                 'sections' => $this->options->sections($user, $company->id),
             ])->values(),
@@ -138,6 +155,21 @@ class TeamApiController extends Controller
                 'section' => $schedule->section,
             ] : null,
         ]);
+    }
+
+    /**
+     * Copy one week of schedules onto another (any date inside each week); days already filled are kept.
+     */
+    public function copySchedules(Request $request, ScheduleCopyService $copies): JsonResponse
+    {
+        $user = $this->manager($request);
+        $data = $request->validate([
+            'from' => ['required', 'date_format:Y-m-d'],
+            'to' => ['required', 'date_format:Y-m-d'],
+        ]);
+        $result = $copies->copyWeek($user, Carbon::parse($data['from']), Carbon::parse($data['to']));
+
+        return response()->json(['message' => $copies->summary($result), 'data' => $result]);
     }
 
     public function recap(Request $request, TeamRecapService $recaps): JsonResponse

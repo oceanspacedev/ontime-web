@@ -63,8 +63,9 @@ export function TodayCard({ today, access }: Props) {
               <Ionicons name="time-outline" size={14} color={colors.textMuted} />
               <Text style={styles.schedule} numberOfLines={1}>
                 {schedule?.shift ? `Shift ${schedule.shift.name} · ` : 'Jam kerja '}
-                {formatTime(workStart)}
-                {workEnd ? ` – ${formatTime(workEnd)}` : ''}
+                {schedule?.segments && schedule.segments.length > 1
+                  ? schedule.segments.map((segment) => `${formatTime(segment.start)} – ${formatTime(segment.end)}`).join(' & ')
+                  : `${formatTime(workStart)}${workEnd ? ` – ${formatTime(workEnd)}` : ''}`}
               </Text>
             </View>
           ) : null}

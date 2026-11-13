@@ -18,6 +18,7 @@ class AttendanceResource extends JsonResource
             'intern_id' => $this->intern_id,
             'freelancer_id' => $this->freelancer_id,
             'date' => $this->date?->format('Y-m-d'),
+            'segment' => (int) ($this->segment ?? 1),
             'check_in' => $this->check_in,
             'check_out' => $this->check_out,
             'check_in_lat' => $this->check_in_lat,

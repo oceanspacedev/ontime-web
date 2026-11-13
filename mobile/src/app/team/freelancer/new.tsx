@@ -14,7 +14,7 @@ import { queryKeys } from '@/lib/queryClient';
 export default function NewFreelancerScreen() {
   const queryClient = useQueryClient();
   const options = useQuery({ queryKey: queryKeys.teamOptions, queryFn: teamApi.options });
-  const outlets = useMemo(() => options.data?.companies.flatMap((company) => company.outlets) ?? [], [options.data]);
+  const outlets = useMemo(() => options.data?.companies.flatMap((company) => company.outlets.filter((outlet) => outlet.own_brand !== false)) ?? [], [options.data]);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
