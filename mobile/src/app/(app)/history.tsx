@@ -6,7 +6,7 @@ import { AttendanceRow } from '@/components/AttendanceRow';
 import { currentMonth, MonthSwitcher, monthRange } from '@/components/MonthSwitcher';
 import { Button, EmptyState, ErrorBanner, Group, LoadingView, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
-import { attendanceApi, errorMessage, reportsApi } from '@/lib/api';
+import { attendanceApi, reportsApi } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
@@ -55,7 +55,7 @@ export default function HistoryScreen() {
       {attendances.isPending ? (
         <LoadingView />
       ) : attendances.isError ? (
-        <ErrorBanner message={errorMessage(attendances.error)} onRetry={() => attendances.refetch()} />
+        <ErrorBanner error={attendances.error} onRetry={() => attendances.refetch()} />
       ) : rows.length === 0 ? (
         <EmptyState icon="calendar-outline" title="Belum ada presensi" message="Tidak ada catatan presensi di bulan ini." />
       ) : (

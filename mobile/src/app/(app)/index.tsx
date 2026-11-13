@@ -7,7 +7,7 @@ import { TODAY_GROUP_TITLE, TodayCard } from '@/components/TodayCard';
 import { Avatar, ErrorBanner, Group, IconButton, type IconName, LoadingView, Notice, ProgressBar, QuickAction, Row, Screen, SectionTitle, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { approvalsApi, attendanceApi, errorMessage, requestsApi, teamApi } from '@/lib/api';
+import { approvalsApi, attendanceApi, requestsApi, teamApi } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
 import { greeting, toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
@@ -135,7 +135,7 @@ export default function HomeScreen() {
             <LoadingView message="Memuat presensi hari ini…" />
           </Group>
         ) : today.isError ? (
-          <ErrorBanner message={errorMessage(today.error)} onRetry={() => today.refetch()} />
+          <ErrorBanner error={today.error} onRetry={() => today.refetch()} />
         ) : today.data ? (
           <TodayCard today={today.data} access={access} />
         ) : null

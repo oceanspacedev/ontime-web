@@ -105,7 +105,7 @@ export default function TeamScreen() {
           {roster.isPending ? (
             <LoadingView />
           ) : roster.isError ? (
-            <ErrorBanner message={errorMessage(roster.error)} onRetry={() => roster.refetch()} />
+            <ErrorBanner error={roster.error} onRetry={() => roster.refetch()} />
           ) : roster.data.outlets.length === 0 ? (
             <EmptyState icon="calendar-clear-outline" title="Belum ada jadwal" message="Tekan + untuk menjadwalkan pekerja." />
           ) : (

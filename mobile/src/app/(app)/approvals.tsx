@@ -6,7 +6,7 @@ import { ScrollView } from 'react-native';
 import { AttendanceRow } from '@/components/AttendanceRow';
 import { type AnyRequest, RequestRow } from '@/components/RequestRow';
 import { Choice, EmptyState, ErrorBanner, Group, LoadingView, Screen } from '@/components/ui';
-import { approvalsApi, errorMessage, type ApprovalType } from '@/lib/api';
+import { approvalsApi, type ApprovalType } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
 import { queryKeys } from '@/lib/queryClient';
 import { makeStyles, spacing } from '@/theme';
@@ -43,7 +43,7 @@ export default function ApprovalsScreen() {
   if (pending.isError) {
     return (
       <Screen title={TITLE} onRefresh={() => pending.refetch()}>
-        <ErrorBanner message={errorMessage(pending.error)} onRetry={() => pending.refetch()} />
+        <ErrorBanner error={pending.error} onRetry={() => pending.refetch()} />
       </Screen>
     );
   }

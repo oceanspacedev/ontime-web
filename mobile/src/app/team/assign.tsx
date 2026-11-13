@@ -4,7 +4,7 @@ import { useState } from 'react';
 
 import { ScheduleSheet, type ScheduleTarget } from '@/components/ScheduleSheet';
 import { EmptyState, ErrorBanner, Field, Group, LoadingView, Row, Screen } from '@/components/ui';
-import { errorMessage, teamApi } from '@/lib/api';
+import { teamApi } from '@/lib/api';
 import { formatDate, toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 
@@ -32,7 +32,7 @@ export default function AssignScreen() {
       {workers.isPending ? (
         <LoadingView />
       ) : workers.isError ? (
-        <ErrorBanner message={errorMessage(workers.error)} onRetry={() => workers.refetch()} />
+        <ErrorBanner error={workers.error} onRetry={() => workers.refetch()} />
       ) : workers.data.data.length === 0 ? (
         <EmptyState icon="search-outline" title="Tidak ditemukan" />
       ) : (

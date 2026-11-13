@@ -6,7 +6,7 @@ import { View } from 'react-native';
 import { type AnyRequest, REQUEST_KIND_LABEL, type RequestKind, RequestRow } from '@/components/RequestRow';
 import { Button, Choice, EmptyState, ErrorBanner, Group, LoadingView, Notice, ProgressBar, Screen, Segmented, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
-import { errorMessage, type QuotaSummary, requestsApi } from '@/lib/api';
+import { type QuotaSummary, requestsApi } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
 import { fontSize, makeStyles, spacing } from '@/theme';
 
@@ -70,7 +70,7 @@ export default function RequestsScreen() {
       {active.isPending ? (
         <LoadingView />
       ) : active.isError ? (
-        <ErrorBanner message={errorMessage(active.error)} onRetry={() => active.refetch()} />
+        <ErrorBanner error={active.error} onRetry={() => active.refetch()} />
       ) : items.length === 0 ? (
         <Group title="Riwayat">
           <EmptyState title="Belum ada pengajuan" message={`Riwayat ${REQUEST_KIND_LABEL[activeKind].toLowerCase()} Anda akan tampil di sini.`} />

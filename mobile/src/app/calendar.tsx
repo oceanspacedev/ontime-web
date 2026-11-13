@@ -4,7 +4,7 @@ import { View } from 'react-native';
 
 import { currentMonth, MonthSwitcher } from '@/components/MonthSwitcher';
 import { Avatar, Badge, EmptyState, ErrorBanner, Group, LoadingView, Screen, Text } from '@/components/ui';
-import { errorMessage, reportsApi } from '@/lib/api';
+import { reportsApi } from '@/lib/api';
 import { formatDateRange, requestStatusLabel, requestStatusTone } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { fontSize, makeStyles, spacing } from '@/theme';
@@ -33,7 +33,7 @@ export default function LeaveCalendarScreen() {
       {calendar.isPending ? (
         <LoadingView />
       ) : calendar.isError ? (
-        <ErrorBanner message={errorMessage(calendar.error)} onRetry={() => calendar.refetch()} />
+        <ErrorBanner error={calendar.error} onRetry={() => calendar.refetch()} />
       ) : entries.length === 0 ? (
         <EmptyState icon="people-outline" title="Tidak ada cuti" message="Belum ada rekan yang cuti atau izin di bulan ini." />
       ) : (
