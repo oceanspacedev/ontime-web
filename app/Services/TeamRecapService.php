@@ -122,9 +122,7 @@ final class TeamRecapService
                 }
 
                 foreach ($dayAttendances as $segmentRow) {
-                    if ($segmentRow->check_in && $segmentRow->check_out) {
-                        $row['worked_minutes'] += (int) $segmentRow->check_in->diffInMinutes($segmentRow->check_out);
-                    }
+                    $row['worked_minutes'] += $segmentRow->workedMinutes() ?? 0;
                 }
             } elseif ($schedule && ! $schedule->is_day_off && $schedule->date->lessThan($today)) {
                 $row['absent_days']++;

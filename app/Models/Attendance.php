@@ -119,6 +119,18 @@ class Attendance extends Model
         return $this->employee ?? $this->intern ?? $this->freelancer;
     }
 
+    /**
+     * Minutes between check-in and check-out, or null while either one is missing.
+     */
+    public function workedMinutes(): ?int
+    {
+        if (! $this->check_in || ! $this->check_out) {
+            return null;
+        }
+
+        return (int) max(0, $this->check_in->diffInMinutes($this->check_out));
+    }
+
     public function applyGeofenceApproval(): void
     {
         $profile = $this->getWorkerProfile();
