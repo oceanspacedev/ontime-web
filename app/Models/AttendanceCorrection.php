@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\WorkScheduleService;
 use App\Traits\ScopesToWorkerVisibility;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -98,7 +99,11 @@ class AttendanceCorrection extends Model
             $search['freelancer_id'] = $this->freelancer_id;
         }
 
-        $attendance = Attendance::firstOrNew($search);
+        $workSchedule = app(WorkScheduleService::class);
+        $profile = $this->getWorkerProfile();
+        $segment = $profile ? $this->segmentOfCorrection($workSchedule, $profile) : 1;
+
+        $attendance = Attendance::firstOrNew([...$search, 'segment' => $segment]);
 
         if ($this->corrected_check_in) {
             $attendance->check_in = $this->corrected_check_in;
@@ -109,7 +114,15 @@ class AttendanceCorrection extends Model
 
         $attendance->is_corrected = true;
 
-        if ($this->corrected_check_in && ! $attendance->status) {
+        if ($this->corrected_check_in && $profile) {
+            // Judge the corrected time against the hours of its own segment, so a split shift's
+            // second segment is not measured from the first one.
+            $hours = $workSchedule->resolve($profile, Carbon::parse($this->date), $segment);
+            $lateMinutes = $workSchedule->lateMinutes($hours, Carbon::parse($this->corrected_check_in));
+            $attendance->late_minutes = $lateMinutes;
+            $attendance->status = $lateMinutes > 0 ? 'late' : 'on_time';
+            $attendance->shift_id ??= $hours['shift']?->id;
+        } elseif ($this->corrected_check_in && ! $attendance->status) {
             $attendance->status = 'on_time';
         }
 
@@ -119,5 +132,26 @@ class AttendanceCorrection extends Model
             'status' => 'approved',
             'attendance_id' => $attendance->id,
         ]);
+    }
+
+    /**
+     * The segment a correction belongs to: the second one when the day's shift is split and the
+     * corrected time falls after the middle of the break between the segments.
+     */
+    private function segmentOfCorrection(WorkScheduleService $workSchedule, mixed $profile): int
+    {
+        $time = $this->corrected_check_in ?? $this->corrected_check_out;
+        $shift = $time ? $workSchedule->resolve($profile, Carbon::parse($this->date))['shift'] : null;
+
+        if (! $shift?->hasSecondSegment()) {
+            return 1;
+        }
+
+        $date = Carbon::parse($this->date);
+        $breakStart = $date->copy()->setTimeFromTimeString((string) $shift->end_time);
+        $breakEnd = $date->copy()->setTimeFromTimeString((string) $shift->second_start_time);
+        $middle = $breakStart->copy()->addSeconds((int) ($breakStart->diffInSeconds($breakEnd) / 2));
+
+        return Carbon::parse($time)->greaterThan($middle) ? 2 : 1;
     }
 }

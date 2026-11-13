@@ -82,11 +82,13 @@ Route::prefix('v1')->group(function () {
 
         // Team (Koordinator / Admin): roster per outlet, schedules and freelancers
         Route::get('/team/roster', [TeamApiController::class, 'roster']);
+        Route::get('/team/week', [TeamApiController::class, 'week']);
         Route::get('/team/options', [TeamApiController::class, 'options']);
         Route::get('/team/workers', [TeamApiController::class, 'workers']);
         Route::get('/team/recap', [TeamApiController::class, 'recap']);
         Route::get('/team/recap/link', [TeamApiController::class, 'recapLink']);
         Route::put('/team/schedules', [TeamApiController::class, 'updateSchedule']);
+        Route::post('/team/schedules/copy', [TeamApiController::class, 'copySchedules']);
         Route::get('/team/freelancers', [TeamApiController::class, 'freelancers']);
         Route::post('/team/freelancers', [TeamApiController::class, 'storeFreelancer']);
         Route::post('/team/freelancers/{id}/account', [TeamApiController::class, 'createFreelancerAccount'])->whereNumber('id');

@@ -36,6 +36,9 @@ class AttendanceCheckService
 
     private const DEFAULT_FACE_THRESHOLD = 60;
 
+    /** The second segment of a split shift accepts check-in from this many minutes before it starts. */
+    private const SECOND_SEGMENT_OPENS_MINUTES_BEFORE = 60;
+
     public function __construct(
         private readonly WorkScheduleService $workSchedule,
         private readonly ApprovalFlowService $approvalFlow,
@@ -174,13 +177,34 @@ class AttendanceCheckService
     private function performCheckIn(User $user, AttendanceCheckInput $input): AttendanceCheckResult
     {
         $profile = $this->profileOf($user);
-        $existingAttendance = Attendance::byWorker($user)->today()->first();
+        $todayRows = Attendance::byWorker($user)->today()->orderBy('segment')->get();
+        $existingAttendance = $todayRows->firstWhere('segment', 1);
+        $segment = 1;
+        $workingHours = $this->workSchedule->resolve($profile, now());
 
         if ($existingAttendance?->check_in) {
-            throw new AttendanceRuleException('Sudah melakukan check in hari ini.', 409);
+            // A split shift has a second segment to check in to once the first one is checked out.
+            $second = $todayRows->firstWhere('segment', 2);
+
+            if ($workingHours['segment_count'] < 2 || ! $existingAttendance->check_out || $second?->check_in) {
+                throw new AttendanceRuleException('Sudah melakukan check in hari ini.', 409);
+            }
+
+            $segment = 2;
+            $existingAttendance = $second;
+            $workingHours = $this->workSchedule->resolve($profile, now(), 2);
+
+            // Checking in hours before the second segment starts would only record a presence nobody worked.
+            $opensAt = now()->copy()->setTimeFromTimeString((string) $workingHours['start_time'])->subMinutes(self::SECOND_SEGMENT_OPENS_MINUTES_BEFORE);
+
+            if (now()->lessThan($opensAt)) {
+                throw new AttendanceRuleException(
+                    sprintf('Segmen kedua dimulai pukul %s. Check in dibuka pukul %s.', substr((string) $workingHours['start_time'], 0, 5), $opensAt->format('H:i')),
+                    422,
+                );
+            }
         }
 
-        $workingHours = $this->workSchedule->resolve($profile, now());
         $checks = $this->runChecks($user, $profile, $input, self::PURPOSE_CHECK_IN, $workingHours['location']);
         $reasons = $checks['approval_reasons'];
         $requiresApproval = $reasons !== [];
@@ -193,12 +217,13 @@ class AttendanceCheckService
             default => AttendanceStatus::OnTime,
         };
 
-        $attendance = DB::transaction(function () use ($user, $existingAttendance, $checks, $workingHours, $now, $status, $lateMinutes, $requiresApproval): Attendance {
+        $attendance = DB::transaction(function () use ($user, $existingAttendance, $segment, $checks, $workingHours, $now, $status, $lateMinutes, $requiresApproval): Attendance {
             // Reuse today's row (for example one created by an approved correction) instead of
             // inserting a second row, which the unique (worker, date) index rejects.
             $attendance = $existingAttendance ?? new Attendance([
                 ...Attendance::workerKeys($user),
                 'date' => today(),
+                'segment' => $segment,
             ]);
 
             $attendance->fill([
@@ -241,7 +266,7 @@ class AttendanceCheckService
     private function performCheckOut(User $user, AttendanceCheckInput $input): AttendanceCheckResult
     {
         $profile = $this->profileOf($user);
-        $attendance = Attendance::byWorker($user)->today()->first();
+        $attendance = $this->attendanceToCheckOut($user);
 
         if (! $attendance?->check_in) {
             throw new AttendanceRuleException('Anda belum melakukan check in hari ini.', 422);
@@ -288,6 +313,30 @@ class AttendanceCheckService
             approvalReasons: $reasons,
             message: $this->message('Check out', $reasons),
         );
+    }
+
+    /**
+     * Today's open row (latest segment), or yesterday's still-open row when an overnight shift crosses midnight.
+     */
+    private function attendanceToCheckOut(User $user): ?Attendance
+    {
+        $todayRows = Attendance::byWorker($user)->with('location')->today()->orderByDesc('segment')->get();
+        $today = $todayRows->first();
+
+        if ($today?->check_in) {
+            // The open segment of a split shift, else the latest one (which is then refused as already checked out).
+            return $todayRows->first(fn (Attendance $row): bool => $row->check_in !== null && $row->check_out === null) ?? $today;
+        }
+
+        $overnight = Attendance::byWorker($user)
+            ->with('location')
+            ->whereDate('date', today()->subDay())
+            ->whereNotNull('check_in')
+            ->whereNull('check_out')
+            ->where('check_in', '>=', now()->subHours(20))
+            ->first();
+
+        return $overnight ?? $today;
     }
 
     /**

@@ -27,11 +27,14 @@ use App\Models\Shift;
 use App\Models\ShiftSchedule;
 use App\Models\User;
 use App\Services\DataAccessService;
+use App\Services\OutletRosterService;
+use App\Services\ShiftAssignmentService;
+use App\Services\WeeklyScheduleService;
 use Filament\Actions\Testing\TestAction;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
-use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
 class CoordinatorAccessTest extends TestCase
@@ -142,29 +145,72 @@ class CoordinatorAccessTest extends TestCase
         $this->assertSame(1, Shift::where('name', 'Sore Closing')->count());
     }
 
-    public function test_schedules_offer_only_brand_outlets_and_shifts(): void
+    public function test_default_shift_and_placement_options_stay_inside_the_brands_but_scheduling_may_lend_a_worker(): void
     {
+        // Placing a worker (default shift, home outlet) stays inside the brands.
         $this->assertSame([$this->jchickenOutlet->id], array_keys(ShiftScheduleResource::locationOptions($this->company->id)));
         $this->assertEqualsCanonicalizing([$this->jchickenMorning->id, $this->companyWide->id], array_keys(ShiftScheduleResource::shiftOptions($this->company->id)));
         $this->assertSame(["freelancer:{$this->bayu->id}"], array_keys(ShiftScheduleResource::workerOptions($this->company->id)['Freelancer']));
 
-        try {
-            Livewire::test(ManageShiftSchedules::class)->instance()->assignSchedule([
-                'company_id' => $this->company->id,
-                'workers' => ["freelancer:{$this->bayu->id}"],
-                'date_from' => today()->toDateString(),
-                'date_until' => today()->toDateString(),
-                'weekdays' => [1, 2, 3, 4, 5, 6, 7],
-                'mode' => 'shift',
-                'shift_id' => $this->momoyoMorning->id,
-                'overwrite' => true,
-            ]);
-            $this->fail('A shift of another brand must be refused.');
-        } catch (HttpException $exception) {
-            $this->assertSame(422, $exception->getStatusCode());
+        // Scheduling a day may lend the worker to another brand's outlet and shift.
+        $this->assertEqualsCanonicalizing([$this->jchickenOutlet->id, $this->momoyoOutlet->id], array_keys(ShiftScheduleResource::locationOptions($this->company->id, borrowing: true)));
+        $this->assertContains($this->momoyoMorning->id, array_keys(ShiftScheduleResource::shiftOptions($this->company->id, borrowing: true)));
+
+        Livewire::test(ManageShiftSchedules::class)->instance()->assignSchedule([
+            'company_id' => $this->company->id,
+            'workers' => ["freelancer:{$this->bayu->id}"],
+            'date_from' => today()->toDateString(),
+            'date_until' => today()->toDateString(),
+            'weekdays' => [1, 2, 3, 4, 5, 6, 7],
+            'mode' => 'shift',
+            'shift_id' => $this->momoyoMorning->id,
+            'company_location_id' => $this->momoyoOutlet->id,
+            'overwrite' => true,
+        ]);
+
+        $schedule = ShiftSchedule::query()->firstOrFail();
+        $this->assertSame([$this->momoyoMorning->id, $this->momoyoOutlet->id], [$schedule->shift_id, $schedule->company_location_id]);
+    }
+
+    public function test_the_receiving_brand_sees_a_lent_worker_but_cannot_change_the_schedule(): void
+    {
+        ShiftSchedule::create(['freelancer_id' => $this->bayu->id, 'date' => today(), 'shift_id' => $this->momoyoMorning->id, 'company_location_id' => $this->momoyoOutlet->id]);
+        ShiftSchedule::create(['freelancer_id' => $this->bayu->id, 'date' => today()->addDay(), 'shift_id' => $this->jchickenMorning->id, 'company_location_id' => $this->jchickenOutlet->id]);
+
+        $momoyoCoordinator = User::factory()->create(['name' => 'Koordinator Momoyo']);
+        $momoyoCoordinator->assignRole('Koordinator');
+        $momoyoCoordinator->grantDataAccess(DataScope::Divisions, divisionIds: [$this->momoyo->id]);
+
+        $roster = app(OutletRosterService::class)->roster($momoyoCoordinator, today());
+        $this->assertSame('Momoyo Ciledug', $roster[0]['location']['name']);
+        $this->assertSame('Bayu Adillah', $roster[0]['entries'][0]['worker']['name']);
+        $this->assertSame('JCHICKEN CILEDUG', $roster[0]['entries'][0]['borrowed_from']);
+
+        $this->assertSame([], app(OutletRosterService::class)->roster($momoyoCoordinator, today()->addDay()), 'Only the days spent at their outlets.');
+
+        $this->expectException(AuthorizationException::class);
+        app(ShiftAssignmentService::class)->assignDay($momoyoCoordinator, $this->bayu, today()->toDateString(), 'off');
+    }
+
+    public function test_roster_and_week_load_several_lent_workers_without_lazy_loading(): void
+    {
+        // Laravel only enforces lazy-loading rules on results with more than one model: use several.
+        $second = Freelancer::create(['company_id' => $this->company->id, 'division_id' => $this->jchicken->id, 'full_name' => 'Kedua Dipinjam', 'status' => 'active']);
+
+        foreach ([$this->bayu, $second] as $worker) {
+            ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => today(), 'shift_id' => $this->momoyoMorning->id, 'company_location_id' => $this->momoyoOutlet->id]);
         }
 
-        $this->assertFalse(ShiftSchedule::query()->exists());
+        $roster = app(OutletRosterService::class)->roster($this->coordinator, today());
+        $this->assertCount(2, $roster[0]['entries']);
+        $brands = array_column($roster[0]['entries'], 'borrowed_from');
+        sort($brands);
+        $this->assertSame(['JCHICKEN', 'JCHICKEN CILEDUG'], $brands);
+
+        $week = app(WeeklyScheduleService::class)->week($this->coordinator, today());
+        $this->assertCount(2, $week['workers']);
+        $this->assertNotNull($week['workers'][0]['days'][today()->toDateString()]['borrowed_from']);
+
     }
 
     public function test_freelancer_list_and_contract_actions_stay_inside_the_brands(): void

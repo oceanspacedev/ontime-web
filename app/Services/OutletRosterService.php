@@ -52,10 +52,13 @@ final class OutletRosterService
      *         worker: array{type: string, id: int, company_id: int, number: string, name: string},
      *         shift: array{id: int, name: string, code: string|null, label: string, start_time: string, end_time: string}|null,
      *         section: string|null,
+     *         borrowed_from: string|null,
      *         state: string,
      *         check_in: string|null,
      *         check_out: string|null,
      *         late_minutes: int,
+     *         segments: list<array{start: string, end: string}>,
+     *         attendances: list<array{segment: int, check_in: string|null, check_out: string|null, late_minutes: int}>,
      *     }>,
      * }>
      */
@@ -64,7 +67,7 @@ final class OutletRosterService
         $schedules = ShiftSchedule::query()
             ->visibleTo($user)
             ->whereDate('date', $date->toDateString())
-            ->with(['employee', 'intern', 'freelancer', 'shift.division', 'location'])
+            ->with([...ShiftSchedule::workerEagerLoads(), 'shift.division', 'location'])
             ->get()
             ->filter(fn (ShiftSchedule $schedule): bool => $schedule->getWorkerProfile() !== null);
 
@@ -94,7 +97,7 @@ final class OutletRosterService
 
     /**
      * @param  Collection<int, ShiftSchedule>  $schedules
-     * @return array<string, Attendance> Keyed "employee:ID".
+     * @return array<string, Collection<int, Attendance>> The day's rows (one per segment), keyed "employee:ID".
      */
     private function attendancesFor(Collection $schedules, CarbonInterface $date): array
     {
@@ -110,9 +113,11 @@ final class OutletRosterService
             Attendance::query()
                 ->whereIn("{$type}_id", $ids)
                 ->whereDate('date', $date->toDateString())
+                ->orderBy('segment')
                 ->get()
-                ->each(function (Attendance $attendance) use ($type, &$attendances): void {
-                    $attendances["{$type}:{$attendance->{"{$type}_id"}}"] = $attendance;
+                ->groupBy("{$type}_id")
+                ->each(function (Collection $rows, int|string $workerId) use ($type, &$attendances): void {
+                    $attendances["{$type}:{$workerId}"] = $rows->values();
                 });
         }
 
@@ -120,7 +125,7 @@ final class OutletRosterService
     }
 
     /**
-     * @param  array<string, Attendance>  $attendances
+     * @param  array<string, Collection<int, Attendance>>  $attendances
      * @return array<string, mixed>
      */
     private function entry(ShiftSchedule $schedule, array $attendances): array
@@ -131,8 +136,11 @@ final class OutletRosterService
             $worker instanceof Intern => ['intern', $worker->nis],
             $worker instanceof Freelancer => ['freelancer', $worker->freelancer_number],
         };
-        $attendance = $attendances["{$type}:{$worker->getKey()}"] ?? null;
+        $rows = $attendances["{$type}:{$worker->getKey()}"] ?? collect();
         $shift = $schedule->shift;
+        // The segment in progress; a finished first segment of a split shift leaves the second still to come.
+        $attendance = $rows->last();
+        $secondPending = $shift?->hasSecondSegment() && $attendance?->check_out !== null && $rows->count() < 2;
 
         return [
             'schedule_id' => (int) $schedule->id,
@@ -144,20 +152,31 @@ final class OutletRosterService
                 'label' => $shift->label(),
                 'start_time' => substr((string) $shift->start_time, 0, 5),
                 'end_time' => substr((string) $shift->end_time, 0, 5),
+                'talenta_code' => $shift->talenta_code,
+                'segments' => $shift->segments(),
             ] : null,
             'location_id' => $schedule->company_location_id,
+            'borrowed_from' => $schedule->borrowedFromBrand(),
             'section' => $schedule->section,
-            'state' => $this->state($schedule, $attendance),
-            'check_in' => $attendance?->check_in?->format('H:i'),
+            'state' => $this->state($schedule, $attendance, $secondPending),
+            'check_in' => $rows->first()?->check_in?->format('H:i'),
             'check_out' => $attendance?->check_out?->format('H:i'),
-            'late_minutes' => (int) ($attendance?->late_minutes ?? 0),
+            'late_minutes' => (int) $rows->sum('late_minutes'),
+            'segments' => $shift?->segments() ?? [],
+            'attendances' => $rows->map(fn (Attendance $row): array => [
+                'segment' => (int) $row->segment,
+                'check_in' => $row->check_in?->format('H:i'),
+                'check_out' => $row->check_out?->format('H:i'),
+                'late_minutes' => (int) $row->late_minutes,
+            ])->all(),
         ];
     }
 
-    private function state(ShiftSchedule $schedule, ?Attendance $attendance): string
+    private function state(ShiftSchedule $schedule, ?Attendance $attendance, bool $secondPending = false): string
     {
         return match (true) {
             $schedule->is_day_off => self::STATE_DAY_OFF,
+            $secondPending => $this->hasStarted($schedule, 2) ? self::STATE_MISSING : self::STATE_UPCOMING,
             $attendance?->check_in === null => $this->hasStarted($schedule) ? self::STATE_MISSING : self::STATE_UPCOMING,
             $attendance->check_out !== null => self::STATE_DONE,
             $attendance->status === AttendanceStatus::PendingApproval => self::STATE_WAITING,
@@ -169,9 +188,10 @@ final class OutletRosterService
     /**
      * Whether the shift has begun, so a missing check-in is late rather than still to come.
      */
-    private function hasStarted(ShiftSchedule $schedule): bool
+    private function hasStarted(ShiftSchedule $schedule, int $segment = 1): bool
     {
-        $start = $schedule->date->copy()->setTimeFromTimeString((string) ($schedule->shift?->start_time ?? '00:00'));
+        $time = $segment === 2 ? $schedule->shift?->second_start_time : $schedule->shift?->start_time;
+        $start = $schedule->date->copy()->setTimeFromTimeString((string) ($time ?? '00:00'));
 
         return now()->greaterThanOrEqualTo($start);
     }

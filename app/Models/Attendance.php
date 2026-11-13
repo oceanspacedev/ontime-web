@@ -24,6 +24,7 @@ class Attendance extends Model
         'shift_id',
         'company_location_id',
         'date',
+        'segment',
         'check_in',
         'check_out',
         'check_in_photo',
@@ -126,7 +127,7 @@ class Attendance extends Model
         if ($this->check_in && $profile) {
             $workSchedule = app(WorkScheduleService::class);
             $checkInTime = Carbon::parse($this->check_in);
-            $lateMinutes = $workSchedule->lateMinutes($workSchedule->resolve($profile, $checkInTime), $checkInTime);
+            $lateMinutes = $workSchedule->lateMinutes($workSchedule->resolve($profile, $checkInTime, (int) ($this->segment ?? 1)), $checkInTime);
         }
 
         $this->update([

@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Models\Attendance;
 use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Models\User;
 use Carbon\CarbonInterface;
 
 /**
@@ -16,14 +18,15 @@ use Carbon\CarbonInterface;
  * 2. otherwise the worker's default shift,
  * 3. otherwise the company policy hours.
  *
+ * A split shift has two segments; pass the segment (1 or 2) to get its hours, so lateness is judged per segment.
  * A schedule may also name the outlet (company location) and section the worker covers that day.
  */
 class WorkScheduleService
 {
     /**
-     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null}
+     * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null, segment: int, segment_count: int}
      */
-    public function resolve(Employee|Intern|Freelancer $worker, CarbonInterface $date): array
+    public function resolve(Employee|Intern|Freelancer $worker, CarbonInterface $date, int $segment = 1): array
     {
         $policy = $worker->company?->policy;
         $policyHours = [
@@ -35,6 +38,8 @@ class WorkScheduleService
             'source' => 'policy',
             'location' => null,
             'section' => null,
+            'segment' => 1,
+            'segment_count' => 1,
         ];
 
         $schedule = ShiftSchedule::query()
@@ -57,15 +62,38 @@ class WorkScheduleService
             return [...$policyHours, ...$placement];
         }
 
+        // A split shift has two segments; asking for one the shift lacks falls back to the first.
+        $segment = $segment === 2 && $shift->hasSecondSegment() ? 2 : 1;
+
         return [
             'shift' => $shift,
             'is_day_off' => false,
-            'start_time' => (string) $shift->start_time,
-            'end_time' => (string) $shift->end_time,
+            'start_time' => (string) ($segment === 2 ? $shift->second_start_time : $shift->start_time),
+            'end_time' => (string) ($segment === 2 ? $shift->second_end_time : $shift->end_time),
+            'segment' => $segment,
+            'segment_count' => $shift->hasSecondSegment() ? 2 : 1,
             'late_tolerance_minutes' => (int) ($shift->late_tolerance_minutes ?? $policyHours['late_tolerance_minutes']),
             'source' => $schedule ? 'schedule' : 'default',
             ...$placement,
         ];
+    }
+
+    /**
+     * The segment the worker is on today and its attendance row (null before checking in to it).
+     * On a split shift it is segment 2 once segment 1 is checked out.
+     *
+     * @return array{segment: int, attendance: Attendance|null}
+     */
+    public function currentSegment(User $user, Employee|Intern|Freelancer $worker, CarbonInterface $date): array
+    {
+        $rows = Attendance::byWorker($user)->with(['employee', 'intern', 'freelancer', 'location'])->whereDate('date', $date->toDateString())->orderBy('segment')->get();
+        $first = $rows->firstWhere('segment', 1);
+
+        if ($first?->check_out && $this->resolve($worker, $date)['segment_count'] > 1) {
+            return ['segment' => 2, 'attendance' => $rows->firstWhere('segment', 2)];
+        }
+
+        return ['segment' => 1, 'attendance' => $first ?? $rows->first()];
     }
 
     /**

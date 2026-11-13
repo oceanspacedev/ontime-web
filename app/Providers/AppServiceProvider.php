@@ -9,6 +9,7 @@ use App\Services\Face\CompreFaceVerifier;
 use App\Services\Face\FaceVerifier;
 use App\Support\IdleApiTokens;
 use App\Support\ObservabilityAccess;
+use App\Support\StorageUrl;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -17,6 +18,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -28,6 +31,13 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        // Registered early on purpose: panel plugins build their asset URLs (favicon, logos) while the panel is
+        // being configured, before boot(). An https APP_URL (production) makes every generated link https, even
+        // when a proxy hides it from the request.
+        if (str_starts_with((string) config('app.url'), 'https://')) {
+            URL::forceScheme('https');
+        }
+
         $this->app->bind(FaceVerifier::class, fn (Application $app): FaceVerifier => match (config('services.face.driver')) {
             'compreface' => $app->make(CompreFaceVerifier::class),
             default => $app->make(BasicFaceVerifier::class),
@@ -39,6 +49,12 @@ class AppServiceProvider extends ServiceProvider
         Model::preventLazyLoading(! app()->isProduction());
 
         ObservabilityAccess::register();
+
+        foreach (config('filesystems.disks') as $name => $disk) {
+            if (($disk['driver'] ?? null) === 'local' && ($disk['serve'] ?? false)) {
+                StorageUrl::serveInline(Storage::disk($name));
+            }
+        }
 
         Gate::before(function ($user, string $ability) {
             return $user->hasRole('Superadmin') ? true : null;

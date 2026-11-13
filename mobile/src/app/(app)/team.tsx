@@ -1,21 +1,24 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useState } from 'react';
+import { Alert } from 'react-native';
 
 import { DaySwitcher } from '@/components/DaySwitcher';
 import { ScheduleSheet, type ScheduleTarget } from '@/components/ScheduleSheet';
 import { TeamFreelancerList } from '@/components/TeamFreelancerList';
 import { TeamRecapView } from '@/components/TeamRecapView';
+import { WeekGrid } from '@/components/WeekGrid';
 import { Badge, EmptyState, ErrorBanner, Group, IconButton, LoadingView, Row, Screen, Segmented, Sheet } from '@/components/ui';
 import { errorMessage, teamApi, type RosterEntry, type RosterOutlet, type TeamFreelancer } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
-import { rosterBadge, rosterLine, rosterSummary } from '@/lib/team';
+import { rosterBadge, rosterLine, rosterSummary, shiftDate } from '@/lib/team';
 
-type TeamView = 'schedule' | 'freelancers' | 'recap';
+type TeamView = 'schedule' | 'week' | 'freelancers' | 'recap';
 
 const VIEWS: { value: TeamView; label: string }[] = [
-  { value: 'schedule', label: 'Jadwal' },
+  { value: 'schedule', label: 'Hari' },
+  { value: 'week', label: 'Minggu' },
   { value: 'freelancers', label: 'Freelancer' },
   { value: 'recap', label: 'Rekap' },
 ];
@@ -60,6 +63,23 @@ export default function TeamScreen() {
     });
   };
 
+  const copyWeek = useMutation({
+    mutationFn: () => teamApi.copySchedules(shiftDate(date, -7), date),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.team });
+      Alert.alert('Jadwal minggu lalu', response.message);
+    },
+    onError: (error) => Alert.alert('Gagal menyalin', errorMessage(error)),
+  });
+
+  const confirmCopyWeek = () => {
+    setAdding(false);
+    Alert.alert('Salin jadwal minggu lalu?', 'Jadwal minggu sebelum tanggal ini disalin ke minggu yang dipilih. Hari yang sudah terisi tidak ditimpa.', [
+      { text: 'Batal', style: 'cancel' },
+      { text: 'Salin', onPress: () => copyWeek.mutate() },
+    ]);
+  };
+
   const go = (path: '/team/assign' | '/team/freelancer/new') => {
     setAdding(false);
     router.push(path === '/team/assign' ? { pathname: path, params: { date } } : path);
@@ -75,6 +95,8 @@ export default function TeamScreen() {
 
       {view === 'recap' ? (
         <TeamRecapView />
+      ) : view === 'week' ? (
+        <WeekGrid date={date} onChange={setDate} onEdit={setTarget} />
       ) : view === 'freelancers' ? (
         <TeamFreelancerList onSchedule={scheduleFreelancer} />
       ) : (
@@ -112,6 +134,7 @@ export default function TeamScreen() {
       <Sheet visible={adding} onClose={() => setAdding(false)} title="Tambah">
         <Group>
           <Row icon="calendar-outline" title="Jadwalkan pekerja" subtitle="Atur shift seseorang untuk hari yang dipilih" onPress={() => go('/team/assign')} />
+          <Row icon="copy-outline" title="Salin jadwal minggu lalu" subtitle="Mulai dari jadwal minggu sebelumnya" onPress={confirmCopyWeek} />
           <Row icon="person-add-outline" title="Freelancer baru" subtitle="Nama, nomor HP, dan outlet" onPress={() => go('/team/freelancer/new')} />
         </Group>
       </Sheet>

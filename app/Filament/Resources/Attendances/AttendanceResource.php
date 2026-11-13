@@ -213,13 +213,13 @@ class AttendanceResource extends Resource
                 ImageColumn::make('check_in_photo')
                     ->label('Foto Masuk')
                     ->circular()
-                    ->disk(config('filesystems.default'))
+                    ->state(fn (Attendance $record): ?string => StorageUrl::for($record->check_in_photo))
                     ->toggleable(isToggledHiddenByDefault: true),
 
                 ImageColumn::make('check_out_photo')
                     ->label('Foto Keluar')
                     ->circular()
-                    ->disk(config('filesystems.default'))
+                    ->state(fn (Attendance $record): ?string => StorageUrl::for($record->check_out_photo))
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('date', 'desc')

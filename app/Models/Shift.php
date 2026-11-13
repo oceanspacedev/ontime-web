@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Traits\PreventsDeletionWhileInUse;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -17,8 +18,11 @@ class Shift extends Model
         'division_id',
         'name',
         'code',
+        'talenta_code',
         'start_time',
         'end_time',
+        'second_start_time',
+        'second_end_time',
         'late_tolerance_minutes',
         'is_active',
     ];
@@ -90,6 +94,52 @@ class Shift extends Model
         return substr((string) $this->end_time, 0, 5) <= substr((string) $this->start_time, 0, 5);
     }
 
+    public function hasSecondSegment(): bool
+    {
+        return filled($this->second_start_time) && filled($this->second_end_time);
+    }
+
+    /**
+     * Working segments of the day as "HH:MM" pairs: one for a normal shift, two for a split shift.
+     *
+     * @return list<array{start: string, end: string}>
+     */
+    public function segments(): array
+    {
+        $segments = [['start' => substr((string) $this->start_time, 0, 5), 'end' => substr((string) $this->end_time, 0, 5)]];
+
+        if ($this->hasSecondSegment()) {
+            $segments[] = ['start' => substr((string) $this->second_start_time, 0, 5), 'end' => substr((string) $this->second_end_time, 0, 5)];
+        }
+
+        return $segments;
+    }
+
+    /**
+     * "08:00 - 17:00", or "07:45 - 13:00 & 17:45 - 22:00" for a split shift.
+     */
+    public function hoursText(): string
+    {
+        return collect($this->segments())->map(fn (array $segment): string => "{$segment['start']} - {$segment['end']}")->implode(' & ');
+    }
+
+    /**
+     * Total scheduled minutes of the day, without the break between split segments.
+     */
+    public function scheduledMinutes(): int
+    {
+        return (int) collect($this->segments())->sum(function (array $segment): int {
+            $start = Carbon::parse($segment['start']);
+            $end = Carbon::parse($segment['end']);
+
+            if ($end->lessThanOrEqualTo($start)) {
+                $end->addDay();
+            }
+
+            return $start->diffInMinutes($end);
+        });
+    }
+
     /**
      * "Pagi", or "JCHICKEN · Pagi" for a brand shift. Written this way in exports and accepted by imports.
      */
@@ -110,6 +160,6 @@ class Shift extends Model
      */
     public function label(): string
     {
-        return sprintf('%s (%s - %s)', $this->qualifiedName(), substr((string) $this->start_time, 0, 5), substr((string) $this->end_time, 0, 5));
+        return sprintf('%s (%s)', $this->qualifiedName(), $this->hoursText());
     }
 }

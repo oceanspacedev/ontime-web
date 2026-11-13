@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
 use App\Models\LeaveRequest;
+use App\Support\StorageUrl;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,9 +20,15 @@ class ReportAndCalendarApiController extends Controller
             return response()->json(['message' => 'Kalender cuti tim tidak tersedia untuk peserta magang.'], 403);
         }
 
-        $month = (int) $request->input('month', now()->month);
-        $year = (int) $request->input('year', now()->year);
-        $companyId = $request->input('company_id');
+        $validated = $request->validate([
+            'month' => ['nullable', 'integer', 'between:1,12'],
+            'year' => ['nullable', 'integer', 'between:2000,2100'],
+            'company_id' => ['nullable', 'integer'],
+        ]);
+
+        $month = (int) ($validated['month'] ?? now()->month);
+        $year = (int) ($validated['year'] ?? now()->year);
+        $companyId = $validated['company_id'] ?? null;
 
         $startOfMonth = Carbon::createFromDate($year, $month, 1)->startOfMonth()->toDateString();
         $endOfMonth = Carbon::createFromDate($year, $month, 1)->endOfMonth()->toDateString();
@@ -63,7 +70,7 @@ class ReportAndCalendarApiController extends Controller
                 'days_count' => $leave->days_count,
                 'status' => $leave->status,
                 'reason' => $leave->reason,
-                'master_face_photo' => $person?->master_face_photo ?? null,
+                'master_face_photo' => StorageUrl::for($person?->master_face_photo),
             ];
         });
 
@@ -76,9 +83,19 @@ class ReportAndCalendarApiController extends Controller
 
     public function laporanAbsensi(Request $request): JsonResponse
     {
-        $startDate = $request->input('start_date', now()->startOfMonth()->toDateString());
-        $endDate = $request->input('end_date', now()->toDateString());
-        $companyId = $request->input('company_id');
+        $validated = $request->validate([
+            'start_date' => ['nullable', 'date_format:Y-m-d'],
+            'end_date' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:start_date'],
+            'company_id' => ['nullable', 'integer'],
+        ]);
+
+        $startDate = $validated['start_date'] ?? now()->startOfMonth()->toDateString();
+        $endDate = $validated['end_date'] ?? now()->toDateString();
+        $companyId = $validated['company_id'] ?? null;
+
+        if (Carbon::parse($startDate)->diffInDays(Carbon::parse($endDate)) > 366) {
+            return response()->json(['message' => 'Rentang tanggal maksimal 366 hari.', 'errors' => ['end_date' => ['Rentang tanggal maksimal 366 hari.']]], 422);
+        }
 
         $user = $request->user();
         $query = Attendance::with([...Attendance::workerEagerLoads(), 'employee.user', 'intern.user', 'freelancer.user'])
@@ -95,18 +112,21 @@ class ReportAndCalendarApiController extends Controller
 
         $allRecords = (clone $query)->get();
 
-        $totalPresent = $allRecords->filter(function ($a) {
+        // A split shift has one row per segment: a worker's day counts once, however many segments it has.
+        $perWorkerDay = $allRecords->groupBy(fn ($a): string => ($a->employee_id ?? '').':'.($a->intern_id ?? '').':'.($a->freelancer_id ?? '').':'.Carbon::parse($a->date)->toDateString());
+
+        $totalPresent = $perWorkerDay->filter(fn ($rows): bool => $rows->contains(function ($a) {
             $val = $a->status instanceof \BackedEnum ? $a->status->value : (string) $a->status;
 
             return in_array($val, ['on_time', 'late', 'pending_approval']) || ! empty($a->check_in);
-        })->count();
+        }))->count();
 
         // Hitung total berapa KALI terlambat (frekuensi, bukan total menit)
-        $totalLateCount = $allRecords->filter(function ($a) {
+        $totalLateCount = $perWorkerDay->filter(fn ($rows): bool => $rows->contains(function ($a) {
             $val = $a->status instanceof \BackedEnum ? $a->status->value : (string) $a->status;
 
             return $val === 'late' || (int) $a->late_minutes > 0;
-        })->count();
+        }))->count();
 
         $leaveQuery = LeaveRequest::where('status', 'approved')
             ->where(function ($q) use ($startDate, $endDate) {

@@ -30,6 +30,7 @@ export const queryKeys = {
   calendar: (month: number, year: number) => ['calendar', month, year] as const,
   team: ['team'] as const,
   teamRoster: (date: string) => ['team', 'roster', date] as const,
+  teamWeek: (date: string) => ['team', 'week', date] as const,
   teamOptions: ['team', 'options'] as const,
   teamWorkers: (search: string) => ['team', 'workers', search] as const,
   teamFreelancers: (status: string, search: string) => ['team', 'freelancers', status, search] as const,

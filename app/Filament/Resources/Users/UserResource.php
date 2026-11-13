@@ -14,6 +14,7 @@ use App\Models\JobTitle;
 use App\Models\User;
 use App\Services\DataAccessService;
 use BackedEnum;
+use Closure;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -85,6 +86,47 @@ class UserResource extends Resource
                 ->sort()
                 ->all();
         });
+    }
+
+    /**
+     * Superadmin and an Admin with access to everything may give any data access.
+     */
+    protected static function canGrantEverything(): bool
+    {
+        $user = auth()->user();
+
+        return $user && DataAccessService::canGrantAccess($user, DataScope::All);
+    }
+
+    /**
+     * Superadmin, or an Admin who manages workers, sets who an account sees, within their own access.
+     */
+    protected static function canSetDataAccess(): bool
+    {
+        $user = auth()->user();
+
+        return $user && ($user->hasRole(SystemRole::Superadmin->value) || ($user->hasRole(SystemRole::Admin->value) && $user->canManageWorkers()));
+    }
+
+    /**
+     * Division picker labels limited to the divisions the current user may give access to.
+     *
+     * @return array<int, string>
+     */
+    protected static function grantableDivisionLabels(): array
+    {
+        $user = auth()->user();
+        $labels = static::divisionPathLabels();
+
+        if (! $user || static::canGrantEverything()) {
+            return $labels;
+        }
+
+        $allowed = Division::query()->whereIn('id', array_keys($labels))->get(['id', 'company_id'])
+            ->filter(fn (Division $division): bool => DataAccessService::canGrantAccess($user, DataScope::Divisions, divisionIds: [$division->id]))
+            ->modelKeys();
+
+        return array_intersect_key($labels, array_flip($allowed));
     }
 
     protected static function selectedScope(Get $get): ?DataScope
@@ -227,21 +269,32 @@ class UserResource extends Resource
                 Section::make('Akses Data')
                     ->description('Menentukan data siapa yang bisa dilihat, dikelola, dan disetujui akun ini. Role menentukan apa yang bisa dilakukan, akses data menentukan untuk siapa.')
                     ->icon('heroicon-o-shield-check')
-                    ->visible(fn (): bool => (bool) auth()->user()?->hasRole(SystemRole::Superadmin->value))
+                    ->visible(fn (): bool => static::canSetDataAccess())
                     ->schema([
                         Select::make('data_scope')
                             ->label('Tingkat Akses')
-                            ->options(DataScope::class)
+                            ->options(fn (): array => collect(DataScope::cases())
+                                ->reject(fn (DataScope $scope): bool => $scope === DataScope::All && ! static::canGrantEverything())
+                                ->mapWithKeys(fn (DataScope $scope): array => [$scope->value => $scope->getLabel()])
+                                ->all())
                             ->default(DataScope::Own->value)
                             ->required()
                             ->live()
+                            ->rule(fn (Get $get): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get): void {
+                                $scope = DataScope::tryFrom((string) $value);
+                                $user = auth()->user();
+
+                                if (! $scope || ! $user || ! DataAccessService::canGrantAccess($user, $scope, (array) $get('accessibleCompanies'), (array) $get('accessibleDivisions'))) {
+                                    $fail('Akses data tidak boleh lebih luas dari akses Anda sendiri.');
+                                }
+                            })
                             ->helperText(fn (Get $get, ?User $record): string => $record?->hasRole(SystemRole::Superadmin->value)
                                 ? 'Superadmin selalu punya akses Semua, apa pun pilihan di sini.'
                                 : (string) static::selectedScope($get)?->getDescription()),
 
                         Select::make('accessibleCompanies')
                             ->label('Badan Usaha')
-                            ->relationship('accessibleCompanies', 'name')
+                            ->relationship('accessibleCompanies', 'name', fn (Builder $query) => static::canGrantEverything() ? $query : $query->whereIn('companies.id', DataAccessService::placeableCompanyIds(auth()->user()) ?? []))
                             ->multiple()
                             ->preload()
                             ->searchable()
@@ -252,7 +305,7 @@ class UserResource extends Resource
                             ->label('Divisi')
                             ->helperText('Sub-divisi di bawahnya ikut otomatis.')
                             ->relationship('accessibleDivisions', 'name')
-                            ->options(fn (): array => static::divisionPathLabels())
+                            ->options(fn (): array => static::grantableDivisionLabels())
                             ->getOptionLabelFromRecordUsing(fn (Division $record): string => static::divisionPathLabels()[$record->id] ?? $record->name)
                             ->multiple()
                             ->searchable()

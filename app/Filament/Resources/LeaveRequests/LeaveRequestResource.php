@@ -180,7 +180,6 @@ class LeaveRequestResource extends Resource
                                 })
                                 ->directory('leave-attachments')
                                 ->disk(config('filesystems.default'))
-                                ->visibility('public')
                                 ->getUploadedFileNameForStorageUsing(function (TemporaryUploadedFile $file): string {
                                     $user = auth()->user();
                                     $workerProfile = $user?->employee ?? $user?->intern ?? $user?->freelancer;

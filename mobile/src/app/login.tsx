@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useIsMutating, useMutation } from '@tanstack/react-query';
-import { router } from 'expo-router';
 import { useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 
@@ -8,7 +7,7 @@ import { Button, ErrorBanner, Field, Notice, Screen, Text } from '@/components/u
 import { authApi, errorMessage } from '@/lib/api';
 import { clearPendingMagicLink, savePendingMagicLink } from '@/lib/magicLink';
 import { useSession } from '@/lib/session';
-import { BRAND_GLOSS, BRAND_GRADIENT, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
+import { BRAND_GLOSS, BRAND_GRADIENT, fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 /** The white mark of the OnTime logo, the same one the web panel shows (public/images/icon.svg). */
 const BRAND_MARK = require('../../assets/brand-mark.png');
@@ -21,11 +20,8 @@ const AUTH_MUTATION_KEY = ['auth', 'sign-in'];
 
 export default function LoginScreen() {
   const styles = useStyles();
-  const { colors } = useTheme();
   const [mode, setMode] = useState<Mode>('password');
   const busy = useIsMutating({ mutationKey: AUTH_MUTATION_KEY }) > 0;
-  const baseUrl = useSession((state) => state.baseUrl);
-  const serverLabel = baseUrl.replace(/^https?:\/\//, '').replace(/\/api\/v1$/, '');
 
   const changeMode = (next: Mode) => {
     if (!busy) {
@@ -68,18 +64,6 @@ export default function LoginScreen() {
           </View>
         </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.server, pressed && styles.serverPressed]}
-          onPress={() => router.push('/settings/server')}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={`Alamat server ${serverLabel}`}>
-          <Ionicons name="server-outline" size={16} color={colors.textMuted} />
-          <Text style={styles.serverText} numberOfLines={1}>
-            {serverLabel}
-          </Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-        </Pressable>
       </KeyboardAvoidingView>
     </Screen>
   );
@@ -354,17 +338,4 @@ const useStyles = makeStyles((c, dark) => ({
   alternativeRow: { flexDirection: 'row', gap: spacing.sm },
   alternativeButton: { flex: 1 },
   linkRow: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', gap: spacing.sm },
-  server: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'center',
-    gap: 6,
-    maxWidth: '90%',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: radius.pill,
-    backgroundColor: c.fill,
-  },
-  serverPressed: { backgroundColor: c.fillPressed },
-  serverText: { flexShrink: 1, fontSize: fontSize.sm, color: c.textMuted, fontWeight: '500' },
 }));

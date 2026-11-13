@@ -10,6 +10,7 @@ use App\Models\Company;
 use App\Models\CompanyPolicy;
 use App\Models\Division;
 use App\Services\DataAccessService;
+use App\Support\StorageUrl;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -244,14 +245,14 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
 
                 ImageColumn::make('check_in_photo')
                     ->label('Foto Check-In')
-                    ->disk(config('filesystems.default'))
+                    ->state(fn (Attendance $record): ?string => StorageUrl::for($record->check_in_photo))
                     ->square()
                     ->size(40)
                     ->defaultImageUrl(null),
 
                 ImageColumn::make('check_out_photo')
                     ->label('Foto Check-Out')
-                    ->disk(config('filesystems.default'))
+                    ->state(fn (Attendance $record): ?string => StorageUrl::for($record->check_out_photo))
                     ->square()
                     ->size(40)
                     ->defaultImageUrl(null),
@@ -329,7 +330,7 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                     ->requiresConfirmation()
                     ->modalHeading('Hapus Data Absensi User')
                     ->modalDescription('Apakah Anda yakin ingin menghapus data absensi ini? Setelah dihapus, status absensi user pada tanggal ini akan di-reset.')
-                    ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Approver', 'BOD'])),
+                    ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
             ])
             ->bulkActions([
                 BulkActionGroup::make([
@@ -338,7 +339,7 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                         ->requiresConfirmation()
                         ->modalHeading('Hapus Absensi User Terpilih')
                         ->modalDescription('Apakah Anda yakin ingin menghapus semua data absensi terpilih?')
-                        ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Approver', 'BOD'])),
+                        ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
                 ]),
             ]);
     }

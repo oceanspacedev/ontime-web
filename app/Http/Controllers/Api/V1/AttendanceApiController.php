@@ -13,9 +13,9 @@ use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
 use App\Services\FileNamingService;
 use App\Services\WorkScheduleService;
+use App\Support\StorageUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
 {
@@ -191,10 +191,7 @@ class AttendanceApiController extends Controller
             'master_face_verified_at' => now(),
         ]);
 
-        $disk = config('filesystems.default');
-        $photoUrl = $disk === 's3'
-            ? Storage::disk('s3')->temporaryUrl($photoPath, now()->addDays(7))
-            : Storage::disk($disk)->url($photoPath);
+        $photoUrl = StorageUrl::for($photoPath);
 
         return response()->json([
             'message' => 'Foto Master Wajah berhasil diperbarui',
@@ -214,18 +211,28 @@ class AttendanceApiController extends Controller
             return response()->json(['message' => 'Profil pengguna tidak ditemukan.'], 422);
         }
 
-        $attendance = Attendance::byWorker($user)->whereDate('date', today())->first();
-        $hours = app(WorkScheduleService::class)->resolve($profile, today());
+        $workSchedule = app(WorkScheduleService::class);
+        // On a split shift, "today" is the segment the worker is on: segment 2 starts fresh once segment 1 is checked out.
+        ['segment' => $segment, 'attendance' => $attendance] = $workSchedule->currentSegment($user, $profile, today());
+        $hours = $workSchedule->resolve($profile, today(), $segment);
+        $segments = $hours['shift']?->segments() ?? [];
+        $doneToday = Attendance::byWorker($user)->with(['employee', 'intern', 'freelancer'])->whereDate('date', today())->orderBy('segment')->get();
 
         return response()->json([
             'date' => today()->toDateString(),
             'has_checked_in' => $attendance?->check_in !== null,
             'has_checked_out' => $attendance?->check_out !== null,
             'attendance' => $attendance ? new AttendanceResource($attendance) : null,
+            // Every segment's attendance of today (one row, or two on a split shift).
+            'attendances' => AttendanceResource::collection($doneToday),
             // Today's working hours: the dated schedule, else the default shift, else the company hours.
             'schedule' => [
-                'shift' => $hours['shift'] ? ['id' => (int) $hours['shift']->id, 'name' => $hours['shift']->name] : null,
+                'shift' => $hours['shift'] ? ['id' => (int) $hours['shift']->id, 'name' => $hours['shift']->name, 'code' => $hours['shift']->code, 'talenta_code' => $hours['shift']->talenta_code] : null,
                 'is_day_off' => $hours['is_day_off'],
+                'segment' => $hours['segment'],
+                'segment_count' => $hours['segment_count'],
+                // Every segment of the day, for showing "07:45–13:00 & 17:45–22:00".
+                'segments' => $segments,
                 'start_time' => substr($hours['start_time'], 0, 5),
                 'end_time' => substr($hours['end_time'], 0, 5),
                 'late_tolerance_minutes' => $hours['late_tolerance_minutes'],

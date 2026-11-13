@@ -46,17 +46,28 @@ final class SchedulingOptions
     }
 
     /**
-     * Active shifts, ordered by brand then start time. A Koordinator gets their brands' shifts and the company-wide ones.
+     * Brands the user runs; null when they are not limited to brands.
+     *
+     * @return list<int>|null
+     */
+    public function ownBrandIds(User $user): ?array
+    {
+        return DataAccessService::coordinatedDivisionIds($user);
+    }
+
+    /**
+     * Active shifts, ordered by brand then start time. A Koordinator gets their brands' shifts and the
+     * company-wide ones; when scheduling ($borrowing) every brand's shifts, so a worker can be lent to another brand.
      *
      * @return Collection<int, Shift>
      */
-    public function shifts(User $user, int|string|null $companyId): Collection
+    public function shifts(User $user, int|string|null $companyId, bool $borrowing = false): Collection
     {
         if (! $this->canPlaceInCompany($user, $companyId)) {
             return collect();
         }
 
-        $brandIds = DataAccessService::coordinatedDivisionIds($user);
+        $brandIds = $borrowing ? null : DataAccessService::coordinatedDivisionIds($user);
 
         return Shift::query()
             ->with('division')
@@ -70,17 +81,18 @@ final class SchedulingOptions
     }
 
     /**
-     * Active outlets. A Koordinator gets only the outlets of their brands.
+     * Active outlets. A Koordinator gets only the outlets of their brands, or every outlet when
+     * scheduling ($borrowing): a worker may be lent to another brand's outlet for a day.
      *
      * @return Collection<int, CompanyLocation>
      */
-    public function locations(User $user, int|string|null $companyId): Collection
+    public function locations(User $user, int|string|null $companyId, bool $borrowing = false): Collection
     {
         if (! $this->canPlaceInCompany($user, $companyId)) {
             return collect();
         }
 
-        $brandIds = DataAccessService::coordinatedDivisionIds($user);
+        $brandIds = $borrowing ? null : DataAccessService::coordinatedDivisionIds($user);
 
         return CompanyLocation::query()
             ->with('division')

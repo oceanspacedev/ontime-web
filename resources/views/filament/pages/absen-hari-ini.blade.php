@@ -93,17 +93,7 @@
                             <span class="block text-xs font-medium text-gray-500 mb-1.5">Foto Master Biometrik</span>
                             @if(! empty($profile->master_face_photo))
                                 @php
-                                    $disk = config('filesystems.default');
-                                    $masterPhotoUrl = '';
-                                    try {
-                                        if ($disk === 's3') {
-                                            $masterPhotoUrl = \Illuminate\Support\Facades\Storage::disk('s3')->temporaryUrl($profile->master_face_photo, now()->addMinutes(60));
-                                        } else {
-                                            $masterPhotoUrl = \Illuminate\Support\Facades\Storage::disk($disk)->url($profile->master_face_photo);
-                                        }
-                                    } catch (\Exception $e) {
-                                        $masterPhotoUrl = '';
-                                    }
+                                    $masterPhotoUrl = \App\Support\StorageUrl::for($profile->master_face_photo) ?? '';
                                 @endphp
                                 <div class="flex items-center justify-between p-2.5 bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200/80 dark:border-emerald-800/60 rounded-lg">
                                     <div class="flex items-center gap-2.5">

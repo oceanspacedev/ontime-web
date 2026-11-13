@@ -1,6 +1,6 @@
 import { deriveAccess } from '../access';
 import type { TeamRoster, User } from '../api/types';
-import { recapLine, rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention } from '../team';
+import { recapLine, rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention, weekCellText, weekStart } from '../team';
 
 function user(overrides: Partial<User>): User {
   return {
@@ -43,6 +43,11 @@ describe('roster helpers', () => {
   it('writes a shift with its code or name', () => {
     expect(shiftText(shift)).toBe('P · 08:00–17:00');
     expect(shiftText({ ...shift, code: null })).toBe('Pagi · 08:00–17:00');
+  });
+
+  it('shows both segments of a split shift', () => {
+    const split = { code: 'SP', name: 'Split', start_time: '07:45', end_time: '13:00', segments: [{ start: '07:45', end: '13:00' }, { start: '17:45', end: '22:00' }] };
+    expect(shiftText(split)).toBe('SP · 07:45–13:00 & 17:45–22:00');
   });
 
   it('describes a person by shift and section, or day off', () => {
@@ -111,5 +116,28 @@ describe('pushTarget', () => {
   it('opens the Tim tab for coordinators only', () => {
     expect(pushTarget({ kind: 'team_missing' }, true, true)).toEqual({ pathname: '/(app)/team' });
     expect(pushTarget({ kind: 'team_missing' }, true, false)).toBeNull();
+  });
+});
+
+describe('lent workers', () => {
+  it('says which brand a worker is lent from', () => {
+    const entry = { shift: { id: 1, label: '', code: 'P', name: 'Pagi', start_time: '09:00', end_time: '18:00' }, section: null, state: 'hadir' as const, borrowed_from: 'JCHICKEN' };
+    expect(rosterLine(entry)).toBe('P · 09:00–18:00 · pinjam dari JCHICKEN');
+  });
+});
+
+describe('weekly grid', () => {
+  it('starts the week on Monday', () => {
+    expect(weekStart('2026-11-05')).toBe('2026-11-02');
+    expect(weekStart('2026-11-08')).toBe('2026-11-02');
+    expect(weekStart('2026-11-02')).toBe('2026-11-02');
+  });
+
+  it('shows the shift code, OFF, or a dash', () => {
+    const shift = { id: 1, name: 'Split', code: 'SP', talenta_code: null, label: '', segments: [] };
+    expect(weekCellText({ is_day_off: false, shift })).toBe('SP');
+    expect(weekCellText({ is_day_off: false, shift: { ...shift, code: null } })).toBe('Split');
+    expect(weekCellText({ is_day_off: true, shift: null })).toBe('OFF');
+    expect(weekCellText(undefined)).toBe('–');
   });
 });

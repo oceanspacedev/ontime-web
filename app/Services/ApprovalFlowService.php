@@ -15,11 +15,14 @@ use App\Models\Resignation;
 use App\Models\User;
 use App\Notifications\ApprovalRequestedNotification;
 use App\Notifications\ApprovalResolvedNotification;
+use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Spatie\Permission\Models\Role;
 
 class ApprovalFlowService
 {
@@ -80,6 +83,11 @@ class ApprovalFlowService
             return true;
         }
 
+        // A role nobody created has no holders (User::role() would throw).
+        if (! Role::query()->where('name', $role)->where('guard_name', 'web')->exists()) {
+            return false;
+        }
+
         return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId, $divisionId): bool {
             if (filled($divisionId)) {
                 return DataAccessService::canAccessPlacement($user, $companyId, $divisionId);
@@ -89,6 +97,96 @@ class ApprovalFlowService
 
             return $companyIds === null || in_array((int) $companyId, $companyIds, true);
         });
+    }
+
+    /**
+     * Company-wide stages nobody can act on: a role without an active holder reaching the company,
+     * or a named user who is inactive or gone. Requests reaching such a stage wait for an Admin or
+     * Superadmin, who are the only ones left to act on it.
+     *
+     * @return list<array{request_type: string, stage: string, who: string}>
+     */
+    public static function unstaffedStages(Company $company): array
+    {
+        $unstaffed = [];
+
+        foreach ($company->approvalFlows()->companyWide()->orderBy('request_type')->orderBy('step_order')->get() as $flow) {
+            $staffed = $flow->approver_type === 'user'
+                ? $flow->user_id !== null && User::query()->whereKey($flow->user_id)->where('is_active', true)->exists()
+                : self::hasHolderForRole((string) ($flow->approver_role ?? 'Approver'), $company->id);
+
+            if (! $staffed) {
+                $unstaffed[] = [
+                    'request_type' => $flow->request_type,
+                    'stage' => $flow->name,
+                    'who' => $flow->approver_type === 'user' ? 'user yang dipilih' : 'role '.($flow->approver_role ?? 'Approver'),
+                ];
+            }
+        }
+
+        return $unstaffed;
+    }
+
+    /**
+     * Remind the people who can act on requests that have waited on their current stage for $days or more.
+     * At most one reminder per request and stage a day. Returns how many requests were reminded about.
+     */
+    public function remindStalled(int $days = 2): int
+    {
+        $reminded = 0;
+
+        foreach ([LeaveRequest::class, OvertimeRequest::class, AttendanceCorrection::class, Resignation::class, Attendance::class] as $modelClass) {
+            $modelClass::query()
+                ->whereIn('status', ['pending', 'pending_approval'])
+                ->with('approvalSteps')
+                ->get()
+                ->each(function (Model $request) use ($days, &$reminded): void {
+                    $stalledSince = $this->stalledSince($request);
+
+                    if (! $stalledSince || $stalledSince->greaterThan(now()->subDays($days))) {
+                        return;
+                    }
+
+                    $step = (int) ($request->current_step ?? 1);
+                    $key = "approval-stale:{$request->getMorphClass()}:{$request->getKey()}:{$step}";
+
+                    if (! Cache::add($key, true, now()->addDay())) {
+                        return;
+                    }
+
+                    $type = $this->requestTypeOf($request);
+                    $workerName = $this->workerOf($request)?->full_name ?? 'Pengguna';
+                    $label = self::requestTypeLabel($type);
+                    $waiting = (int) $stalledSince->diffInDays(now());
+
+                    foreach ($this->getUsersAuthorizedForCurrentStep($request) as $approver) {
+                        Notification::make()
+                            ->title('Pengajuan Menunggu Persetujuan')
+                            ->body("Pengajuan {$label} dari {$workerName} sudah menunggu {$waiting} hari.")
+                            ->icon('heroicon-o-clock')
+                            ->color('danger')
+                            ->sendToDatabase($approver);
+
+                        $approver->notify(new ApprovalRequestedNotification($request, $type, $workerName, $step));
+                    }
+
+                    $reminded++;
+                });
+        }
+
+        return $reminded;
+    }
+
+    /**
+     * When the request reached its current stage: the previous stage's approval, or the first stage's creation.
+     */
+    private function stalledSince(Model $request): ?Carbon
+    {
+        $current = (int) ($request->current_step ?? 1);
+        $previous = $request->approvalSteps->where('step_order', '<', $current)->whereNotNull('actioned_at')->sortByDesc('step_order')->first();
+        $since = $previous?->actioned_at ?? $request->approvalSteps->firstWhere('step_order', $current)?->created_at;
+
+        return $since ? Carbon::parse($since) : null;
     }
 
     public static function requestTypeLabel(string $requestType): string
@@ -577,6 +675,23 @@ class ApprovalFlowService
             $roles[] = $step->approver_role;
         }
 
+        $recipients = $this->usersWithRoles($requestModel, $step, $roles);
+
+        // A stage nobody holds, with no coordinator covering the worker, would only reach Superadmins:
+        // the Admins of the company hear about it as well.
+        if ($step && $recipients->reject(fn (User $user): bool => $user->hasRole('Superadmin'))->isEmpty() && ! $this->stageHasHolder($requestModel, $step)) {
+            $recipients = $this->usersWithRoles($requestModel, $step, [...$roles, 'Admin']);
+        }
+
+        return $recipients;
+    }
+
+    /**
+     * @param  list<string>  $roles
+     * @return Collection<int, User>
+     */
+    private function usersWithRoles(Model $requestModel, ?ApprovalRequestStep $step, array $roles): Collection
+    {
         return User::query()
             ->where('is_active', true)
             ->where(fn ($query) => $query
@@ -584,6 +699,24 @@ class ApprovalFlowService
                 ->when($step?->approver_type === 'user' && $step->user_id, fn ($byUser) => $byUser->orWhere('id', $step->user_id)))
             ->get()
             ->filter(fn (User $user) => $this->isUserAuthorizedToApprove($requestModel, $user));
+    }
+
+    private function workerOf(Model $requestModel): ?Model
+    {
+        return method_exists($requestModel, 'getWorkerProfile')
+            ? $requestModel->getWorkerProfile()
+            : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
+    }
+
+    private function stageHasHolder(Model $requestModel, ApprovalRequestStep $step): bool
+    {
+        if ($step->approver_type === 'user') {
+            return $step->user_id !== null && User::query()->whereKey($step->user_id)->where('is_active', true)->exists();
+        }
+
+        $worker = $this->workerOf($requestModel);
+
+        return $worker === null || self::hasHolderForRole((string) ($step->approver_role ?? 'Approver'), $worker->company_id, $worker->division_id);
     }
 
     /**

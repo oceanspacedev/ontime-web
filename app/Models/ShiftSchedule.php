@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Services\DataAccessService;
 use App\Traits\ScopesToWorkerVisibility;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -76,6 +78,37 @@ class ShiftSchedule extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * A coordinator also sees the days other brands' workers are lent to their outlets, besides the schedules
+     * of workers in their own access. Editing stays with the worker's own brand.
+     */
+    public function scopeVisibleTo(Builder $query, User $user): Builder
+    {
+        $brandIds = DataAccessService::coordinatedDivisionIds($user);
+
+        return $query->where(function (Builder $visible) use ($user, $brandIds): void {
+            $visible->where(fn (Builder $own) => DataAccessService::scopeWorkerRecords($own, $user, static::workerRelations()));
+
+            if ($brandIds !== null) {
+                $visible->orWhereHas('location', fn (Builder $outlet) => $outlet->whereIn('division_id', $brandIds));
+            }
+        });
+    }
+
+    /**
+     * The worker's own brand when this day is spent at another brand's outlet, otherwise null.
+     */
+    public function borrowedFromBrand(): ?string
+    {
+        $worker = $this->getWorkerProfile();
+
+        if (! $worker || ! $this->location?->division_id || ! $worker->division_id || (int) $this->location->division_id === (int) $worker->division_id) {
+            return null;
+        }
+
+        return $worker->division?->name;
     }
 
     public function getWorkerProfile(): Employee|Intern|Freelancer|null

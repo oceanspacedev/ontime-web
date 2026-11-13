@@ -30,7 +30,7 @@ class LeaveRequestResource extends JsonResource
             'rejection_reason' => $this->rejection_reason,
             // Older app versions read rejection_note.
             'rejection_note' => $this->rejection_reason,
-            'attachment' => StorageUrl::for($this->attachment, 'public'),
+            'attachment' => StorageUrl::for($this->attachment),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'employee' => $this->employee ? $this->formatWorkerProfile($this->employee) : null,
