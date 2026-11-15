@@ -30,6 +30,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\ValidationException;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use UnitEnum;
 
@@ -228,7 +229,17 @@ class AttendanceCorrectionResource extends Resource
                     ->visible(fn (AttendanceCorrection $record) => $service->isUserAuthorizedToApprove($record, auth()->user()))
                     ->requiresConfirmation()
                     ->action(function (AttendanceCorrection $record) use ($service): void {
-                        $service->approveStep($record, auth()->user());
+                        try {
+                            $service->approveStep($record, auth()->user());
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa disetujui')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Approval Koreksi Berhasil!')
@@ -248,7 +259,17 @@ class AttendanceCorrectionResource extends Resource
                             ->required(),
                     ])
                     ->action(function (AttendanceCorrection $record, array $data) use ($service): void {
-                        $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        try {
+                            $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa ditolak')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Pengajuan Ditolak')

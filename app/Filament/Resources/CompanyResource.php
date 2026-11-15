@@ -109,6 +109,22 @@ class CompanyResource extends Resource
         return $user?->tenant_id;
     }
 
+    /**
+     * While GPS is required, a company left without an active location in the form keeps its HQ
+     * coordinates: clearing them, or switching off or removing the last active location, is refused.
+     */
+    public static function needsHqCoordinates(Get $get, ?Company $record): bool
+    {
+        if (! $record?->policy?->require_gps) {
+            return false;
+        }
+
+        $hasActiveLocation = collect($get('locations') ?? [])
+            ->contains(fn (mixed $location): bool => is_array($location) && (bool) ($location['is_active'] ?? false));
+
+        return ! $hasActiveLocation;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         return static::scopeToManagedCompanies(parent::getEloquentQuery(), 'companies.id');
@@ -179,11 +195,15 @@ class CompanyResource extends Resource
                                             TextInput::make('latitude')
                                                 ->label('Latitude Kantor Utama')
                                                 ->numeric()
+                                                ->required(fn (Get $get, ?Company $record): bool => static::needsHqCoordinates($get, $record))
+                                                ->validationMessages(['required' => CompanyPolicyService::GPS_WITHOUT_LOCATION_MESSAGE])
                                                 ->placeholder('Contoh: -6.1753924'),
 
                                             TextInput::make('longitude')
                                                 ->label('Longitude Kantor Utama')
                                                 ->numeric()
+                                                ->required(fn (Get $get, ?Company $record): bool => static::needsHqCoordinates($get, $record))
+                                                ->validationMessages(['required' => CompanyPolicyService::GPS_WITHOUT_LOCATION_MESSAGE])
                                                 ->placeholder('Contoh: 106.8271528'),
                                         ]),
 

@@ -36,14 +36,20 @@ final class CompanyProvisioningService
      */
     public static function rules(?int $tenantId, ?Company $company = null): array
     {
+        // While GPS is required and no active location is left, the HQ coordinates cannot be cleared.
+        $keepsHqCoordinates = Rule::when(
+            fn (): bool => $company !== null && GeofenceService::wouldLeaveGpsWithoutLocation($company, withoutHq: true),
+            ['filled'],
+        );
+
         return [
             'name' => ['required', 'string', 'max:255'],
             'code' => ['required', 'string', 'max:50', self::uniqueCodeRule(Rule::unique('companies', 'code')->ignore($company?->id), $tenantId)],
             'email' => ['nullable', 'email', 'max:255'],
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string'],
-            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
-            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'latitude' => ['nullable', $keepsHqCoordinates, 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', $keepsHqCoordinates, 'numeric', 'between:-180,180'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }
@@ -60,6 +66,8 @@ final class CompanyProvisioningService
             'email.email' => 'Format email tidak valid.',
             'latitude.between' => 'Latitude harus di antara -90 dan 90.',
             'longitude.between' => 'Longitude harus di antara -180 dan 180.',
+            'latitude.filled' => CompanyPolicyService::GPS_WITHOUT_LOCATION_MESSAGE,
+            'longitude.filled' => CompanyPolicyService::GPS_WITHOUT_LOCATION_MESSAGE,
         ];
     }
 

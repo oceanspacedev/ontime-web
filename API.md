@@ -117,12 +117,12 @@ Aturan di `ApprovalFlowService::isUserAuthorizedToApprove`, dicek berurutan:
 
 1. Pengajuan harus berstatus `pending` (atau `pending_approval` untuk presensi) dan hanya tahap aktif (`current_step`) yang bisa diproses.
 2. Pengaju tidak pernah memberi persetujuan tahap terakhir atas pengajuannya sendiri. Tahap tengah yang cocok dengan role-nya masih boleh.
-3. Superadmin: tahap apa pun, kecuali pengajuan sendiri.
-4. Admin: tahap apa pun untuk pekerja dalam data aksesnya, kecuali pengajuan sendiri.
+3. Superadmin: boleh memproses tahap apa pun (bantuan), kecuali pengajuan sendiri. Superadmin tidak pernah menjadi tahap alur persetujuan, tidak dinotifikasi, dan tidak dihitung sebagai penyetuju tahap.
+4. Admin (termasuk PIC) dan Koordinator: tahap apa pun untuk pekerja dalam data aksesnya, kecuali pengajuan sendiri.
 5. Tahap bertipe `user`: hanya user yang ditunjuk.
 6. Tahap bertipe `role`: pemanggil punya role tahap tersebut **dan** penempatan pengaju (badan usaha atau divisi) ada dalam data aksesnya. Approver/BOD dengan akses `own` tidak menerima antrean bertipe role.
 
-Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur bawaan badan usaha baru: Approver, lalu BOD, lalu Superadmin untuk `leave`, `overtime`, `correction`, `resignation`; satu tahap Approver untuk `geofence`. Jika alur untuk jenis pengajuan belum dikonfigurasi, pembuatan pengajuan membalas 422 dengan `errors.approval_flow`.
+Satu tahap selesai bila salah satu user yang memenuhi syarat memprosesnya. Alur bawaan badan usaha baru: satu tahap Approver untuk semua jenis pengajuan (`leave`, `overtime`, `correction`, `resignation`, `geofence`). Tahap lain (BOD, Admin, Koordinator, atau user tertentu) ditambahkan di Alur Persetujuan; role tahap yang bisa dipilih hanya Approver, BOD, Admin, dan Koordinator, tidak pernah Superadmin. Jika alur untuk jenis pengajuan belum dikonfigurasi, pembuatan pengajuan membalas 422 dengan `errors.approval_flow`.
 
 ---
 

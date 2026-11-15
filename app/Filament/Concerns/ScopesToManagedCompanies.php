@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\Rules\Unique;
 use Spatie\Permission\Models\Role;
+use WeakMap;
 
 /**
  * Shared rules for resources managed by Superadmin and Admin. The role says who manages, the user's
@@ -23,6 +24,13 @@ use Spatie\Permission\Models\Role;
  */
 trait ScopesToManagedCompanies
 {
+    /**
+     * accountRolesBeyond() per signed-in user object, so an account list does not query the roles per row.
+     *
+     * @var WeakMap<User, array{signature: string, roles: list<string>}>|null
+     */
+    private static ?WeakMap $accountRolesBeyondCache = null;
+
     // ── Company settings ───────────────────────────────────────────────────
 
     /**
@@ -225,13 +233,26 @@ trait ScopesToManagedCompanies
             return [];
         }
 
-        return Role::query()
+        // Asked once per listed account: kept per signed-in user object, and again when their roles change.
+        self::$accountRolesBeyondCache ??= new WeakMap;
+        $signature = implode('|', $grantable);
+        $cached = self::$accountRolesBeyondCache[$user] ?? null;
+
+        if ($cached !== null && $cached['signature'] === $signature) {
+            return $cached['roles'];
+        }
+
+        $roles = Role::query()
             ->whereNotIn('name', $grantable)
             ->pluck('name')
             ->merge([SystemRole::Superadmin->value, SystemRole::Pic->value])
             ->unique()
             ->values()
             ->all();
+
+        self::$accountRolesBeyondCache[$user] = ['signature' => $signature, 'roles' => $roles];
+
+        return $roles;
     }
 
     /**
@@ -342,7 +363,8 @@ trait ScopesToManagedCompanies
                 fn (Builder $tenant) => $tenant->where('tenant_id', $user->tenant_id),
             )
             ->where('data_scope', '!=', DataScope::Own->value)
-            ->get()
+            ->with(['roles', 'accessibleCompanies', 'accessibleDivisions'])
+            ->get(['id', 'tenant_id', 'data_scope'])
             ->reject(fn (User $account): bool => DataAccessService::accountReachWithin($user, $account))
             ->modelKeys();
 

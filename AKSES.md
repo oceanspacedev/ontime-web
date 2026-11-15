@@ -106,11 +106,11 @@ Seseorang boleh memproses tahap yang sedang aktif bila salah satu syarat ini ter
 1. **Role cocok:** role-nya sama dengan role tahap, dan pengaju ada di dalam Akses Data-nya.
 2. **Ditunjuk langsung:** tahap itu menunjuk akunnya sebagai penyetuju.
 3. **Superadmin:** boleh memproses tahap apa pun untuk keperluan bantuan, tetapi tidak pernah dinotifikasi dan tidak dihitung sebagai penyetuju tahap.
-4. **Admin dan PIC:** boleh memproses tahap apa pun untuk pekerja di dalam Akses Data-nya.
+4. **Admin, PIC, dan Koordinator:** boleh memproses tahap apa pun untuk pekerja di dalam Akses Data-nya.
 
 Batasan yang selalu berlaku:
 
-- **Pengajuan sendiri:** pengaju tidak pernah memberi persetujuan akhir untuk pengajuannya sendiri. Superadmin dan Admin tidak boleh memproses pengajuannya sendiri sama sekali.
+- **Pengajuan sendiri:** pengaju tidak pernah memberi persetujuan akhir untuk pengajuannya sendiri. Superadmin, Admin, dan Koordinator tidak boleh memproses pengajuannya sendiri sama sekali.
 - **Cukup satu penyetuju:** bila beberapa orang berhak di tahap yang sama, persetujuan dari salah satunya sudah memajukan pengajuan.
 - **Data berubah di tahap akhir:** data absensi dan cuti baru berubah setelah tahap terakhir disetujui.
 - **Penolakan:** penolakan di tahap mana pun langsung menghentikan pengajuan.

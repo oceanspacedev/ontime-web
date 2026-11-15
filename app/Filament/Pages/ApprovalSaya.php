@@ -183,7 +183,17 @@ class ApprovalSaya extends Page
         };
 
         if ($item) {
-            $service->rejectStep($item, $user, $reason);
+            try {
+                $service->rejectStep($item, $user, $reason);
+            } catch (ValidationException $exception) {
+                Notification::make()
+                    ->title('Pengajuan tidak bisa ditolak')
+                    ->body(collect($exception->errors())->flatten()->first())
+                    ->danger()
+                    ->send();
+
+                return;
+            }
 
             Notification::make()
                 ->title('Pengajuan Ditolak')

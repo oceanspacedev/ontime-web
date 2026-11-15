@@ -56,6 +56,9 @@ class GeofenceService
 
     public const DEFAULT_RADIUS_METERS = 100;
 
+    /** Shown when GPS is required but the company has no coordinate to check a worker against. */
+    public const NO_LOCATION_CONFIGURED_MESSAGE = 'Lokasi absen belum diatur. Hubungi admin.';
+
     /**
      * The radius a location is checked with: its own, else the policy default, else 100 m.
      */
@@ -77,6 +80,29 @@ class GeofenceService
         }
 
         return $company->locations()->where('is_active', true)->exists();
+    }
+
+    /**
+     * Whether a change would leave a company that requires GPS without any coordinate to check against:
+     * the given locations stop counting (deactivated, deleted or moved) and, with $withoutHq, the HQ
+     * coordinates are cleared.
+     *
+     * @param  array<int, int>  $exceptLocationIds
+     */
+    public static function wouldLeaveGpsWithoutLocation(Company $company, array $exceptLocationIds = [], bool $withoutHq = false): bool
+    {
+        if (! $company->policy?->require_gps) {
+            return false;
+        }
+
+        if (! $withoutHq && $company->latitude && $company->longitude) {
+            return false;
+        }
+
+        return ! $company->locations()
+            ->where('is_active', true)
+            ->when($exceptLocationIds !== [], fn ($query) => $query->whereKeyNot($exceptLocationIds))
+            ->exists();
     }
 
     /**
@@ -117,13 +143,16 @@ class GeofenceService
         }
 
         if (empty($validLocations)) {
+            // With GPS required, no coordinate must never mean "valid from anywhere": the check-in goes to approval.
+            $gpsRequired = (bool) $policy?->require_gps;
+
             return [
-                'is_valid' => true,
+                'is_valid' => ! $gpsRequired,
                 'matched_location_name' => null,
                 'nearest_location_name' => null,
                 'nearest_distance' => 0,
                 'allowed_radius' => $defaultRadius,
-                'message' => null,
+                'message' => $gpsRequired ? static::NO_LOCATION_CONFIGURED_MESSAGE : null,
             ];
         }
 

@@ -13,7 +13,7 @@ class EditCompanyLocation extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
-            DeleteAction::make(),
+            CompanyLocationResource::guardLastGpsLocation(DeleteAction::make()),
         ];
     }
 }

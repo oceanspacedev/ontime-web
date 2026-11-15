@@ -28,6 +28,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class ResignationResource extends Resource
@@ -250,7 +251,17 @@ class ResignationResource extends Resource
                     ->visible(fn (Resignation $record) => $service->isUserAuthorizedToApprove($record, auth()->user()))
                     ->requiresConfirmation()
                     ->action(function (Resignation $record) use ($service): void {
-                        $service->approveStep($record, auth()->user());
+                        try {
+                            $service->approveStep($record, auth()->user());
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa disetujui')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Approval Resign Berhasil')
@@ -270,7 +281,17 @@ class ResignationResource extends Resource
                             ->required(),
                     ])
                     ->action(function (Resignation $record, array $data) use ($service): void {
-                        $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        try {
+                            $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa ditolak')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Pengajuan Resign Ditolak')

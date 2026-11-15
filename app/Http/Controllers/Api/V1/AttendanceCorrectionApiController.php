@@ -136,6 +136,10 @@ class AttendanceCorrectionApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat diubah.'], 422);
         }
 
+        if (! ApprovalFlowService::isUntouchedByApprovers($correction)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
+
         $data = $request->only(['date', 'corrected_check_in', 'corrected_check_out', 'reason']);
 
         if ($request->hasFile('attachment')) {
@@ -149,7 +153,22 @@ class AttendanceCorrectionApiController extends Controller
             );
         }
 
-        $correction->update($data);
+        // Re-checked under a row lock: an approver may have acted while the form was being filled in.
+        $updated = DB::transaction(function () use ($correction, $data): bool {
+            $locked = AttendanceCorrection::query()->lockForUpdate()->find($correction->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $correction->update($data);
+
+            return true;
+        });
+
+        if (! $updated) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan koreksi absensi berhasil diperbarui',
@@ -202,8 +221,27 @@ class AttendanceCorrectionApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat dibatalkan.'], 422);
         }
 
-        $correction->approvalSteps()->delete();
-        $correction->delete();
+        if (! ApprovalFlowService::isUntouchedByApprovers($correction)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
+
+        // Re-checked under a row lock: an approver may have acted in the meantime.
+        $cancelled = DB::transaction(function () use ($correction): bool {
+            $locked = AttendanceCorrection::query()->lockForUpdate()->find($correction->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $locked->approvalSteps()->delete();
+            $locked->delete();
+
+            return true;
+        });
+
+        if (! $cancelled) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan koreksi absensi berhasil dibatalkan.',

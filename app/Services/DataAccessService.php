@@ -43,7 +43,21 @@ final class DataAccessService
 
     public static function scopeOf(User $user): DataScope
     {
-        return self::resolve($user)['scope'];
+        // Only the level is needed here: resolving the picks would cost queries per account in a list.
+        if (self::$resolved !== null && isset(self::$resolved[$user])) {
+            return self::$resolved[$user]['scope'];
+        }
+
+        return self::scopeLevel($user);
+    }
+
+    private static function scopeLevel(User $user): DataScope
+    {
+        if ($user->hasRole(SystemRole::Superadmin->value)) {
+            return DataScope::All;
+        }
+
+        return $user->data_scope instanceof DataScope ? $user->data_scope : (DataScope::tryFrom((string) $user->data_scope) ?? DataScope::Own);
     }
 
     /**
@@ -142,9 +156,7 @@ final class DataAccessService
         }
 
         $unbounded = $user->hasRole(SystemRole::Superadmin->value);
-        $scope = $unbounded
-            ? DataScope::All
-            : ($user->data_scope instanceof DataScope ? $user->data_scope : (DataScope::tryFrom((string) $user->data_scope) ?? DataScope::Own));
+        $scope = self::scopeLevel($user);
 
         if ($unbounded) {
             return self::$resolved[$user] = ['scope' => $scope, 'unbounded' => true, 'companies' => [], 'divisions' => []];
@@ -238,16 +250,22 @@ final class DataAccessService
                     $visible->orWhere($visible->qualifyColumn("{$relation}_id"), $profile->getKey());
                 }
 
+                // "worker_id IN (workers in scope)" instead of a correlated EXISTS per row: the database
+                // resolves the workers once, which keeps month-long reports of a large Klien fast.
                 if ($hasScope) {
-                    $visible->orWhereHas($relation, fn (Builder $worker) => $worker->where(function (Builder $inScope) use ($filter): void {
-                        if ($filter['companies'] !== []) {
-                            $inScope->orWhereIn('company_id', $filter['companies']);
-                        }
+                    $workers = $visible->getModel()->{$relation}()->getRelated()->newQuery();
 
-                        if ($filter['divisions'] !== []) {
-                            $inScope->orWhereIn('division_id', $filter['divisions']);
-                        }
-                    }));
+                    $visible->orWhereIn($visible->qualifyColumn("{$relation}_id"), $workers
+                        ->select($workers->qualifyColumn('id'))
+                        ->where(function (Builder $inScope) use ($filter): void {
+                            if ($filter['companies'] !== []) {
+                                $inScope->orWhereIn($inScope->qualifyColumn('company_id'), $filter['companies']);
+                            }
+
+                            if ($filter['divisions'] !== []) {
+                                $inScope->orWhereIn($inScope->qualifyColumn('division_id'), $filter['divisions']);
+                            }
+                        }));
                 }
             }
         });
@@ -273,8 +291,9 @@ final class DataAccessService
      *
      * @param  list<int|string>  $companyIds
      * @param  list<int|string>  $divisionIds
+     * @param  iterable<Division>|null  $divisions  the picked divisions when already loaded, instead of $divisionIds
      */
-    public static function canGrantAccess(User $actor, DataScope $scope, array $companyIds = [], array $divisionIds = []): bool
+    public static function canGrantAccess(User $actor, DataScope $scope, array $companyIds = [], array $divisionIds = [], ?iterable $divisions = null): bool
     {
         $filter = self::workerFilter($actor);
 
@@ -290,7 +309,7 @@ final class DataAccessService
             DataScope::Own => true,
             DataScope::All => self::isManager($actor) && self::scopeOf($actor) === DataScope::All,
             DataScope::Companies => collect($companyIds)->every(fn ($id): bool => in_array((int) $id, $filter['companies'], true)),
-            DataScope::Divisions => Division::query()->whereIn('id', $divisionIds)->get(['id', 'company_id'])->every(
+            DataScope::Divisions => collect($divisions ?? Division::query()->whereIn('id', $divisionIds)->get(['id', 'company_id']))->every(
                 fn (Division $division): bool => in_array((int) $division->id, $filter['divisions'], true) || in_array((int) $division->company_id, $filter['companies'], true),
             ),
         };
@@ -303,11 +322,17 @@ final class DataAccessService
     {
         $scope = self::scopeOf($account);
 
+        // Account lists eager load the picks; a single account check reads them.
+        $divisionsLoaded = $scope === DataScope::Divisions && $account->relationLoaded('accessibleDivisions');
+
         return self::canGrantAccess(
             $actor,
             $scope,
-            $account->accessibleCompanies()->pluck('companies.id')->all(),
-            $account->accessibleDivisions()->pluck('divisions.id')->all(),
+            $scope === DataScope::Companies
+                ? ($account->relationLoaded('accessibleCompanies') ? $account->accessibleCompanies->modelKeys() : $account->accessibleCompanies()->pluck('companies.id')->all())
+                : [],
+            $scope === DataScope::Divisions && ! $divisionsLoaded ? $account->accessibleDivisions()->pluck('divisions.id')->all() : [],
+            $divisionsLoaded ? $account->accessibleDivisions : null,
         );
     }
 
