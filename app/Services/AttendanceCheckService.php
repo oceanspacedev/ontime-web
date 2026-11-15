@@ -17,8 +17,11 @@ use App\Services\Face\FaceMatch;
 use App\Services\Face\FaceServiceUnavailable;
 use App\Services\Face\FaceVerifier;
 use App\Support\SelfieUploadToken;
+use Carbon\CarbonInterface;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Throwable;
 
 /**
  * The single rule set for check-in and check-out, shared by the mobile API and the web panel.
@@ -35,6 +38,13 @@ class AttendanceCheckService
     public const PURPOSE_CHECK_OUT = 'check_out';
 
     private const DEFAULT_FACE_THRESHOLD = 60;
+
+    public const ALREADY_CHECKED_IN_MESSAGE = 'Sudah melakukan check in hari ini.';
+
+    public const OPEN_OVERNIGHT_MESSAGE = 'Selesaikan absen pulang shift semalam dulu.';
+
+    /** An overnight row of yesterday counts as still open for this many hours after its check-in. */
+    private const OVERNIGHT_OPEN_HOURS = 20;
 
     /** The second segment of a split shift accepts check-in from this many minutes before it starts. */
     private const SECOND_SEGMENT_OPENS_MINUTES_BEFORE = 60;
@@ -150,6 +160,9 @@ class AttendanceCheckService
     }
 
     /**
+     * Any failure (a refusal, a lost race on the unique index, a database or face service error)
+     * discards the uploads of the attempt before the error goes on.
+     *
      * @param  callable(): AttendanceCheckResult  $check
      *
      * @throws AttendanceRuleException
@@ -160,7 +173,7 @@ class AttendanceCheckService
 
         try {
             $result = $check();
-        } catch (AttendanceRuleException $exception) {
+        } catch (Throwable $exception) {
             $this->discardUploads($user, $uploads);
 
             throw $exception;
@@ -179,6 +192,12 @@ class AttendanceCheckService
         $profile = $this->profileOf($user);
         $todayRows = Attendance::byWorker($user)->today()->orderBy('segment')->get();
         $existingAttendance = $todayRows->firstWhere('segment', 1);
+
+        // Last night's shift is still open after midnight: it is checked out first, not doubled by a new day.
+        if (! $existingAttendance?->check_in && $this->openOvernightAttendance($user)) {
+            throw new AttendanceRuleException(self::OPEN_OVERNIGHT_MESSAGE, 409);
+        }
+
         $segment = 1;
         $workingHours = $this->workSchedule->resolve($profile, now());
 
@@ -187,7 +206,7 @@ class AttendanceCheckService
             $second = $todayRows->firstWhere('segment', 2);
 
             if ($workingHours['segment_count'] < 2 || ! $existingAttendance->check_out || $second?->check_in) {
-                throw new AttendanceRuleException('Sudah melakukan check in hari ini.', 409);
+                throw new AttendanceRuleException(self::ALREADY_CHECKED_IN_MESSAGE, 409);
             }
 
             $segment = 2;
@@ -217,7 +236,37 @@ class AttendanceCheckService
             default => AttendanceStatus::OnTime,
         };
 
-        $attendance = DB::transaction(function () use ($user, $existingAttendance, $segment, $checks, $workingHours, $now, $status, $lateMinutes, $requiresApproval): Attendance {
+        try {
+            $attendance = $this->saveCheckIn($user, $existingAttendance, $segment, $checks, $workingHours, $now, $status, $lateMinutes, $requiresApproval);
+        } catch (UniqueConstraintViolationException) {
+            // A second request of the same tap (double submit, retry) lost the race on the unique attendance index.
+            throw new AttendanceRuleException(self::ALREADY_CHECKED_IN_MESSAGE, 409);
+        }
+
+        return new AttendanceCheckResult(
+            attendance: $attendance->fresh() ?? $attendance,
+            requiresApproval: $requiresApproval,
+            approvalReasons: $reasons,
+            message: $this->message('Check in', $reasons),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $checks
+     * @param  array<string, mixed>  $workingHours
+     */
+    private function saveCheckIn(
+        User $user,
+        ?Attendance $existingAttendance,
+        int $segment,
+        array $checks,
+        array $workingHours,
+        CarbonInterface $now,
+        AttendanceStatus $status,
+        int $lateMinutes,
+        bool $requiresApproval,
+    ): Attendance {
+        return DB::transaction(function () use ($user, $existingAttendance, $segment, $checks, $workingHours, $now, $status, $lateMinutes, $requiresApproval): Attendance {
             // Reuse today's row (for example one created by an approved correction) instead of
             // inserting a second row, which the unique (worker, date) index rejects.
             $attendance = $existingAttendance ?? new Attendance([
@@ -251,13 +300,6 @@ class AttendanceCheckService
 
             return $attendance;
         });
-
-        return new AttendanceCheckResult(
-            attendance: $attendance->fresh() ?? $attendance,
-            requiresApproval: $requiresApproval,
-            approvalReasons: $reasons,
-            message: $this->message('Check in', $reasons),
-        );
     }
 
     /**
@@ -299,13 +341,17 @@ class AttendanceCheckService
             $updates['status'] = AttendanceStatus::PendingApproval;
         }
 
-        DB::transaction(function () use ($attendance, $updates, $requiresApproval): void {
-            $attendance->update($updates);
+        try {
+            DB::transaction(function () use ($attendance, $updates, $requiresApproval): void {
+                $attendance->update($updates);
 
-            if ($requiresApproval && $attendance->needsNewApprovalRound()) {
-                $this->approvalFlow->generateSteps($attendance, 'geofence');
-            }
-        });
+                if ($requiresApproval && $attendance->needsNewApprovalRound()) {
+                    $this->approvalFlow->generateSteps($attendance, 'geofence');
+                }
+            });
+        } catch (UniqueConstraintViolationException) {
+            throw new AttendanceRuleException(self::ALREADY_CHECKED_IN_MESSAGE, 409);
+        }
 
         return new AttendanceCheckResult(
             attendance: $attendance->fresh() ?? $attendance,
@@ -328,15 +374,54 @@ class AttendanceCheckService
             return $todayRows->first(fn (Attendance $row): bool => $row->check_in !== null && $row->check_out === null) ?? $today;
         }
 
-        $overnight = Attendance::byWorker($user)
-            ->with('location')
+        // A forgotten check-out of yesterday can still be closed until the window ends, overnight shift or not.
+        return $this->openRowOfYesterday($user) ?? $today;
+    }
+
+    /**
+     * Yesterday's row of an overnight shift (its hours cross midnight) that is still open after midnight.
+     * Until it is checked out, the app offers its check-out and a new check-in is refused.
+     *
+     * A day shift whose check-out was forgotten does not count: that worker checks in to today as usual.
+     */
+    public function openOvernightAttendance(User $user): ?Attendance
+    {
+        $open = $this->openRowOfYesterday($user);
+
+        return $open && $this->crossesMidnight($user, $open) ? $open : null;
+    }
+
+    /**
+     * Yesterday's row checked in within the last {@see self::OVERNIGHT_OPEN_HOURS} hours and not checked out yet.
+     */
+    private function openRowOfYesterday(User $user): ?Attendance
+    {
+        return Attendance::byWorker($user)
+            ->with(['location', 'shift'])
             ->whereDate('date', today()->subDay())
             ->whereNotNull('check_in')
             ->whereNull('check_out')
-            ->where('check_in', '>=', now()->subHours(20))
+            ->where('check_in', '>=', now()->subHours(self::OVERNIGHT_OPEN_HOURS))
+            ->orderByDesc('segment')
             ->first();
+    }
 
-        return $overnight ?? $today;
+    /**
+     * The row's shift ends the next day, or, without a shift, the company hours do (for example 22:00 - 06:00).
+     */
+    private function crossesMidnight(User $user, Attendance $attendance): bool
+    {
+        if ($attendance->shift) {
+            return $attendance->shift->crossesMidnight();
+        }
+
+        $policy = ($user->employee ?? $user->intern ?? $user->freelancer)?->company?->policy;
+
+        if (! $policy?->work_start_time || ! $policy->work_end_time) {
+            return false;
+        }
+
+        return substr((string) $policy->work_end_time, 0, 5) <= substr((string) $policy->work_start_time, 0, 5);
     }
 
     /**
@@ -419,7 +504,11 @@ class AttendanceCheckService
 
             if (! $geofence['is_valid']) {
                 $checks['is_out_of_bounds'] = true;
-                $reasons[] = $outlet ? "di luar area outlet jadwal ({$outlet->name})" : 'di luar area kantor';
+                $reasons[] = match (true) {
+                    $geofence['message'] === GeofenceService::NO_LOCATION_CONFIGURED_MESSAGE => 'lokasi absen belum diatur',
+                    $outlet !== null => "di luar area outlet jadwal ({$outlet->name})",
+                    default => 'di luar area kantor',
+                };
             }
         }
 

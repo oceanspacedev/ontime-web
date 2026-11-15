@@ -74,6 +74,15 @@ class ApprovalApiController extends Controller
             return response()->json(['message' => 'Pengajuan ini sudah tidak berstatus pending.'], 422);
         }
 
+        // A tap meant for the stage the approver saw must not decide a later stage that someone else
+        // opened in the meantime (Admin and PIC may act on any stage).
+        if ($request->filled('current_step') && (int) $request->input('current_step') !== (int) ($requestModel->current_step ?? 1)) {
+            return response()->json([
+                'message' => ApprovalFlowService::ALREADY_PROCESSED_MESSAGE,
+                'errors' => ['request' => [ApprovalFlowService::ALREADY_PROCESSED_MESSAGE]],
+            ], 422);
+        }
+
         $action = $request->input('action');
         $note = $request->input('rejection_note');
 

@@ -48,12 +48,12 @@ class TeamApiController extends Controller
     public function roster(Request $request, OutletRosterService $roster): JsonResponse
     {
         $user = $this->manager($request);
-        $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']]);
+        $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d'], ...$this->scheduleFilterRules()]);
         $date = Carbon::parse($validated['date'] ?? today()->toDateString());
 
         return response()->json([
             'date' => $date->toDateString(),
-            'outlets' => $roster->roster($user, $date),
+            'outlets' => $roster->roster($user, $date, $this->scheduleFilters($validated)),
         ]);
     }
 
@@ -63,9 +63,36 @@ class TeamApiController extends Controller
     public function week(Request $request, WeeklyScheduleService $weeks): JsonResponse
     {
         $user = $this->manager($request);
-        $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']]);
+        $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d'], ...$this->scheduleFilterRules()]);
 
-        return response()->json($weeks->week($user, Carbon::parse($validated['date'] ?? today()->toDateString())));
+        return response()->json($weeks->week($user, Carbon::parse($validated['date'] ?? today()->toDateString()), $this->scheduleFilters($validated)));
+    }
+
+    /**
+     * Optional filters of the roster and the week: one company, brand (division) or outlet.
+     *
+     * @return array<string, list<string>>
+     */
+    private function scheduleFilterRules(): array
+    {
+        return [
+            'company_id' => ['nullable', 'integer'],
+            'division_id' => ['nullable', 'integer'],
+            'location_id' => ['nullable', 'integer'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     * @return array{company_id: int|null, division_id: int|null, location_id: int|null}
+     */
+    private function scheduleFilters(array $validated): array
+    {
+        return [
+            'company_id' => isset($validated['company_id']) ? (int) $validated['company_id'] : null,
+            'division_id' => isset($validated['division_id']) ? (int) $validated['division_id'] : null,
+            'location_id' => isset($validated['location_id']) ? (int) $validated['location_id'] : null,
+        ];
     }
 
     public function options(Request $request): JsonResponse

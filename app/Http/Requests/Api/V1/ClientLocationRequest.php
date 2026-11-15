@@ -5,6 +5,9 @@ namespace App\Http\Requests\Api\V1;
 use App\Models\Company;
 use App\Models\CompanyLocation;
 use App\Services\ClientAdminGate;
+use App\Services\CompanyPolicyService;
+use App\Services\GeofenceService;
+use Closure;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -42,8 +45,23 @@ class ClientLocationRequest extends FormRequest
             'longitude' => ['required', 'numeric', 'between:-180,180'],
             'radius_meters' => ['nullable', 'integer', 'min:1'],
             'division_id' => ['nullable', 'integer', Rule::exists('divisions', 'id')->where('company_id', $this->company->id)],
-            'is_active' => ['sometimes', 'boolean'],
+            'is_active' => ['sometimes', 'boolean', $this->keepsGpsLocationRule()],
         ];
+    }
+
+    /**
+     * While GPS is required, the last active location (with no HQ coordinates) cannot be switched off:
+     * check-in would otherwise have nothing to be checked against.
+     */
+    private function keepsGpsLocationRule(): Closure
+    {
+        return function (string $attribute, mixed $value, Closure $fail): void {
+            $deactivates = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) === false;
+
+            if ($deactivates && $this->location?->is_active && GeofenceService::wouldLeaveGpsWithoutLocation($this->company, [$this->location->id])) {
+                $fail(CompanyPolicyService::GPS_WITHOUT_LOCATION_MESSAGE);
+            }
+        };
     }
 
     /**

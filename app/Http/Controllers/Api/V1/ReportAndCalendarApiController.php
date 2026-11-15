@@ -5,11 +5,16 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\LeaveRequest;
 use App\Support\StorageUrl;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ReportAndCalendarApiController extends Controller
 {
@@ -98,35 +103,21 @@ class ReportAndCalendarApiController extends Controller
         }
 
         $user = $request->user();
-        $query = Attendance::with([...Attendance::workerEagerLoads(), 'employee.user', 'intern.user', 'freelancer.user'])
-            ->whereBetween('date', [$startDate, $endDate])
-            ->visibleTo($user);
+        // A half-open range: the last day still matches where dates are stored with a time (SQLite).
+        $scoped = Attendance::query()
+            ->where('date', '>=', $startDate)
+            ->where('date', '<', Carbon::parse($endDate)->addDay()->toDateString())
+            ->visibleTo($user)
+            ->when($companyId, fn (Builder $query) => $query->where(fn (Builder $inCompany) => $inCompany
+                ->whereIn('employee_id', Employee::query()->select('id')->where('company_id', $companyId))
+                ->orWhereIn('intern_id', Intern::query()->select('id')->where('company_id', $companyId))
+                ->orWhereIn('freelancer_id', Freelancer::query()->select('id')->where('company_id', $companyId))));
+        $query = (clone $scoped)->with([...Attendance::workerEagerLoads(), 'employee.user', 'intern.user', 'freelancer.user']);
 
-        if ($companyId) {
-            $query->where(function ($q) use ($companyId) {
-                $q->whereHas('employee', fn ($e) => $e->where('company_id', $companyId))
-                    ->orWhereHas('intern', fn ($i) => $i->where('company_id', $companyId))
-                    ->orWhereHas('freelancer', fn ($f) => $f->where('company_id', $companyId));
-            });
-        }
-
-        $allRecords = (clone $query)->get();
-
-        // A split shift has one row per segment: a worker's day counts once, however many segments it has.
-        $perWorkerDay = $allRecords->groupBy(fn ($a): string => ($a->employee_id ?? '').':'.($a->intern_id ?? '').':'.($a->freelancer_id ?? '').':'.Carbon::parse($a->date)->toDateString());
-
-        $totalPresent = $perWorkerDay->filter(fn ($rows): bool => $rows->contains(function ($a) {
-            $val = $a->status instanceof \BackedEnum ? $a->status->value : (string) $a->status;
-
-            return in_array($val, ['on_time', 'late', 'pending_approval']) || ! empty($a->check_in);
-        }))->count();
-
+        $summary = $this->attendanceSummary($scoped);
+        $totalPresent = $summary['present'];
         // Hitung total berapa KALI terlambat (frekuensi, bukan total menit)
-        $totalLateCount = $perWorkerDay->filter(fn ($rows): bool => $rows->contains(function ($a) {
-            $val = $a->status instanceof \BackedEnum ? $a->status->value : (string) $a->status;
-
-            return $val === 'late' || (int) $a->late_minutes > 0;
-        }))->count();
+        $totalLateCount = $summary['late'];
 
         $leaveQuery = LeaveRequest::where('status', 'approved')
             ->where(function ($q) use ($startDate, $endDate) {
@@ -138,30 +129,26 @@ class ReportAndCalendarApiController extends Controller
             ->when($companyId, fn ($q) => $q->whereWorkerInCompanies([(int) $companyId]));
 
         $approvedLeaveDates = [];
-        $approvedLeaves = (clone $leaveQuery)->get();
+        $approvedLeaves = (clone $leaveQuery)->toBase()->get(['start_date', 'end_date']);
         foreach ($approvedLeaves as $leave) {
             if ($leave->start_date && $leave->end_date) {
-                $cur = Carbon::parse($leave->start_date);
-                $lEnd = Carbon::parse($leave->end_date);
+                $cur = Carbon::parse($leave->start_date)->startOfDay();
+                $lEnd = Carbon::parse($leave->end_date)->startOfDay();
                 while ($cur->lte($lEnd)) {
-                    $approvedLeaveDates[] = $cur->toDateString();
+                    $approvedLeaveDates[$cur->toDateString()] = true;
                     $cur->addDay();
                 }
             }
         }
-        $totalLeave = count(array_unique($approvedLeaveDates));
+        $totalLeave = count($approvedLeaveDates);
 
         // Absen eksplisit dari record database
-        $explicitAbsent = $allRecords->filter(function ($a) {
-            $val = $a->status instanceof \BackedEnum ? $a->status->value : (string) $a->status;
-
-            return in_array($val, ['absent', 'rejected']);
-        })->count();
+        $explicitAbsent = $summary['absent'];
 
         // Otomatis hitung hari Senin-Jumat yang tidak terdeteksi presensi dan tidak ada cuti
-        $existingDates = $allRecords->pluck('date')->map(function ($d) {
-            return Carbon::parse($d)->toDateString();
-        })->toArray();
+        $existingDates = (clone $scoped)->toBase()->distinct()->pluck('date')
+            ->mapWithKeys(fn ($date): array => [Carbon::parse($date)->toDateString() => true])
+            ->all();
 
         $start = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
@@ -173,7 +160,7 @@ class ReportAndCalendarApiController extends Controller
             while ($cursor->lte($effectiveEnd)) {
                 if ($cursor->isWeekday()) {
                     $dateStr = $cursor->toDateString();
-                    if (! in_array($dateStr, $existingDates) && ! in_array($dateStr, $approvedLeaveDates)) {
+                    if (! isset($existingDates[$dateStr]) && ! isset($approvedLeaveDates[$dateStr])) {
                         $unrecordedWeekdayAbsent++;
                     }
                 }
@@ -202,5 +189,32 @@ class ReportAndCalendarApiController extends Controller
                 'total' => $attendances->total(),
             ],
         ]);
+    }
+
+    /**
+     * Present and late worker-days, and explicit absences, in one aggregate query. A split shift has one
+     * row per segment: a worker's day counts once, however many segments it has.
+     *
+     * @param  Builder<Attendance>  $scoped
+     * @return array{present: int, late: int, absent: int}
+     */
+    private function attendanceSummary(Builder $scoped): array
+    {
+        $perWorkerDay = (clone $scoped)->toBase()
+            ->selectRaw("MAX(CASE WHEN status IN ('on_time', 'late', 'pending_approval') OR check_in IS NOT NULL THEN 1 ELSE 0 END) AS is_present")
+            ->selectRaw("MAX(CASE WHEN status = 'late' OR late_minutes > 0 THEN 1 ELSE 0 END) AS is_late")
+            ->selectRaw("SUM(CASE WHEN status IN ('absent', 'rejected') THEN 1 ELSE 0 END) AS absent_rows")
+            ->groupBy('employee_id', 'intern_id', 'freelancer_id', 'date');
+
+        $totals = DB::query()
+            ->fromSub($perWorkerDay, 'worker_days')
+            ->selectRaw('COALESCE(SUM(is_present), 0) AS present, COALESCE(SUM(is_late), 0) AS late, COALESCE(SUM(absent_rows), 0) AS absent')
+            ->first();
+
+        return [
+            'present' => (int) ($totals->present ?? 0),
+            'late' => (int) ($totals->late ?? 0),
+            'absent' => (int) ($totals->absent ?? 0),
+        ];
     }
 }

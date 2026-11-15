@@ -32,6 +32,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class OvertimeRequestResource extends Resource
@@ -315,7 +316,17 @@ class OvertimeRequestResource extends Resource
                     ->visible(fn (OvertimeRequest $record) => $service->isUserAuthorizedToApprove($record, auth()->user()))
                     ->requiresConfirmation()
                     ->action(function (OvertimeRequest $record) use ($service): void {
-                        $service->approveStep($record, auth()->user());
+                        try {
+                            $service->approveStep($record, auth()->user());
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa disetujui')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Approval Lembur Berhasil!')
@@ -335,7 +346,17 @@ class OvertimeRequestResource extends Resource
                             ->required(),
                     ])
                     ->action(function (OvertimeRequest $record, array $data) use ($service): void {
-                        $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        try {
+                            $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa ditolak')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Pengajuan Lembur Ditolak')

@@ -25,6 +25,16 @@ final class TeamRecapService
 {
     private const TYPE_LABELS = ['employee' => 'Karyawan', 'intern' => 'Magang', 'freelancer' => 'Freelancer'];
 
+    /** Rows read per query, so a month of a large Klien is streamed instead of loaded at once. */
+    private const CHUNK_SIZE = 2000;
+
+    /** @var array<string, array{model: class-string<Model>, number: string}> */
+    private const WORKER_TYPES = [
+        'employee' => ['model' => Employee::class, 'number' => 'nip'],
+        'intern' => ['model' => Intern::class, 'number' => 'nis'],
+        'freelancer' => ['model' => Freelancer::class, 'number' => 'freelancer_number'],
+    ];
+
     /**
      * @return list<array{
      *     worker: array{type: string, id: int, number: string, name: string, company: string|null, division: string|null},
@@ -43,56 +53,91 @@ final class TeamRecapService
     {
         $start = Carbon::parse($month)->startOfMonth();
         $end = $start->copy()->endOfMonth();
-        $today = today();
+        $today = today()->toDateString();
+        // A half-open range: the last day still matches where dates are stored with a time (SQLite).
+        $from = $start->toDateString();
+        $until = $end->copy()->addDay()->toDateString();
 
-        $schedules = ShiftSchedule::query()
-            ->visibleTo($user)
-            ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
-            ->with(['shift', 'location', ...ShiftSchedule::workerEagerLoads()])
-            ->get();
-
-        $attendances = Attendance::query()
-            ->visibleTo($user)
-            ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
-            ->with(['location', 'employee.company', 'employee.division', 'intern.company', 'intern.division', 'freelancer.company', 'freelancer.division'])
-            ->get();
-
-        /** @var array<string, array{schedule?: ShiftSchedule, attendances?: list<Attendance>}> $days */
+        /**
+         * One entry per worker per day, built from plain rows so a month of a large Klien never holds models.
+         *
+         * @var array<string, array{worker: string, date: string, schedule?: array{shift_id: int|null, location_id: int|null, is_day_off: bool}, attendance?: array{checked_in: bool, location_id: int|null, late_minutes: int, worked_minutes: int}}> $days
+         */
         $days = [];
 
-        foreach ($schedules as $schedule) {
-            if ($key = $this->dayKey($schedule->getWorkerProfile(), $schedule->date)) {
-                $days[$key]['schedule'] = $schedule;
-            }
-        }
+        ShiftSchedule::query()
+            ->visibleTo($user)
+            ->where('date', '>=', $from)
+            ->where('date', '<', $until)
+            ->select(['id', 'date', 'employee_id', 'intern_id', 'freelancer_id', 'shift_id', 'company_location_id', 'is_day_off'])
+            ->toBase()
+            ->lazyById(self::CHUNK_SIZE, 'shift_schedules.id', 'id')
+            ->each(function (object $schedule) use (&$days): void {
+                if (! $worker = $this->workerKey($schedule)) {
+                    return;
+                }
 
-        foreach ($attendances as $attendance) {
-            if ($key = $this->dayKey($attendance->getWorkerProfile(), $attendance->date)) {
-                $days[$key]['attendances'][] = $attendance;
-            }
-        }
+                $date = substr((string) $schedule->date, 0, 10);
+                $days["{$worker}:{$date}"]['worker'] = $worker;
+                $days["{$worker}:{$date}"]['date'] = $date;
+                $days["{$worker}:{$date}"]['schedule'] = [
+                    'shift_id' => $schedule->shift_id !== null ? (int) $schedule->shift_id : null,
+                    'location_id' => $schedule->company_location_id !== null ? (int) $schedule->company_location_id : null,
+                    'is_day_off' => (bool) $schedule->is_day_off,
+                ];
+            });
+
+        Attendance::query()
+            ->visibleTo($user)
+            ->where('date', '>=', $from)
+            ->where('date', '<', $until)
+            ->select(['id', 'date', 'employee_id', 'intern_id', 'freelancer_id', 'company_location_id', 'check_in', 'check_out', 'late_minutes'])
+            ->toBase()
+            ->lazyById(self::CHUNK_SIZE, 'attendances.id', 'id')
+            ->each(function (object $attendance) use (&$days): void {
+                if (! $worker = $this->workerKey($attendance)) {
+                    return;
+                }
+
+                $date = substr((string) $attendance->date, 0, 10);
+                $key = "{$worker}:{$date}";
+                $days[$key]['worker'] = $worker;
+                $days[$key]['date'] = $date;
+
+                // The first segment decides presence and the outlet; every segment adds its lateness and work time.
+                $days[$key]['attendance'] ??= [
+                    'checked_in' => filled($attendance->check_in),
+                    'location_id' => $attendance->company_location_id !== null ? (int) $attendance->company_location_id : null,
+                    'late_minutes' => 0,
+                    'worked_minutes' => 0,
+                ];
+                $days[$key]['attendance']['late_minutes'] += (int) $attendance->late_minutes;
+                $days[$key]['attendance']['worked_minutes'] += $this->workedMinutes($attendance->check_in, $attendance->check_out);
+            });
+
+        $shiftMinutes = $this->shiftMinutes(array_column(array_column($days, 'schedule'), 'shift_id'));
+        $outletNames = $this->outletNames([
+            ...array_column(array_column($days, 'schedule'), 'location_id'),
+            ...array_column(array_column($days, 'attendance'), 'location_id'),
+        ]);
+        $workers = $this->workers(array_unique(array_column($days, 'worker')));
 
         $rows = [];
 
         foreach ($days as $day) {
+            if (! $worker = $workers[$day['worker']] ?? null) {
+                continue;
+            }
+
             $schedule = $day['schedule'] ?? null;
-            $dayAttendances = collect($day['attendances'] ?? []);
-            $attendance = $dayAttendances->first();
-            $worker = $schedule?->getWorkerProfile() ?? $attendance?->getWorkerProfile();
-            $outlet = $schedule?->location ?? $attendance?->location;
-            $type = $this->workerType($worker);
-            $rowKey = "{$type}:{$worker->getKey()}:".($outlet?->id ?? '');
+            $attendance = $day['attendance'] ?? null;
+            $outletId = collect([$schedule['location_id'] ?? null, $attendance['location_id'] ?? null])
+                ->first(fn (?int $id): bool => $id !== null && isset($outletNames[$id]));
+            $rowKey = $day['worker'].':'.($outletId ?? '');
 
             $rows[$rowKey] ??= [
-                'worker' => [
-                    'type' => $type,
-                    'id' => (int) $worker->getKey(),
-                    'number' => (string) $this->workerNumber($worker),
-                    'name' => (string) $worker->full_name,
-                    'company' => $worker->company?->name,
-                    'division' => $worker->division?->name,
-                ],
-                'outlet' => $outlet instanceof CompanyLocation ? $outlet->name : null,
+                'worker' => $worker,
+                'outlet' => $outletId !== null ? $outletNames[$outletId] : null,
                 'scheduled_days' => 0,
                 'present_days' => 0,
                 'late_days' => 0,
@@ -104,27 +149,24 @@ final class TeamRecapService
             ];
             $row = &$rows[$rowKey];
 
-            if ($schedule?->is_day_off) {
+            if ($schedule['is_day_off'] ?? false) {
                 $row['off_days']++;
             } elseif ($schedule) {
                 $row['scheduled_days']++;
-                $row['scheduled_minutes'] += $schedule->shift?->scheduledMinutes() ?? 0;
+                $row['scheduled_minutes'] += $schedule['shift_id'] !== null ? ($shiftMinutes[$schedule['shift_id']] ?? 0) : 0;
             }
 
-            if ($attendance?->check_in) {
+            if ($attendance['checked_in'] ?? false) {
                 $row['present_days']++;
-                $lateMinutes = (int) $dayAttendances->sum('late_minutes');
 
                 // A split shift counts as one late day however many segments were late.
-                if ($lateMinutes > 0) {
+                if ($attendance['late_minutes'] > 0) {
                     $row['late_days']++;
-                    $row['late_minutes'] += $lateMinutes;
+                    $row['late_minutes'] += $attendance['late_minutes'];
                 }
 
-                foreach ($dayAttendances as $segmentRow) {
-                    $row['worked_minutes'] += $segmentRow->workedMinutes() ?? 0;
-                }
-            } elseif ($schedule && ! $schedule->is_day_off && $schedule->date->lessThan($today)) {
+                $row['worked_minutes'] += $attendance['worked_minutes'];
+            } elseif ($schedule && ! $schedule['is_day_off'] && $day['date'] < $today) {
                 $row['absent_days']++;
             }
 
@@ -224,27 +266,109 @@ final class TeamRecapService
         return 'rekap-tim-'.Carbon::parse($month)->format('Y-m').'.xlsx';
     }
 
-    private function dayKey(?Model $worker, CarbonInterface $date): ?string
+    /**
+     * "employee:12" for the worker a schedule or attendance row belongs to.
+     */
+    private function workerKey(object $record): ?string
     {
-        return $worker ? $this->workerType($worker).':'.$worker->getKey().':'.$date->toDateString() : null;
+        foreach (array_keys(self::WORKER_TYPES) as $type) {
+            if ($record->{"{$type}_id"} !== null) {
+                return $type.':'.(int) $record->{"{$type}_id"};
+            }
+        }
+
+        return null;
     }
 
-    private function workerType(Model $worker): string
+    private function workedMinutes(?string $checkIn, ?string $checkOut): int
     {
-        return match (true) {
-            $worker instanceof Employee => 'employee',
-            $worker instanceof Intern => 'intern',
-            default => 'freelancer',
-        };
+        if (blank($checkIn) || blank($checkOut)) {
+            return 0;
+        }
+
+        return (int) max(0, Carbon::parse($checkIn)->diffInMinutes(Carbon::parse($checkOut)));
     }
 
-    private function workerNumber(Model $worker): ?string
+    /**
+     * Scheduled minutes per shift id.
+     *
+     * @param  array<int, int|null>  $shiftIds
+     * @return array<int, int>
+     */
+    private function shiftMinutes(array $shiftIds): array
     {
-        return match (true) {
-            $worker instanceof Employee => $worker->nip,
-            $worker instanceof Intern => $worker->nis,
-            $worker instanceof Freelancer => $worker->freelancer_number,
-            default => null,
-        };
+        $shiftIds = array_values(array_unique(array_filter($shiftIds, fn (?int $id): bool => $id !== null)));
+
+        if ($shiftIds === []) {
+            return [];
+        }
+
+        return Shift::query()
+            ->whereIn('id', $shiftIds)
+            ->get()
+            ->mapWithKeys(fn (Shift $shift): array => [(int) $shift->id => $shift->scheduledMinutes()])
+            ->all();
+    }
+
+    /**
+     * Outlet names per location id.
+     *
+     * @param  array<int, int|null>  $locationIds
+     * @return array<int, string>
+     */
+    private function outletNames(array $locationIds): array
+    {
+        $locationIds = array_values(array_unique(array_filter($locationIds, fn (?int $id): bool => $id !== null)));
+
+        if ($locationIds === []) {
+            return [];
+        }
+
+        return CompanyLocation::query()
+            ->whereIn('id', $locationIds)
+            ->pluck('name', 'id')
+            ->mapWithKeys(fn (?string $name, int|string $id): array => [(int) $id => (string) $name])
+            ->all();
+    }
+
+    /**
+     * Worker details per worker key, with only the columns the recap shows.
+     *
+     * @param  array<int, string>  $workerKeys
+     * @return array<string, array{type: string, id: int, number: string, name: string, company: string|null, division: string|null}>
+     */
+    private function workers(array $workerKeys): array
+    {
+        $idsByType = [];
+
+        foreach ($workerKeys as $workerKey) {
+            [$type, $id] = explode(':', $workerKey);
+            $idsByType[$type][] = (int) $id;
+        }
+
+        $workers = [];
+
+        foreach ($idsByType as $type => $ids) {
+            $definition = self::WORKER_TYPES[$type];
+
+            foreach (array_chunk($ids, self::CHUNK_SIZE) as $chunk) {
+                $definition['model']::query()
+                    ->whereIn('id', $chunk)
+                    ->with(['company:id,name', 'division:id,name'])
+                    ->get(['id', 'company_id', 'division_id', 'full_name', $definition['number']])
+                    ->each(function (Model $worker) use ($type, $definition, &$workers): void {
+                        $workers["{$type}:{$worker->getKey()}"] = [
+                            'type' => $type,
+                            'id' => (int) $worker->getKey(),
+                            'number' => (string) $worker->{$definition['number']},
+                            'name' => (string) $worker->full_name,
+                            'company' => $worker->company?->name,
+                            'division' => $worker->division?->name,
+                        ];
+                    });
+            }
+        }
+
+        return $workers;
     }
 }

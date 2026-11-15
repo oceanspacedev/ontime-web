@@ -334,7 +334,17 @@ class LeaveRequestResource extends Resource
                             ->required(),
                     ])
                     ->action(function (LeaveRequest $record, array $data) use ($service): void {
-                        $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        try {
+                            $service->rejectStep($record, auth()->user(), $data['rejection_reason']);
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Pengajuan tidak bisa ditolak')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Pengajuan Cuti Ditolak')

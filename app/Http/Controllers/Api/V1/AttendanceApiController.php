@@ -218,7 +218,7 @@ class AttendanceApiController extends Controller
         ]);
     }
 
-    public function today(Request $request): JsonResponse
+    public function today(Request $request, AttendanceCheckService $attendanceCheck): JsonResponse
     {
         $user = $request->user();
         $profile = $user->employee ?? $user->intern ?? $user->freelancer;
@@ -230,6 +230,11 @@ class AttendanceApiController extends Controller
         $workSchedule = app(WorkScheduleService::class);
         // On a split shift, "today" is the segment the worker is on: segment 2 starts fresh once segment 1 is checked out.
         ['segment' => $segment, 'attendance' => $attendance] = $workSchedule->currentSegment($user, $profile, today());
+
+        // After midnight an overnight shift is still open on yesterday's row: the app offers its check-out.
+        if (! $attendance?->check_in) {
+            $attendance = $attendanceCheck->openOvernightAttendance($user)?->loadMissing(['employee', 'intern', 'freelancer']) ?? $attendance;
+        }
         $hours = $workSchedule->resolve($profile, today(), $segment);
         $segments = $hours['shift']?->segments() ?? [];
         $doneToday = Attendance::byWorker($user)->with(['employee', 'intern', 'freelancer'])->whereDate('date', today())->orderBy('segment')->get();
