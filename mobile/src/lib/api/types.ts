@@ -64,7 +64,16 @@ export interface Company {
   latitude: number | null;
   longitude: number | null;
   locations: CompanyLocation[];
+  /** Radius of the head office coordinates; missing on older servers (then 100 m). */
+  geofence_radius_meters?: number;
   policy: CompanyPolicy | null;
+}
+
+/** An outlet with the geofence the server checks; older servers send only id and name. */
+export interface OutletGeofence extends NamedRef {
+  latitude?: number | null;
+  longitude?: number | null;
+  radius_meters?: number;
 }
 
 export interface NamedRef {
@@ -243,7 +252,7 @@ export interface TodaySchedule {
   end_time: string;
   late_tolerance_minutes: number;
   /** Outlet the worker is scheduled at today; check-in is only accepted there. */
-  outlet?: NamedRef | null;
+  outlet?: OutletGeofence | null;
   section?: string | null;
 }
 
@@ -254,6 +263,8 @@ export interface TodayAttendance {
   attendance: Attendance | null;
   /** Jam kerja yang berlaku hari ini; absen pada backend lama. */
   schedule?: TodaySchedule | null;
+  /** Outlet the open attendance was checked in at; check-out is only accepted there. */
+  check_out_outlet?: OutletGeofence | null;
 }
 
 export interface PaginationA {

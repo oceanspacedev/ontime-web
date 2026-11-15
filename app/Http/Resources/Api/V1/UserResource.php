@@ -6,6 +6,7 @@ use App\Models\Company;
 use App\Services\AnnualLeaveService;
 use App\Services\ClientAdminGate;
 use App\Services\DataAccessService;
+use App\Services\GeofenceService;
 use App\Support\StorageUrl;
 use App\Support\WasteReport;
 use Illuminate\Http\Request;
@@ -107,13 +108,16 @@ class UserResource extends JsonResource
             'name' => $company->name,
             'latitude' => $company->latitude ? (float) $company->latitude : null,
             'longitude' => $company->longitude ? (float) $company->longitude : null,
-            'locations' => $company->locations ? $company->locations->map(fn ($loc) => [
+            // Only the locations the server's geofence accepts, each with the radius it checks against.
+            'locations' => $company->locations ? $company->locations->where('is_active', true)->values()->map(fn ($loc) => [
                 'id' => $loc->id,
                 'name' => $loc->name,
                 'latitude' => (float) $loc->latitude,
                 'longitude' => (float) $loc->longitude,
-                'radius_meters' => (int) $loc->radius_meters,
+                'radius_meters' => GeofenceService::resolveRadius($loc->radius_meters, $company->policy?->geofence_radius_meters),
             ]) : [],
+            // Radius of the head office coordinates above.
+            'geofence_radius_meters' => GeofenceService::resolveRadius(null, $company->policy?->geofence_radius_meters),
             'policy' => $company->policy ? [
                 'require_gps' => (bool) $company->policy->require_gps,
                 'require_photo' => (bool) $company->policy->require_photo,

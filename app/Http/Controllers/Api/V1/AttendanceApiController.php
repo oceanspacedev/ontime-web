@@ -8,14 +8,18 @@ use App\Http\Requests\Api\V1\CheckOutRequest;
 use App\Http\Requests\Api\V1\LivenessChallengeRequest;
 use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
+use App\Models\CompanyLocation;
 use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
 use App\Services\FileNamingService;
+use App\Services\GeofenceService;
+use App\Services\UploadStorageException;
 use App\Services\WorkScheduleService;
 use App\Support\StorageUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
 {
@@ -53,26 +57,36 @@ class AttendanceApiController extends Controller
         $identifier = $profile?->employee_code ?? $profile?->nik ?? (string) ($profile?->id ?? $user->id);
 
         $photoPath = null;
-        if ($request->hasFile('photo')) {
-            $photoPath = FileNamingService::storeUploadedFile(
-                $request->file('photo'),
-                'attendance/photos',
-                $isCheckIn ? 'ATT_IN' : 'ATT_OUT',
-                $identifier,
-                $disk
-            );
-        }
-
         $framePaths = [];
-        foreach ($request->file('liveness_frames', []) as $frame) {
-            $framePath = FileNamingService::storeUploadedFile(
-                $frame,
-                'attendance/liveness',
-                $isCheckIn ? 'LIVE_IN' : 'LIVE_OUT',
-                $identifier,
-                $disk
-            );
-            $framePaths[] = $framePath;
+
+        try {
+            if ($request->hasFile('photo')) {
+                $photoPath = FileNamingService::storeUploadedFile(
+                    $request->file('photo'),
+                    'attendance/photos',
+                    $isCheckIn ? 'ATT_IN' : 'ATT_OUT',
+                    $identifier,
+                    $disk
+                );
+            }
+
+            foreach ($request->file('liveness_frames', []) as $frame) {
+                $framePaths[] = FileNamingService::storeUploadedFile(
+                    $frame,
+                    'attendance/liveness',
+                    $isCheckIn ? 'LIVE_IN' : 'LIVE_OUT',
+                    $identifier,
+                    $disk
+                );
+            }
+        } catch (UploadStorageException) {
+            // Files written before the failure belong to no record; remove them before asking for a resend.
+            $stored = array_values(array_filter([$photoPath, ...$framePaths]));
+            if ($stored !== []) {
+                Storage::disk($disk)->delete($stored);
+            }
+
+            return $this->ruleError(new AttendanceRuleException('Foto gagal disimpan di server. Coba kirim lagi beberapa saat.', 503, 'photo'));
         }
 
         $input = new AttendanceCheckInput(
@@ -159,6 +173,8 @@ class AttendanceApiController extends Controller
             'photo' => ['required', 'file', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
         ], [
             'photo.required' => 'Foto Master Wajah wajib diunggah.',
+            'photo.uploaded' => 'Foto Master Wajah gagal terunggah. Periksa koneksi lalu coba lagi.',
+            'photo.file' => 'Foto Master Wajah harus berupa berkas gambar.',
             'photo.image' => 'Foto Master Wajah harus berupa berkas gambar.',
             'photo.mimes' => 'Foto Master Wajah harus berformat jpeg, png, jpg, atau webp.',
             'photo.max' => 'Foto Master Wajah maksimal berukuran 5MB.',
@@ -236,10 +252,36 @@ class AttendanceApiController extends Controller
                 'start_time' => substr($hours['start_time'], 0, 5),
                 'end_time' => substr($hours['end_time'], 0, 5),
                 'late_tolerance_minutes' => $hours['late_tolerance_minutes'],
-                'outlet' => $hours['location'] ? ['id' => (int) $hours['location']->id, 'name' => $hours['location']->name] : null,
+                'outlet' => $this->outletGeofence($hours['location']),
                 'section' => $hours['section'],
             ],
+            // Where check-out is accepted: the outlet the open attendance was checked in at.
+            'check_out_outlet' => $attendance?->check_in !== null && $attendance->check_out === null
+                ? $this->outletGeofence($attendance->loadMissing('location')->location)
+                : null,
         ]);
+    }
+
+    /**
+     * An outlet with the geofence the server checks against, so the app's preview matches it.
+     *
+     * @return array{id: int, name: string, latitude: float|null, longitude: float|null, radius_meters: int}|null
+     */
+    private function outletGeofence(?CompanyLocation $outlet): ?array
+    {
+        if (! $outlet) {
+            return null;
+        }
+
+        $outlet->loadMissing('company.policy');
+
+        return [
+            'id' => (int) $outlet->id,
+            'name' => $outlet->name,
+            'latitude' => $outlet->latitude !== null ? (float) $outlet->latitude : null,
+            'longitude' => $outlet->longitude !== null ? (float) $outlet->longitude : null,
+            'radius_meters' => GeofenceService::resolveRadius($outlet->radius_meters, $outlet->company?->policy?->geofence_radius_meters),
+        ];
     }
 
     public function deleteMasterFace(Request $request): JsonResponse

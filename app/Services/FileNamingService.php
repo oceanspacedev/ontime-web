@@ -5,6 +5,7 @@ namespace App\Services;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Str;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Throwable;
 
 class FileNamingService
 {
@@ -39,6 +40,8 @@ class FileNamingService
 
     /**
      * Store an uploaded file with auditable naming.
+     *
+     * @throws UploadStorageException when the disk refuses the write (it returns false or throws)
      */
     public static function storeUploadedFile(
         UploadedFile $file,
@@ -49,6 +52,18 @@ class FileNamingService
     ): string {
         $filename = static::generateFileName($prefix, $identifier, $file);
 
-        return $file->storeAs($directory, $filename, ['disk' => $disk]);
+        try {
+            $path = $file->storeAs($directory, $filename, ['disk' => $disk]);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            throw new UploadStorageException(previous: $exception);
+        }
+
+        if (! is_string($path) || $path === '') {
+            throw new UploadStorageException;
+        }
+
+        return $path;
     }
 }

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\CompanyPolicy;
 use App\Services\Face\BasicFaceVerifier;
 use App\Services\Face\CompreFaceVerifier;
+use App\Services\Face\FaceMatch;
 use App\Services\Face\FaceServiceUnavailable;
 use App\Services\Face\FaceVerifier;
 use App\Services\FaceRecognitionService;
@@ -69,10 +70,17 @@ class FaceVerifierTest extends TestCase
         $this->assertSame(100, $match->score);
         $this->assertSame('Verifikasi wajah berhasil (Skor: 100%, Threshold: 60%).', $match->notes);
 
-        $missing = $driver->verify('faces/missing.jpg', $path, 60);
+        $missing = $driver->verify($path, 'faces/missing.jpg', 60);
 
         $this->assertFalse($missing->matched);
-        $this->assertSame('Gagal membaca berkas foto master atau foto selfie dari storage.', $missing->notes);
+        $this->assertSame(FaceMatch::MASTER_MISSING, $missing->notes);
+    }
+
+    public function test_basic_driver_reports_an_unreadable_selfie_as_a_service_problem(): void
+    {
+        $this->expectException(FaceServiceUnavailable::class);
+
+        app(BasicFaceVerifier::class)->verify('faces/missing.jpg', $this->storeImage('master.jpg'), 60);
     }
 
     public function test_basic_driver_cannot_detect_pose(): void
@@ -165,15 +173,27 @@ class FaceVerifierTest extends TestCase
         $this->assertSame('Wajah tidak terdeteksi pada foto selfie.', $match->notes);
     }
 
-    public function test_compreface_verify_does_not_call_the_service_for_unreadable_files(): void
+    public function test_compreface_verify_does_not_call_the_service_for_a_missing_master_photo(): void
     {
         Http::fake();
 
-        $match = app(CompreFaceVerifier::class)->verify('faces/missing.jpg', $this->storeImage('master.jpg'), 60);
+        $match = app(CompreFaceVerifier::class)->verify($this->storeImage('selfie.jpg'), 'faces/missing.jpg', 60);
 
         $this->assertFalse($match->matched);
-        $this->assertSame('Gagal membaca berkas foto master atau foto selfie dari storage.', $match->notes);
+        $this->assertSame(FaceMatch::MASTER_MISSING, $match->notes);
         Http::assertNothingSent();
+    }
+
+    public function test_compreface_verify_reports_an_unreadable_selfie_as_a_service_problem(): void
+    {
+        Http::fake();
+
+        try {
+            app(CompreFaceVerifier::class)->verify('faces/missing.jpg', $this->storeImage('master.jpg'), 60);
+            $this->fail('An unreadable selfie must not be reported as a face mismatch.');
+        } catch (FaceServiceUnavailable) {
+            Http::assertNothingSent();
+        }
     }
 
     /**

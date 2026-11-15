@@ -8,18 +8,13 @@ const JPEG_QUALITY = 0.75;
 /**
  * Shrinks a photo so it stays well under the API's 5 MB limit and uploads fast on mobile data.
  * The output is always JPEG, which every backend validation rule accepts.
+ *
+ * The photo is downsampled while it is decoded, so a full-resolution camera picture is never held
+ * in memory: decoding it whole could run low-end Android phones out of memory. This also works for
+ * picked files whose dimensions are unknown, and never enlarges a small image.
  */
-export async function prepareUpload(uri: string, name: string, width?: number, height?: number): Promise<UploadFile> {
-  const context = ImageManipulator.manipulate(uri);
-  const longest = Math.max(width ?? 0, height ?? 0);
-  if (longest === 0 || longest > MAX_SIDE) {
-    if (width && height && width >= height) {
-      context.resize({ width: MAX_SIDE, height: null });
-    } else {
-      context.resize({ width: null, height: MAX_SIDE });
-    }
-  }
-  const rendered = await context.renderAsync();
+export async function prepareUpload(uri: string, name: string): Promise<UploadFile> {
+  const rendered = await ImageManipulator.manipulate(uri, { maxWidth: MAX_SIDE, maxHeight: MAX_SIDE }).renderAsync();
   const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: JPEG_QUALITY });
   return { uri: saved.uri, name: `${name}.jpg`, type: 'image/jpeg' };
 }
