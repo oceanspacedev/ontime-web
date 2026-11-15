@@ -77,12 +77,13 @@ export default function HomeScreen() {
     enabled: access.canManageTeam,
   });
 
+  /** Reloads everything on the screen; settles with today's attendance, the part the user waits for. */
   const refresh = () => {
     refreshUser.mutate();
-    void today.refetch();
     void leaves.refetch();
     void pending.refetch();
     void team.refetch();
+    return today.refetch();
   };
 
   const pendingCount = countPending(pending.data);
@@ -135,7 +136,7 @@ export default function HomeScreen() {
             <LoadingView message="Memuat presensi hari ini…" />
           </Group>
         ) : today.isError ? (
-          <ErrorBanner error={today.error} onRetry={() => today.refetch()} />
+          <ErrorBanner error={today.error} onRetry={refresh} />
         ) : today.data ? (
           <TodayCard today={today.data} access={access} />
         ) : null
