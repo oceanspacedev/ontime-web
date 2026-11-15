@@ -6,8 +6,9 @@ use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MapPickerField;
 use App\Filament\Resources\CompanyResource\Pages;
 use App\Models\Company;
-use App\Models\CompanyPolicy;
-use App\Services\Face\FaceVerifier;
+use App\Services\CompanyPolicyService;
+use App\Services\CompanyProvisioningService;
+use App\Services\DataAccessService;
 use App\Services\GeofenceService;
 use BackedEnum;
 use Closure;
@@ -36,6 +37,7 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\Rules\Unique;
 use UnitEnum;
 
 class CompanyResource extends Resource
@@ -54,7 +56,7 @@ class CompanyResource extends Resource
 
     protected static ?int $navigationSort = 1;
 
-    public const LIVENESS_DRIVER_MESSAGE = 'Liveness butuh CompreFace (FACE_DRIVER=compreface).';
+    public const LIVENESS_DRIVER_MESSAGE = CompanyPolicyService::LIVENESS_DRIVER_MESSAGE;
 
     public static function canViewAny(): bool
     {
@@ -62,21 +64,49 @@ class CompanyResource extends Resource
     }
 
     /**
-     * Admin Badan Usaha edits their own companies; only Superadmin adds or removes companies.
+     * Admin Badan Usaha edits their own companies; the Superadmin and the PIC of a Klien add and remove
+     * them (the PIC only in their own Klien). A company with divisions or workers cannot be deleted.
      */
     public static function canCreate(): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        $user = auth()->user();
+
+        return $user !== null && DataAccessService::canCreateCompany($user);
     }
 
     public static function canDelete(Model $record): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        $user = auth()->user();
+
+        if (! $user) {
+            return false;
+        }
+
+        return $user->hasRole('Superadmin')
+            || (DataAccessService::isTenantOwner($user) && $user->tenant_id !== null && (int) $record->getAttribute('tenant_id') === (int) $user->tenant_id);
     }
 
     public static function canDeleteAny(): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        $user = auth()->user();
+
+        return $user !== null && DataAccessService::canCreateCompany($user);
+    }
+
+    /**
+     * The Klien a company form works in: the picked one for the Superadmin, the user's own otherwise.
+     */
+    public static function formTenantId(Get $get, ?Model $record = null): ?int
+    {
+        $user = auth()->user();
+
+        if ($user?->hasRole('Superadmin')) {
+            $picked = $get('tenant_id') ?? $record?->getAttribute('tenant_id');
+
+            return filled($picked) ? (int) $picked : null;
+        }
+
+        return $user?->tenant_id;
     }
 
     public static function getEloquentQuery(): Builder
@@ -96,6 +126,17 @@ class CompanyResource extends Resource
                                 Section::make('Informasi Badan Usaha')
                                     ->schema([
                                         Grid::make(2)->schema([
+                                            Select::make('tenant_id')
+                                                ->label('Klien')
+                                                ->relationship('tenant', 'name')
+                                                ->searchable()
+                                                ->preload()
+                                                ->placeholder('Tanpa klien')
+                                                ->helperText('Badan usaha tanpa klien tidak terlihat oleh PIC mana pun.')
+                                                ->live()
+                                                ->visible(fn (): bool => (bool) auth()->user()?->hasRole('Superadmin'))
+                                                ->columnSpanFull(),
+
                                             TextInput::make('name')
                                                 ->label('Nama Badan Usaha')
                                                 ->placeholder('Contoh: PT OnTime Indonesia')
@@ -106,7 +147,8 @@ class CompanyResource extends Resource
                                                 ->label('Kode Perusahaan')
                                                 ->placeholder('Contoh: ONTIME')
                                                 ->required()
-                                                ->unique(ignoreRecord: true)
+                                                ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get, ?Model $record): Unique => CompanyProvisioningService::uniqueCodeRule($rule, static::formTenantId($get, $record)))
+                                                ->validationMessages(['unique' => CompanyProvisioningService::CODE_TAKEN_MESSAGE])
                                                 ->maxLength(50),
 
                                             TextInput::make('email')
@@ -227,6 +269,11 @@ class CompanyResource extends Resource
     {
         return $table
             ->columns([
+                TextColumn::make('tenant.name')
+                    ->label('Klien')
+                    ->searchable()
+                    ->sortable()
+                    ->visible(fn (): bool => (bool) auth()->user()?->hasRole('Superadmin')),
                 TextColumn::make('name')
                     ->label('Nama Perusahaan')
                     ->searchable()
@@ -274,17 +321,7 @@ class CompanyResource extends Resource
                     ->modalDescription(fn (Company $record): string => $record->name)
                     ->modalSubmitActionLabel('Simpan Kebijakan')
                     ->successNotificationTitle('Kebijakan absensi disimpan')
-                    ->fillForm(fn (Company $record): array => [
-                        'late_tolerance_minutes' => $record->policy?->late_tolerance_minutes ?? 15,
-                        'require_gps' => $record->policy?->require_gps ?? false,
-                        'geofence_radius_meters' => $record->policy?->geofence_radius_meters ?? 100,
-                        'mock_location_action' => $record->policy?->mock_location_action ?? 'reject',
-                        'selfie_mode' => $record->policy?->selfieMode() ?? 'none',
-                        'face_match_threshold' => $record->policy?->face_match_threshold ?? 60,
-                        'face_fail_action' => $record->policy?->face_fail_action ?? 'reject',
-                        'annual_leave_quota' => $record->policy?->annual_leave_quota ?? 12,
-                        'default_approval_stages' => $record->policy?->default_approval_stages ?? 1,
-                    ])
+                    ->fillForm(fn (Company $record): array => CompanyPolicyService::formState($record))
                     ->schema([
                         Section::make('Jam Masuk')
                             ->icon('heroicon-o-clock')
@@ -307,11 +344,7 @@ class CompanyResource extends Resource
                                     ->label('Wajib Lokasi GPS')
                                     ->live()
                                     ->rules([
-                                        fn (?Company $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
-                                            if ($value && $record && ! GeofenceService::hasConfiguredLocations($record)) {
-                                                $fail('Wajib Lokasi GPS membutuhkan Koordinat GPS Utama atau minimal satu cabang aktif.');
-                                            }
-                                        },
+                                        fn (?Company $record): Closure => CompanyPolicyService::gpsRule($record),
                                     ])
                                     ->helperText(fn (?Company $record): ?string => $record === null || GeofenceService::hasConfiguredLocations($record)
                                         ? null
@@ -344,13 +377,9 @@ class CompanyResource extends Resource
                                     ->hiddenLabel()
                                     ->options(static::selfieModeOptions())
                                     ->descriptions(fn (): array => static::selfieModeDescriptions())
-                                    ->disableOptionWhen(fn (string $value): bool => $value === 'liveness' && ! static::faceVerifier()->supportsPose())
+                                    ->disableOptionWhen(fn (string $value): bool => $value === 'liveness' && ! CompanyPolicyService::supportsLiveness())
                                     ->rules([
-                                        fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
-                                            if ($value === 'liveness' && ! static::faceVerifier()->supportsPose()) {
-                                                $fail(static::LIVENESS_DRIVER_MESSAGE);
-                                            }
-                                        },
+                                        fn (): Closure => CompanyPolicyService::livenessRule(),
                                     ])
                                     ->in(array_keys(static::selfieModeOptions()))
                                     ->required()
@@ -363,11 +392,7 @@ class CompanyResource extends Resource
                                 Hidden::make('require_face_recognition'),
                                 Hidden::make('require_liveness')
                                     ->rules([
-                                        fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
-                                            if (filter_var($value, FILTER_VALIDATE_BOOLEAN) && ! static::faceVerifier()->supportsPose()) {
-                                                $fail(static::LIVENESS_DRIVER_MESSAGE);
-                                            }
-                                        },
+                                        fn (): Closure => CompanyPolicyService::livenessFlagRule(),
                                     ]),
 
                                 TextInput::make('face_match_threshold')
@@ -383,10 +408,7 @@ class CompanyResource extends Resource
                                 Select::make('face_fail_action')
                                     ->label('Jika Wajah Tidak Cocok')
                                     ->native(false)
-                                    ->options([
-                                        'reject' => 'Tolak Presensi Langsung',
-                                        'approval' => 'Alihkan ke Approval Atasan (Pending)',
-                                    ])
+                                    ->options(CompanyPolicyService::faceFailActionOptions())
                                     ->default('reject')
                                     ->visible(fn (Get $get) => static::usesFaceMatch($get('selfie_mode')))
                                     ->required(fn (Get $get) => static::usesFaceMatch($get('selfie_mode'))),
@@ -415,10 +437,7 @@ class CompanyResource extends Resource
                             ]),
                     ])
                     ->action(function (Company $record, array $data): void {
-                        $record->policy()->updateOrCreate(
-                            ['company_id' => $record->id],
-                            static::normalizeAttendancePolicy(static::preferLegacySelfieFlags($data))
-                        );
+                        CompanyPolicyService::save($record, $data);
                     }),
 
                 EditAction::make(),
@@ -426,68 +445,29 @@ class CompanyResource extends Resource
             ])
             ->bulkActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    DeleteBulkAction::make()->authorizeIndividualRecords(),
                 ]),
             ]);
     }
 
     /**
-     * Turn the form's selfie mode into the stored requirement flags.
-     *
-     * Older callers that still send `require_photo`, `require_face_recognition` or `require_liveness`
-     * instead of `selfie_mode` keep working: the strictest flag wins, so face recognition always
-     * implies a photo and liveness always implies face recognition.
+     * Turn the form's selfie mode into the stored requirement flags (see CompanyPolicyService::normalize()).
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     public static function normalizeAttendancePolicy(array $data): array
     {
-        $mode = $data['selfie_mode'] ?? null;
-
-        if (! is_string($mode) || ! array_key_exists($mode, static::selfieModeOptions())) {
-            $mode = match (true) {
-                ! empty($data['require_liveness']) => 'liveness',
-                ! empty($data['require_face_recognition']) => 'face',
-                ! empty($data['require_photo']) => 'photo',
-                default => 'none',
-            };
-        }
-
-        unset($data['selfie_mode']);
-
-        return [...$data, ...CompanyPolicy::flagsForSelfieMode($mode)];
+        return CompanyPolicyService::normalize($data);
     }
 
     /**
-     * Let the old requirement flags decide the selfie mode when a caller sent them.
-     *
-     * The form always fills `selfie_mode`, so without this an older caller that only sends
-     * `require_photo` / `require_face_recognition` / `require_liveness` would silently save the
-     * filled mode instead of the flags it asked for.
-     *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     public static function preferLegacySelfieFlags(array $data): array
     {
-        $legacyKeys = ['require_photo', 'require_face_recognition', 'require_liveness'];
-        $sentLegacyFlags = array_filter(
-            array_intersect_key($data, array_flip($legacyKeys)),
-            fn (mixed $value): bool => $value !== null && $value !== '',
-        );
-
-        if ($sentLegacyFlags === []) {
-            return array_diff_key($data, array_flip($legacyKeys));
-        }
-
-        unset($data['selfie_mode']);
-
-        foreach ($legacyKeys as $key) {
-            $data[$key] = filter_var($data[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
-        }
-
-        return $data;
+        return CompanyPolicyService::preferLegacySelfieFlags($data);
     }
 
     /**
@@ -495,12 +475,7 @@ class CompanyResource extends Resource
      */
     public static function selfieModeOptions(): array
     {
-        return [
-            'none' => 'Tanpa foto (klik saja)',
-            'photo' => 'Foto selfie',
-            'face' => 'Foto + cocokkan dengan foto master wajah',
-            'liveness' => 'Liveness (gerak kepala) + cocokkan wajah',
-        ];
+        return CompanyPolicyService::selfieModeOptions();
     }
 
     /**
@@ -508,35 +483,20 @@ class CompanyResource extends Resource
      */
     public static function mockLocationActionOptions(): array
     {
-        return [
-            'reject' => 'Tolak presensi',
-            'approval' => 'Alihkan ke persetujuan atasan',
-        ];
+        return CompanyPolicyService::mockLocationActionOptions();
     }
 
     /**
-     * Warnings for modes the configured face service cannot do properly; other modes need no description.
-     *
      * @return array<string, string>
      */
     public static function selfieModeDescriptions(): array
     {
-        $verifier = static::faceVerifier();
-
-        return array_filter([
-            'face' => $verifier->isAccurate() ? null : 'Pembanding bawaan, bukan pengenalan wajah sungguhan.',
-            'liveness' => $verifier->supportsPose() ? null : 'Butuh CompreFace.',
-        ]);
+        return CompanyPolicyService::selfieModeWarnings();
     }
 
     public static function usesFaceMatch(mixed $selfieMode): bool
     {
-        return in_array($selfieMode, ['face', 'liveness'], true);
-    }
-
-    protected static function faceVerifier(): FaceVerifier
-    {
-        return app(FaceVerifier::class);
+        return CompanyPolicyService::usesFaceMatch($selfieMode);
     }
 
     public static function getPages(): array

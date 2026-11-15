@@ -4,6 +4,7 @@ namespace App\Http\Resources\Api\V1;
 
 use App\Models\Company;
 use App\Services\AnnualLeaveService;
+use App\Services\ClientAdminGate;
 use App\Services\DataAccessService;
 use App\Support\StorageUrl;
 use App\Support\WasteReport;
@@ -31,6 +32,7 @@ class UserResource extends JsonResource
                 'can_manage_team' => $this->resource->canManageWorkers(),
                 'is_coordinator' => DataAccessService::isCoordinator($this->resource),
                 'waste_url' => WasteReport::urlFor($this->resource),
+                'client_admin' => collect(ClientAdminGate::permissions($this->resource))->only(['is_pic', 'can_manage_companies', 'can_manage_accounts'])->all(),
             ],
             'employee' => $this->employee ? [
                 'id' => $this->employee->id,

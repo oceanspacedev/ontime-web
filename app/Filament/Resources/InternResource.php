@@ -31,6 +31,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\Rules\Unique;
 use UnitEnum;
 
 class InternResource extends Resource
@@ -75,7 +76,7 @@ class InternResource extends Resource
                                     TextInput::make('nis')
                                         ->label('NIS / ID Magang')
                                         ->required()
-                                        ->unique(ignoreRecord: true)
+                                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => static::uniqueWithinTenant($rule, $get('company_id')))
                                         ->maxLength(50),
 
                                     TextInput::make('full_name')
@@ -292,7 +293,7 @@ class InternResource extends Resource
 
                 SelectFilter::make('mentor_id')
                     ->label('Mentor (Karyawan)')
-                    ->relationship('mentor', 'full_name'),
+                    ->relationship('mentor', 'full_name', fn (Builder $query) => static::scopeToManagedWorkers($query)),
 
                 SelectFilter::make('status')
                     ->label('Status')

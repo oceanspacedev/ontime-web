@@ -711,6 +711,40 @@ Notifikasi dikirim dari antrean (Horizon) ke Expo Push API `https://exp.host/--/
 
 Aplikasi mobile: saat notifikasi ditekan, `approval_requested` membuka `/approval/{request_type}/{request_id}` (inbox persetujuan bila halaman tidak dikenal), `approval_resolved` membuka `/request/{request_type}/{request_id}` atau `/attendance/{request_id}` untuk `geofence`. Push hanya berjalan di development build / build EAS (bukan Expo Go) dan memerlukan `extra.eas.projectId` di `app.json` untuk mendapatkan token.
 
+
+### 3.13 Klien (PIC / Admin)
+
+PIC dan Admin badan usaha mengatur kliennya dari aplikasi dengan aturan yang sama dengan panel web (aturan dipakai bersama: `CompanyPolicyService`, `CompanyProvisioningService`, `ClientAccountService`). Alur Persetujuan, Master Shift, dan import/export tetap di web. Tidak diizinkan: 403 dengan `message` berbahasa Indonesia. Data di luar jangkauan (termasuk milik klien lain): 404. `GET /auth/me` memuat `access.client_admin = {is_pic, can_manage_companies, can_manage_accounts}`.
+
+| Method | Path | Akses | Keterangan |
+| :--- | :--- | :--- | :--- |
+| GET | `/client/overview` | Kelola badan usaha atau akun | `{permissions: {is_pic, can_manage_companies, can_create_company, can_manage_accounts}, tenant: {id, name}\|null, companies: CompanySummary[]}` |
+| POST | `/client/companies` | PIC (Superadmin: 403, lewat panel web) | `name`, `code` (unik per klien), `email?`, `phone?`, `address?`, `latitude?`, `longitude?`, `is_active?`. 201 `{message, data: CompanySummary}`; alur persetujuan bawaan ikut dibuat |
+| PUT | `/client/companies/{id}` | Mengelola badan usaha itu | Field sama, `{message, data}` |
+| GET | `/client/companies/{id}/policy` | idem | `{data: Policy, options: {selfie_modes: [{value, label, description, available}], mock_location_actions, face_fail_actions}, has_locations}` |
+| PUT | `/client/companies/{id}/policy` | idem | Field Policy tanpa `mode_label`. GPS butuh koordinat HQ atau lokasi aktif; liveness butuh CompreFace |
+| GET | `/client/companies/{id}/locations` | idem | `{data: Location[]}` |
+| POST | `/client/companies/{id}/locations` | idem | `name`, `latitude`, `longitude`, `address?`, `radius_meters?`, `division_id?` (divisi badan usaha ini), `is_active?`. 201 |
+| PUT | `/client/locations/{id}` | idem | Field sama. Tidak ada hapus: nonaktifkan dengan `is_active: false` |
+| GET | `/client/companies/{id}/divisions` | idem | `{data: Division[]}`, `path` berbentuk `Parent > Child` |
+| POST | `/client/companies/{id}/divisions` | idem | `name`, `code?`, `parent_id?` (divisi badan usaha ini), `is_active?`. 201 |
+| PUT | `/client/divisions/{id}` | idem | Field sama; parent tidak boleh dirinya atau sub-divisinya |
+| GET | `/client/accounts` | Kelola akun | `search`, `page`. `{data: Account[], pagination}`; PIC melihat semua akun kliennya |
+| GET | `/client/accounts/{id}` | idem | `{data: Account}`. Hanya akun dalam jangkauan daftar (terbaca walau `can_edit` false); akun sendiri, klien lain, Superadmin, atau di luar jangkauan: 404 |
+| GET | `/client/accounts/options` | idem | `{roles, scopes: [{value, label, description}], companies: [{id, name}], divisions: [{id, company_id, label}]}`, hanya yang boleh diberikan |
+| POST | `/client/accounts` | idem, bukan Superadmin (403, lewat panel web); maks. 10/menit | `name`, `email`, `phone?`, `roles[]`, `data_scope`, `company_ids?`, `division_ids?`. 201 `{message, data: Account, credentials: {email, password, whatsapp_sent, wa_url}}`; password dibuat acak dan dikirim lewat WhatsApp |
+| PUT | `/client/accounts/{id}` | idem, bukan akun sendiri | `name`, `phone?`, `roles[]`, `data_scope`, `company_ids?`, `division_ids?`, `is_active`. Email tidak bisa diubah |
+| POST | `/client/accounts/{id}/reset-password` | idem, bukan akun sendiri; maks. 10/menit | `{message, credentials}`. Semua token aplikasi akun itu dicabut, jadi pemiliknya keluar dari aplikasi |
+
+- `CompanySummary`: `id, name, code, email, phone, address, latitude, longitude, is_active, mode_label, locations_count, divisions_count, workers_count` (karyawan + magang + freelancer).
+- `Policy`: `late_tolerance_minutes, require_gps, geofence_radius_meters, mock_location_action (reject/approval), selfie_mode (none/photo/face/liveness), face_match_threshold, face_fail_action (reject/approval), annual_leave_quota, default_approval_stages, work_start_time, work_end_time (HH:MM), mode_label`. Radius dan tindakan lokasi palsu hanya disimpan saat GPS wajib; ambang dan tindakan wajah hanya saat mode `face`/`liveness`.
+- `Location`: `id, company_id, division_id, name, address, latitude, longitude, radius_meters, is_active`. `Division`: `id, company_id, parent_id, name, code, is_active, path`.
+- `Account`: `id, name, email, phone, is_active, roles, data_scope, data_scope_label, companies, divisions, worker: {type, id, name, company}|null, can_edit`.
+- Role yang bisa diberikan mengikuti panel (daftar izin): PIC memberi Admin, Koordinator, BOD, Approver, Employee, Intern, Freelancer; Admin memberi yang sama tanpa Admin; Superadmin, PIC, dan role tambahan (di luar role sistem) hanya oleh Superadmin. Akun yang memegang role yang tidak bisa diberikan pengguna berada di luar jangkauannya. Akses data tidak boleh lebih luas dari akses pemberi dan tidak pernah keluar dari kliennya.
+- Akun tanpa profil pekerja hanya dikelola PIC atau pengelola berakses data Semua; Admin berakses Badan Usaha atau Divisi tidak bisa mengubahnya.
+- Superadmin tidak punya klien, jadi `can_create_company` selalu false untuknya di `/client/overview`; badan usaha dan akun klien ditambahkan Superadmin lewat panel web.
+- 429 bila batas per menit terlampaui: `{message, retry_after}`.
+
 ---
 
 ## 4. Halaman mobile per role

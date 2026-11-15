@@ -5,6 +5,8 @@ use App\Http\Controllers\Api\V1\ApprovalApiController;
 use App\Http\Controllers\Api\V1\AttendanceApiController;
 use App\Http\Controllers\Api\V1\AttendanceCorrectionApiController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\ClientAccountApiController;
+use App\Http\Controllers\Api\V1\ClientAdminApiController;
 use App\Http\Controllers\Api\V1\DeviceApiController;
 use App\Http\Controllers\Api\V1\LeaveRequestApiController;
 use App\Http\Controllers\Api\V1\MasterDataApiController;
@@ -94,6 +96,27 @@ Route::prefix('v1')->group(function () {
         Route::post('/team/freelancers/{id}/account', [TeamApiController::class, 'createFreelancerAccount'])->whereNumber('id');
         Route::post('/team/freelancers/{id}/end', [TeamApiController::class, 'endFreelancer'])->whereNumber('id');
         Route::post('/team/freelancers/{id}/reactivate', [TeamApiController::class, 'reactivateFreelancer'])->whereNumber('id');
+
+        // Klien (PIC / Admin): Badan Usaha, kebijakan absensi, lokasi, divisi, akun & akses
+        Route::prefix('client')->name('api.v1.client.')->group(function () {
+            Route::get('/overview', [ClientAdminApiController::class, 'overview'])->name('overview');
+            Route::post('/companies', [ClientAdminApiController::class, 'storeCompany'])->name('companies.store');
+            Route::put('/companies/{id}', [ClientAdminApiController::class, 'updateCompany'])->whereNumber('id')->name('companies.update');
+            Route::get('/companies/{id}/policy', [ClientAdminApiController::class, 'policy'])->whereNumber('id')->name('policy.show');
+            Route::put('/companies/{id}/policy', [ClientAdminApiController::class, 'updatePolicy'])->whereNumber('id')->name('policy.update');
+            Route::get('/companies/{id}/locations', [ClientAdminApiController::class, 'locations'])->whereNumber('id')->name('locations.index');
+            Route::post('/companies/{id}/locations', [ClientAdminApiController::class, 'storeLocation'])->whereNumber('id')->name('locations.store');
+            Route::put('/locations/{id}', [ClientAdminApiController::class, 'updateLocation'])->whereNumber('id')->name('locations.update');
+            Route::get('/companies/{id}/divisions', [ClientAdminApiController::class, 'divisions'])->whereNumber('id')->name('divisions.index');
+            Route::post('/companies/{id}/divisions', [ClientAdminApiController::class, 'storeDivision'])->whereNumber('id')->name('divisions.store');
+            Route::put('/divisions/{id}', [ClientAdminApiController::class, 'updateDivision'])->whereNumber('id')->name('divisions.update');
+            Route::get('/accounts', [ClientAccountApiController::class, 'index'])->name('accounts.index');
+            Route::get('/accounts/options', [ClientAccountApiController::class, 'options'])->name('accounts.options');
+            Route::post('/accounts', [ClientAccountApiController::class, 'store'])->middleware('throttle:client-account-credentials')->name('accounts.store');
+            Route::get('/accounts/{id}', [ClientAccountApiController::class, 'show'])->whereNumber('id')->name('accounts.show');
+            Route::put('/accounts/{id}', [ClientAccountApiController::class, 'update'])->whereNumber('id')->name('accounts.update');
+            Route::post('/accounts/{id}/reset-password', [ClientAccountApiController::class, 'resetPassword'])->whereNumber('id')->middleware('throttle:client-account-credentials')->name('accounts.reset-password');
+        });
 
         // Master Data APIs
         Route::get('/master/companies', [MasterDataApiController::class, 'companies'])->middleware('can:ViewAny:Company');

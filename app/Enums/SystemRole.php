@@ -11,6 +11,8 @@ enum SystemRole: string
     case Superadmin = 'Superadmin';
     /** Admin: manages workers and settings inside their own data access (see DataAccessService). */
     case Admin = 'Admin';
+    /** PIC: owner of a Klien. Always also an Admin; adds Badan Usaha and Admin accounts for their client. Only Superadmin grants it. */
+    case Pic = 'PIC';
     /** Koordinator: runs the outlets of the brands in their data access (freelancers, shifts, schedules), no company settings. */
     case Koordinator = 'Koordinator';
     case Bod = 'BOD';

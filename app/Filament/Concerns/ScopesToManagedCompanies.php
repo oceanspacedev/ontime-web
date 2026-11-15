@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\DataAccessService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\Rules\Unique;
 use Spatie\Permission\Models\Role;
 
 /**
@@ -177,45 +178,76 @@ trait ScopesToManagedCompanies
     // ── Accounts ───────────────────────────────────────────────────────────
 
     /**
-     * Roles the current user may hand out. Only Superadmin grants Superadmin and Admin; an Admin may grant Koordinator.
+     * Roles the current user may hand out (an allow-list, see grantableRoleNames()).
      *
      * @return array<string, string>
      */
     public static function assignableRoleOptions(): array
     {
-        $user = auth()->user();
-        // Superadmin hands out every role; an Admin (HR) also hands out Koordinator, for the store coordinators
-        // of their brands; nobody else grants a manager role.
-        $withheld = match (true) {
-            (bool) $user?->hasRole(SystemRole::Superadmin->value) => [],
-            (bool) $user?->hasRole(SystemRole::Admin->value) => [SystemRole::Superadmin->value, SystemRole::Admin->value],
-            default => SystemRole::managerNames(),
-        };
+        $grantable = static::grantableRoleNames(auth()->user());
 
         return Role::query()
-            ->when($withheld !== [], fn (Builder $query) => $query->whereNotIn('name', $withheld))
+            ->when($grantable !== null, fn (Builder $query) => $query->whereIn('name', $grantable))
             ->orderBy('name')
             ->pluck('name', 'name')
             ->all();
     }
 
     /**
-     * Roles whose accounts $user may not manage: the manager roles, except that an Admin manages the
-     * Koordinator accounts of their brands.
+     * Roles $user may hand out; null means every role, custom ones included (Superadmin only). The PIC
+     * of a Klien also grants Admin, for the HR staff of their client; an Admin (HR) also grants
+     * Koordinator, for the store coordinators of their brands; nobody else grants a manager role.
+     *
+     * @return list<string>|null
+     */
+    protected static function grantableRoleNames(?User $user): ?array
+    {
+        $baseRoles = [SystemRole::Bod->value, SystemRole::Approver->value, SystemRole::Employee->value, SystemRole::Intern->value, SystemRole::Freelancer->value];
+
+        return match (true) {
+            (bool) $user?->hasRole(SystemRole::Superadmin->value) => null,
+            DataAccessService::isTenantOwner($user) => [SystemRole::Admin->value, SystemRole::Koordinator->value, ...$baseRoles],
+            (bool) $user?->hasRole(SystemRole::Admin->value) => [SystemRole::Koordinator->value, ...$baseRoles],
+            default => $baseRoles,
+        };
+    }
+
+    /**
+     * Roles whose accounts $user may not manage: every role $user cannot grant, custom roles included.
      *
      * @return list<string>
      */
     protected static function accountRolesBeyond(User $user): array
     {
-        return $user->hasRole(SystemRole::Admin->value)
-            ? [SystemRole::Superadmin->value, SystemRole::Admin->value]
-            : SystemRole::managerNames();
+        $grantable = static::grantableRoleNames($user);
+
+        if ($grantable === null) {
+            return [];
+        }
+
+        return Role::query()
+            ->whereNotIn('name', $grantable)
+            ->pluck('name')
+            ->merge([SystemRole::Superadmin->value, SystemRole::Pic->value])
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Whether $user may manage login accounts without a worker profile: the PIC, or a manager whose own
+     * data access is "Semua". A division- or company-scoped Admin cannot tell whose an unlinked account is.
+     */
+    protected static function canReachUnlinkedAccounts(User $user): bool
+    {
+        return DataAccessService::isTenantOwner($user) || DataAccessService::canGrantAccess($user, DataScope::All);
     }
 
     /**
      * Whether the current user may edit, delete or take over this login account. Nobody removes their
-     * own account here, and an Admin only touches non-admin accounts that are unlinked or belong to a
-     * worker inside their data access.
+     * own account here, and an Admin only touches accounts of their own Klien holding roles they may
+     * grant that belong to a worker inside their data access, or are unlinked when their own data
+     * access is "Semua".
      */
     public static function canManageAccount(?User $account): bool
     {
@@ -229,7 +261,21 @@ trait ScopesToManagedCompanies
             return true;
         }
 
-        if (! $user->hasAnyRole([SystemRole::Admin->value, SystemRole::Koordinator->value]) || ! $user->canManageWorkers() || $account->hasAnyRole(static::accountRolesBeyond($user))) {
+        if (! $user->hasAnyRole([SystemRole::Admin->value, SystemRole::Koordinator->value]) || $account->hasAnyRole(static::accountRolesBeyond($user))) {
+            return false;
+        }
+
+        // Another client's account is never in reach, whatever its data access says.
+        if (! DataAccessService::sameTenant($user, $account)) {
+            return false;
+        }
+
+        // The PIC manages every account of their Klien, including the ones without a worker profile.
+        if (DataAccessService::isTenantOwner($user)) {
+            return true;
+        }
+
+        if (! $user->canManageWorkers()) {
             return false;
         }
 
@@ -242,12 +288,17 @@ trait ScopesToManagedCompanies
         $account->loadMissing(['employee', 'intern', 'freelancer']);
         $workers = array_filter([$account->employee, $account->intern, $account->freelancer]);
 
-        return $workers === [] || collect($workers)->contains(fn (Model $worker): bool => $user->canManageWorker($worker));
+        if ($workers === []) {
+            return static::canReachUnlinkedAccounts($user);
+        }
+
+        return collect($workers)->contains(fn (Model $worker): bool => $user->canManageWorker($worker));
     }
 
     /**
      * Limit a users query to the accounts the current user may manage (see canManageAccount()).
-     * Unlinked accounts are included for linking pickers and left out of account lists.
+     * Unlinked accounts are included for linking pickers (only for the PIC or a manager with data access
+     * "Semua") and left out of account lists.
      */
     public static function scopeToManageableAccounts(Builder $query, bool $includeUnlinked = true): Builder
     {
@@ -261,12 +312,35 @@ trait ScopesToManagedCompanies
             return $query;
         }
 
-        if (! $user->hasAnyRole([SystemRole::Admin->value, SystemRole::Koordinator->value]) || ! $user->canManageWorkers()) {
+        if (! $user->hasAnyRole([SystemRole::Admin->value, SystemRole::Koordinator->value])) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        // Another client's accounts are never in reach, linked or not.
+        $query->when(
+            $user->tenant_id === null,
+            fn (Builder $tenant) => $tenant->whereNull($tenant->qualifyColumn('tenant_id')),
+            fn (Builder $tenant) => $tenant->where($tenant->qualifyColumn('tenant_id'), $user->tenant_id),
+        );
+
+        // The PIC manages every account of their Klien, linked or not (a BOD or another Admin has no worker profile).
+        if (DataAccessService::isTenantOwner($user)) {
+            return $query
+                ->whereKeyNot($user->getKey())
+                ->whereDoesntHave('roles', fn (Builder $roles) => $roles->whereIn('name', static::accountRolesBeyond($user)));
+        }
+
+        if (! $user->canManageWorkers()) {
             return $query->whereRaw('1 = 0');
         }
 
         // Accounts with data access wider than the user's own (a BOD or Approver of another company) are out of reach.
         $outOfReach = User::query()
+            ->when(
+                $user->tenant_id === null,
+                fn (Builder $tenant) => $tenant->whereNull('tenant_id'),
+                fn (Builder $tenant) => $tenant->where('tenant_id', $user->tenant_id),
+            )
             ->where('data_scope', '!=', DataScope::Own->value)
             ->get()
             ->reject(fn (User $account): bool => DataAccessService::accountReachWithin($user, $account))
@@ -277,7 +351,7 @@ trait ScopesToManagedCompanies
             ->whereNotIn($query->getModel()->getQualifiedKeyName(), $outOfReach)
             ->whereDoesntHave('roles', fn (Builder $roles) => $roles->whereIn('name', static::accountRolesBeyond($user)))
             ->where(fn (Builder $scope) => $scope
-                ->when($includeUnlinked, fn (Builder $linkable) => $linkable->orWhere(fn (Builder $unlinked) => $unlinked->whereDoesntHave('employee')->whereDoesntHave('intern')->whereDoesntHave('freelancer')))
+                ->when($includeUnlinked && static::canReachUnlinkedAccounts($user), fn (Builder $linkable) => $linkable->orWhere(fn (Builder $unlinked) => $unlinked->whereDoesntHave('employee')->whereDoesntHave('intern')->whereDoesntHave('freelancer')))
                 ->orWhereHas('employee', fn (Builder $worker) => DataAccessService::scopeWorkers($worker, $user, includeOwn: false))
                 ->orWhereHas('intern', fn (Builder $worker) => DataAccessService::scopeWorkers($worker, $user, includeOwn: false))
                 ->orWhereHas('freelancer', fn (Builder $worker) => DataAccessService::scopeWorkers($worker, $user, includeOwn: false)));
@@ -294,6 +368,25 @@ trait ScopesToManagedCompanies
             ->orderBy('name')
             ->pluck('name', 'id')
             ->all();
+    }
+
+    /**
+     * Keep a worker number (NIP, NIS, freelancer number) unique inside one Klien: the Klien of the
+     * chosen company, else the current user's. Numbers of other clients never block it, and the
+     * error never reveals them.
+     */
+    public static function uniqueWithinTenant(Unique $rule, int|string|null $companyId): Unique
+    {
+        $tenantId = filled($companyId)
+            ? Company::query()->whereKey($companyId)->value('tenant_id')
+            : auth()->user()?->tenant_id;
+
+        $companyIds = Company::query()
+            ->when($tenantId === null, fn (Builder $query) => $query->whereNull('tenant_id'), fn (Builder $query) => $query->where('tenant_id', $tenantId))
+            ->pluck('id')
+            ->all();
+
+        return $rule->whereIn('company_id', $companyIds === [] ? [0] : $companyIds);
     }
 
     /**

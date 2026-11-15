@@ -129,6 +129,18 @@ function RootLayout() {
             <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />
             <Stack.Screen name="team/freelancer/new" options={{ title: 'Tambah Freelancer' }} />
             <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
+            <Stack.Screen name="client/index" options={{ title: 'Kelola Klien' }} />
+            <Stack.Screen name="client/company/new" options={{ title: 'Tambah Badan Usaha' }} />
+            <Stack.Screen name="client/company/[id]" options={{ title: 'Badan Usaha' }} />
+            <Stack.Screen name="client/company/[id]/edit" options={{ title: 'Ubah Data Badan Usaha' }} />
+            <Stack.Screen name="client/company/[id]/policy" options={{ title: 'Kebijakan Absensi' }} />
+            <Stack.Screen name="client/company/[id]/locations" options={{ title: 'Lokasi Absensi' }} />
+            <Stack.Screen name="client/company/[id]/location" options={{ title: 'Lokasi Absensi' }} />
+            <Stack.Screen name="client/company/[id]/divisions" options={{ title: 'Divisi' }} />
+            <Stack.Screen name="client/company/[id]/division" options={{ title: 'Divisi' }} />
+            <Stack.Screen name="client/accounts" options={{ title: 'Akun & Akses' }} />
+            <Stack.Screen name="client/account/new" options={{ title: 'Tambah Akun' }} />
+            <Stack.Screen name="client/account/[id]" options={{ title: 'Ubah Akun' }} />
           </Stack.Protected>
 
         </Stack>

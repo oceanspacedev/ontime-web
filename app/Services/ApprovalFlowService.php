@@ -41,10 +41,11 @@ class ApprovalFlowService
 
     /**
      * Roles that can act on an approval stage; a stage set to any other role could never be approved.
+     * The platform Superadmin is not one: each client approves its own requests.
      *
      * @var list<string>
      */
-    public const APPROVER_ROLES = ['Approver', 'BOD', 'Superadmin', 'Admin', 'Koordinator'];
+    public const APPROVER_ROLES = ['Approver', 'BOD', 'Admin', 'Koordinator'];
 
     /**
      * Users who can be named as a stage's approver for the company: active, holding an approval role,
@@ -61,12 +62,13 @@ class ApprovalFlowService
         return User::query()
             ->where('is_active', true)
             ->whereHas('roles', fn ($query) => $query->whereIn('name', self::APPROVER_ROLES))
+            ->whereDoesntHave('roles', fn ($query) => $query->where('name', 'Superadmin'))
             ->orderBy('name')
             ->get()
             ->filter(function (User $user) use ($companyId): bool {
                 $companyIds = DataAccessService::placeableCompanyIds($user);
 
-                return $companyIds === null || in_array((int) $companyId, $companyIds, true);
+                return $companyIds !== null && in_array((int) $companyId, $companyIds, true);
             })
             ->pluck('name', 'id')
             ->all();
@@ -88,21 +90,39 @@ class ApprovalFlowService
             return false;
         }
 
+        // The platform Superadmin never staffs a client's stage.
         return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId, $divisionId): bool {
+            if ($user->hasRole('Superadmin')) {
+                return false;
+            }
+
             if (filled($divisionId)) {
                 return DataAccessService::canAccessPlacement($user, $companyId, $divisionId);
             }
 
             $companyIds = DataAccessService::placeableCompanyIds($user);
 
-            return $companyIds === null || in_array((int) $companyId, $companyIds, true);
+            return $companyIds !== null && in_array((int) $companyId, $companyIds, true);
         });
     }
 
     /**
+     * A stage naming this account has someone to act on it: an active account that is not the
+     * platform Superadmin (who never staffs a client's stage).
+     */
+    private static function namedUserCanAct(int|string|null $userId): bool
+    {
+        return $userId !== null && User::query()
+            ->whereKey($userId)
+            ->where('is_active', true)
+            ->whereDoesntHave('roles', fn ($query) => $query->where('name', 'Superadmin'))
+            ->exists();
+    }
+
+    /**
      * Company-wide stages nobody can act on: a role without an active holder reaching the company,
-     * or a named user who is inactive or gone. Requests reaching such a stage wait for an Admin or
-     * Superadmin, who are the only ones left to act on it.
+     * or a named user who is inactive or gone. Requests reaching such a stage wait for an Admin of the
+     * client, who is the only one left to act on it.
      *
      * @return list<array{request_type: string, stage: string, who: string}>
      */
@@ -112,7 +132,7 @@ class ApprovalFlowService
 
         foreach ($company->approvalFlows()->companyWide()->orderBy('request_type')->orderBy('step_order')->get() as $flow) {
             $staffed = $flow->approver_type === 'user'
-                ? $flow->user_id !== null && User::query()->whereKey($flow->user_id)->where('is_active', true)->exists()
+                ? self::namedUserCanAct($flow->user_id)
                 : self::hasHolderForRole((string) ($flow->approver_role ?? 'Approver'), $company->id);
 
             if (! $staffed) {
@@ -358,9 +378,9 @@ class ApprovalFlowService
             ? $requestModel->getWorkerProfile()
             : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
 
+        // Never guess: another client's first company would route the request to the wrong people.
         $companyId = $workerProfile?->company_id
-            ?? $requestModel->company_id
-            ?? Company::first()?->id;
+            ?? $requestModel->company_id;
 
         if (! $companyId) {
             throw ValidationException::withMessages([
@@ -468,7 +488,8 @@ class ApprovalFlowService
             return false;
         }
 
-        // Superadmin Override: Superadmin may act on any pending step, except on their own request
+        // Superadmin Override: the platform owner may still step in on any pending step (support), except
+        // on their own request. They are never notified and never staff a stage.
         if ($user->hasRole('Superadmin')) {
             return ! $isOwnRequest;
         }
@@ -669,18 +690,21 @@ class ApprovalFlowService
 
         // Coordinators decide for the crew of their brands, so they hear about every request there.
         // Admins act on any stage too, but only hear about the stages set to them, to keep the noise down.
-        $roles = ['Approver', 'BOD', 'Superadmin', 'Koordinator'];
+        $roles = ['Approver', 'BOD', 'Koordinator'];
 
         if ($step?->approver_type === 'role' && filled($step->approver_role)) {
             $roles[] = $step->approver_role;
         }
 
-        $recipients = $this->usersWithRoles($requestModel, $step, $roles);
+        // The platform Superadmin can act on anything, but is never notified about a client's requests.
+        $withoutPlatform = fn (Collection $users): Collection => $users->reject(fn (User $user): bool => $user->hasRole('Superadmin'))->values();
 
-        // A stage nobody holds, with no coordinator covering the worker, would only reach Superadmins:
-        // the Admins of the company hear about it as well.
-        if ($step && $recipients->reject(fn (User $user): bool => $user->hasRole('Superadmin'))->isEmpty() && ! $this->stageHasHolder($requestModel, $step)) {
-            $recipients = $this->usersWithRoles($requestModel, $step, [...$roles, 'Admin']);
+        $recipients = $withoutPlatform($this->usersWithRoles($requestModel, $step, $roles));
+
+        // A stage nobody holds, with no coordinator covering the worker, would reach no one: the Admins
+        // of the company hear about it as well.
+        if ($step && $recipients->isEmpty() && ! $this->stageHasHolder($requestModel, $step)) {
+            $recipients = $withoutPlatform($this->usersWithRoles($requestModel, $step, [...$roles, 'Admin']));
         }
 
         return $recipients;
@@ -711,27 +735,11 @@ class ApprovalFlowService
     private function stageHasHolder(Model $requestModel, ApprovalRequestStep $step): bool
     {
         if ($step->approver_type === 'user') {
-            return $step->user_id !== null && User::query()->whereKey($step->user_id)->where('is_active', true)->exists();
+            return self::namedUserCanAct($step->user_id);
         }
 
         $worker = $this->workerOf($requestModel);
 
         return $worker === null || self::hasHolderForRole((string) ($step->approver_role ?? 'Approver'), $worker->company_id, $worker->division_id);
-    }
-
-    /**
-     * Determine whether the configured flow uses the mandatory approval sequence.
-     *
-     * @param  Collection<int, ApprovalFlow>  $flows
-     */
-    private function isStandardApprovalFlow(Collection $flows): bool
-    {
-        $expectedRoles = ['Approver', 'BOD', 'Superadmin'];
-
-        return $flows->count() === 3
-            && $flows->values()->every(fn (ApprovalFlow $flow, int $index): bool => $flow->step_order === $index + 1
-                && $flow->approver_type === 'role'
-                && $flow->approver_role === $expectedRoles[$index]
-            );
     }
 }
