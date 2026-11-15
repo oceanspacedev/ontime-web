@@ -83,6 +83,35 @@ export function errorMessage(error: unknown): string {
   return 'Terjadi kesalahan yang tidak diketahui.';
 }
 
+/** Indonesian text per status, used when the server gives no message of its own. */
+const STATUS_MESSAGES: Record<number, string> = {
+  413: 'Ukuran foto atau lampiran terlalu besar untuk dikirim. Ambil ulang lalu coba lagi.',
+  429: 'Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.',
+  500: 'Terjadi kesalahan di server. Coba lagi beberapa saat.',
+  502: 'Server sedang tidak tersedia. Coba lagi beberapa saat.',
+  503: 'Server sedang tidak tersedia. Coba lagi beberapa saat.',
+  504: 'Server tidak merespons. Coba lagi beberapa saat.',
+};
+
+/** Laravel's built-in English messages, which say nothing useful to a worker. */
+const FRAMEWORK_DEFAULTS = /^(Server Error|The POST data is too large\.|Too Many Attempts\.|Service Unavailable)$/;
+
+/**
+ * The message to show for a failed request: the server's own message, unless it is missing, not
+ * JSON (an HTML page from a proxy, e.g. a 413 from nginx) or one of Laravel's English defaults.
+ */
+export function failureMessage(status: number, serverMessage: string | undefined, unreadableBody: boolean): string {
+  const message = typeof serverMessage === 'string' ? serverMessage.trim() : '';
+  if (message && !FRAMEWORK_DEFAULTS.test(message)) {
+    return message;
+  }
+  const known = STATUS_MESSAGES[status] ?? (status >= 500 ? STATUS_MESSAGES[500] : undefined);
+  if (known) {
+    return known;
+  }
+  return unreadableBody ? `Server membalas dengan data yang tidak dikenali (kode ${status}). Coba lagi nanti.` : `Permintaan gagal (${status}).`;
+}
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', query, json, form, skipAuthHandling = false, timeoutMs = 30000 } = options;
 
@@ -130,8 +159,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (response.status === 401 && !skipAuthHandling) {
       config.onUnauthenticated();
     }
-    const fallback = payload === null && text ? 'Server membalas dengan data yang tidak dikenali. Coba lagi nanti.' : `Permintaan gagal (${response.status}).`;
-    throw new ApiError(response.status, data.message ?? fallback, data.errors ?? null);
+    throw new ApiError(response.status, failureMessage(response.status, data.message, payload === null && Boolean(text)), data.errors ?? null);
   }
 
   return payload as T;

@@ -1,6 +1,6 @@
 import { Linking } from 'react-native';
 
-import type { Company, CompanyLocation } from './api/types';
+import type { Company, CompanyLocation, OutletGeofence } from './api/types';
 
 const EARTH_RADIUS_METERS = 6371000;
 
@@ -18,16 +18,37 @@ export interface NearestLocation {
   distance: number;
   radius: number;
   inside: boolean;
+  /** The check is limited to the outlet of the worker's schedule, as the server does. */
+  isScheduledOutlet: boolean;
 }
 
+const DEFAULT_RADIUS_METERS = 100;
+
 /**
- * Finds the closest office geofence. The backend decides the final result; this only lets the
- * app warn before sending. Returns null when the company has no coordinates.
+ * Finds the closest office geofence with the same candidates and radii as the backend's
+ * GeofenceService: with a scheduled outlet only that outlet counts; otherwise every active branch
+ * plus the head office. The backend decides the final result; this only lets the app warn before
+ * sending. Returns null when there is nothing to compare against.
  */
-export function nearestLocation(company: Company | null, lat: number, lng: number): NearestLocation | null {
+export function nearestLocation(company: Company | null, lat: number, lng: number, outlet?: OutletGeofence | null): NearestLocation | null {
   if (!company) {
     return null;
   }
+  const defaultRadius = company.geofence_radius_meters || DEFAULT_RADIUS_METERS;
+
+  if (outlet) {
+    // Older servers send the outlet without coordinates; look them up in the company's locations.
+    const known = company.locations?.find((location) => location.id === outlet.id);
+    const latitude = outlet.latitude ?? known?.latitude ?? null;
+    const longitude = outlet.longitude ?? known?.longitude ?? null;
+    if (latitude === null || longitude === null) {
+      return null;
+    }
+    const radius = outlet.radius_meters || known?.radius_meters || defaultRadius;
+    const distance = distanceMeters(lat, lng, latitude, longitude);
+    return { name: outlet.name, distance, radius, inside: distance <= radius, isScheduledOutlet: true };
+  }
+
   const candidates: CompanyLocation[] = [...(company.locations ?? [])];
   if (company.latitude !== null && company.longitude !== null) {
     candidates.push({
@@ -35,15 +56,17 @@ export function nearestLocation(company: Company | null, lat: number, lng: numbe
       name: 'Kantor Pusat',
       latitude: company.latitude,
       longitude: company.longitude,
-      radius_meters: candidates[0]?.radius_meters ?? 100,
+      radius_meters: defaultRadius,
     });
   }
   let best: NearestLocation | null = null;
   for (const location of candidates) {
     const distance = distanceMeters(lat, lng, location.latitude, location.longitude);
-    const radius = location.radius_meters || 100;
-    if (!best || distance < best.distance) {
-      best = { name: location.name, distance, radius, inside: distance <= radius };
+    const radius = location.radius_meters || defaultRadius;
+    const inside = distance <= radius;
+    // Inside any geofence wins, like the server, even if another centre is closer.
+    if (!best || (inside && !best.inside) || (inside === best.inside && distance < best.distance)) {
+      best = { name: location.name, distance, radius, inside, isScheduledOutlet: false };
     }
   }
   return best;

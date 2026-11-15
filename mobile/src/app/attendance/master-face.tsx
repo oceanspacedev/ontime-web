@@ -47,7 +47,7 @@ export default function MasterFaceScreen() {
       if (!picked) {
         throw new Error('Pilih foto dulu.');
       }
-      const file = await prepareUpload(picked.uri, 'master-face', picked.width, picked.height);
+      const file = await prepareUpload(picked.uri, 'master-face');
       return attendanceApi.registerMasterFace(file);
     },
     onSuccess: (response) => {

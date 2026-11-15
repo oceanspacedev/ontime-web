@@ -1,8 +1,10 @@
 <?php
 
+use App\Services\UploadStorageException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\PostTooLargeException;
 use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -25,4 +27,23 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*'),
         );
+
+        // The mobile app shows the message as is, so upload failures answer in Indonesian.
+        $exceptions->render(function (PostTooLargeException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'message' => 'Ukuran foto atau lampiran terlalu besar untuk dikirim. Ambil ulang lalu coba lagi.',
+                ], 413);
+            }
+
+            return null;
+        });
+
+        $exceptions->render(function (UploadStorageException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json(['message' => $exception->getMessage()], 503);
+            }
+
+            return null;
+        });
     })->create();

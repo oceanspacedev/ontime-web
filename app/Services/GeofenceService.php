@@ -57,6 +57,16 @@ class GeofenceService
     public const DEFAULT_RADIUS_METERS = 100;
 
     /**
+     * The radius a location is checked with: its own, else the policy default, else 100 m.
+     */
+    public static function resolveRadius(int|string|null $locationRadius, int|string|null $policyRadius = null): int
+    {
+        $default = max(1, (int) ($policyRadius ?: static::DEFAULT_RADIUS_METERS));
+
+        return max(1, (int) ($locationRadius ?: $default));
+    }
+
+    /**
      * Whether the company has at least one coordinate a geofence can be checked against
      * (HQ coordinates or an active branch location).
      */
@@ -76,7 +86,7 @@ class GeofenceService
     public static function validateCompanyGeofence(Company $company, float $userLat, float $userLng, ?CompanyLocation $outlet = null): array
     {
         $policy = $company->policy;
-        $defaultRadius = max(1, (int) ($policy?->geofence_radius_meters ?: static::DEFAULT_RADIUS_METERS));
+        $defaultRadius = static::resolveRadius(null, $policy?->geofence_radius_meters);
 
         $locations = $outlet
             ? collect([$outlet])
@@ -101,7 +111,7 @@ class GeofenceService
                     'name' => $loc->name,
                     'lat' => (float) $loc->latitude,
                     'lng' => (float) $loc->longitude,
-                    'radius' => max(1, (int) ($loc->radius_meters ?: $defaultRadius)),
+                    'radius' => static::resolveRadius($loc->radius_meters, $defaultRadius),
                 ];
             }
         }

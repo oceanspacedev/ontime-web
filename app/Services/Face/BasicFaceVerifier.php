@@ -31,14 +31,19 @@ class BasicFaceVerifier implements FaceVerifier
 
     public function verify(string $selfiePath, string $masterPath, int $thresholdPercent): FaceMatch
     {
+        $masterContents = $this->images->read($masterPath);
+        $selfieContents = $this->images->read($selfiePath);
+
+        if (! $masterContents) {
+            return new FaceMatch(false, 0, FaceMatch::MASTER_MISSING);
+        }
+
+        if (! $selfieContents) {
+            // The selfie was stored moments ago, so this is a storage problem: resend, not retake.
+            throw new FaceServiceUnavailable('Gagal membaca foto selfie dari storage.');
+        }
+
         try {
-            $masterContents = $this->images->read($masterPath);
-            $selfieContents = $this->images->read($selfiePath);
-
-            if (! $masterContents || ! $selfieContents) {
-                return new FaceMatch(false, 0, 'Gagal membaca berkas foto master atau foto selfie dari storage.');
-            }
-
             $masterImage = @imagecreatefromstring($masterContents);
             $selfieImage = @imagecreatefromstring($selfieContents);
 
