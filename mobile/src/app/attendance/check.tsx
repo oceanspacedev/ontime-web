@@ -5,9 +5,9 @@ import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AttendanceModeChips } from '@/components/AttendanceModeChips';
+import { useDeviceInsets } from '@/components/OfflineBanner';
 import { type CapturedShot, type LivenessFrames, LivenessStepCard, LivenessThumbnails } from '@/components/LivenessGuide';
 import { bottomGap, Button, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
@@ -70,7 +70,8 @@ function isPhotoError(error: unknown): boolean {
 export default function AttendanceCheckScreen() {
   const styles = useStyles();
   const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
+  // A full-screen modal covers the offline banner, so it keeps the real status bar space.
+  const insets = useDeviceInsets();
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   const isCheckIn = mode !== 'out';
   const purpose: AttendancePurpose = isCheckIn ? 'check_in' : 'check_out';

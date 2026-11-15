@@ -28,7 +28,7 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { type Edge, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Tone } from '@/lib/format';
 import { BRAND_GLOSS, BRAND_GRADIENT, elevation, fonts, fontSize, makeStyles, type Palette, radius, spacing, useTheme } from '@/theme';
@@ -112,7 +112,7 @@ interface ScreenProps {
   /** Pull-to-refresh handler. The spinner shows only for a pull, until the returned promise settles. */
   onRefresh?: () => Promise<unknown> | void;
   style?: ViewStyle;
-  edges?: ComponentProps<typeof SafeAreaView>['edges'];
+  edges?: readonly Edge[];
   /** Large title at the top of a tab screen. Adds the top safe area automatically. */
   title?: string;
   /** Small line under the large title. */
@@ -141,7 +141,14 @@ export function Screen({
   const inTabs = useContext(FloatingTabBarContext);
   const [refreshing, setRefreshing] = useState(false);
 
-  const safeEdges = edges ?? (title ? (['top'] as const) : ([] as const));
+  const safeEdges: readonly Edge[] = edges ?? (title ? ['top'] : []);
+  // Padding from the inset context (not the native SafeAreaView), so the offline banner can take over the top inset.
+  const safePadding: ViewStyle = {
+    paddingTop: safeEdges.includes('top') ? insets.top : 0,
+    paddingBottom: safeEdges.includes('bottom') ? insets.bottom : 0,
+    paddingLeft: safeEdges.includes('left') ? insets.left : 0,
+    paddingRight: safeEdges.includes('right') ? insets.right : 0,
+  };
   const bottomSpace = inTabs ? FLOATING_TAB_BAR_SPACE + insets.bottom : footer ? spacing.lg : bottomGap(insets.bottom) + spacing.sm;
 
   const header = title ? (
@@ -185,7 +192,7 @@ export function Screen({
   };
 
   return (
-    <SafeAreaView style={styles.screen} edges={safeEdges}>
+    <View style={[styles.screen, safePadding]}>
       {scroll ? (
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSpace }]}
@@ -198,7 +205,7 @@ export function Screen({
         <View style={[styles.fill, { paddingBottom: footer ? 0 : bottomSpace }]}>{content}</View>
       )}
       {footer ? <View style={[styles.footer, { paddingBottom: bottomGap(insets.bottom) }]}>{footer}</View> : null}
-    </SafeAreaView>
+    </View>
   );
 }
 

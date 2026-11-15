@@ -13,6 +13,7 @@ import { useEffect, useMemo } from 'react';
 import { View } from 'react-native';
 
 import { StackHeader } from '@/components/navigation';
+import { OfflineBanner } from '@/components/OfflineBanner';
 import { LoadingView } from '@/components/ui';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { initPush } from '@/lib/onesignal';
@@ -97,53 +98,55 @@ function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider value={navigationTheme}>
         <StatusBar style={dark ? 'light' : 'dark'} />
-        <Stack
-          screenOptions={{
-            header: ({ options, back }) => <StackHeader title={options.title} canGoBack={Boolean(back)} right={options.headerRight?.({ canGoBack: Boolean(back) })} />,
-            contentStyle: { backgroundColor: colors.background },
-          }}>
-          <Stack.Protected guard={!signedIn}>
-            <Stack.Screen name="login" options={{ headerShown: false }} />
-            <Stack.Screen name="email-login" options={{ headerShown: false, animation: 'fade' }} />
-          </Stack.Protected>
+        <OfflineBanner>
+          <Stack
+            screenOptions={{
+              header: ({ options, back }) => <StackHeader title={options.title} canGoBack={Boolean(back)} right={options.headerRight?.({ canGoBack: Boolean(back) })} />,
+              contentStyle: { backgroundColor: colors.background },
+            }}>
+            <Stack.Protected guard={!signedIn}>
+              <Stack.Screen name="login" options={{ headerShown: false }} />
+              <Stack.Screen name="email-login" options={{ headerShown: false, animation: 'fade' }} />
+            </Stack.Protected>
 
-          <Stack.Protected guard={signedIn}>
-            <Stack.Screen name="(app)" options={{ headerShown: false }} />
-            <Stack.Screen
-              name="attendance/check"
-              options={{
-                presentation: 'fullScreenModal',
-                gestureEnabled: false,
-                headerShown: false,
-              }}
-            />
-            <Stack.Screen name="attendance/master-face" options={{ title: 'Foto Master Wajah' }} />
-            <Stack.Screen name="attendance/[id]" options={{ title: 'Detail Presensi' }} />
-            <Stack.Screen name="calendar" options={{ title: 'Kalender Cuti Tim' }} />
-            <Stack.Screen name="request/leave/new" options={{ title: 'Ajukan Cuti / Izin' }} />
-            <Stack.Screen name="request/overtime/new" options={{ title: 'Ajukan Lembur' }} />
-            <Stack.Screen name="request/correction/new" options={{ title: 'Ajukan Koreksi Absensi' }} />
-            <Stack.Screen name="request/resignation/new" options={{ title: 'Pengunduran Diri' }} />
-            <Stack.Screen name="request/[type]/[id]" options={{ title: 'Detail Pengajuan' }} />
-            <Stack.Screen name="approval/[type]/[id]" options={{ title: 'Proses Persetujuan' }} />
-            <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />
-            <Stack.Screen name="team/freelancer/new" options={{ title: 'Tambah Freelancer' }} />
-            <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
-            <Stack.Screen name="client/index" options={{ title: 'Kelola Klien' }} />
-            <Stack.Screen name="client/company/new" options={{ title: 'Tambah Badan Usaha' }} />
-            <Stack.Screen name="client/company/[id]" options={{ title: 'Badan Usaha' }} />
-            <Stack.Screen name="client/company/[id]/edit" options={{ title: 'Ubah Data Badan Usaha' }} />
-            <Stack.Screen name="client/company/[id]/policy" options={{ title: 'Kebijakan Absensi' }} />
-            <Stack.Screen name="client/company/[id]/locations" options={{ title: 'Lokasi Absensi' }} />
-            <Stack.Screen name="client/company/[id]/location" options={{ title: 'Lokasi Absensi' }} />
-            <Stack.Screen name="client/company/[id]/divisions" options={{ title: 'Divisi' }} />
-            <Stack.Screen name="client/company/[id]/division" options={{ title: 'Divisi' }} />
-            <Stack.Screen name="client/accounts" options={{ title: 'Akun & Akses' }} />
-            <Stack.Screen name="client/account/new" options={{ title: 'Tambah Akun' }} />
-            <Stack.Screen name="client/account/[id]" options={{ title: 'Ubah Akun' }} />
-          </Stack.Protected>
+            <Stack.Protected guard={signedIn}>
+              <Stack.Screen name="(app)" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="attendance/check"
+                options={{
+                  presentation: 'fullScreenModal',
+                  gestureEnabled: false,
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen name="attendance/master-face" options={{ title: 'Foto Master Wajah' }} />
+              <Stack.Screen name="attendance/[id]" options={{ title: 'Detail Presensi' }} />
+              <Stack.Screen name="calendar" options={{ title: 'Kalender Cuti Tim' }} />
+              <Stack.Screen name="request/leave/new" options={{ title: 'Ajukan Cuti / Izin' }} />
+              <Stack.Screen name="request/overtime/new" options={{ title: 'Ajukan Lembur' }} />
+              <Stack.Screen name="request/correction/new" options={{ title: 'Ajukan Koreksi Absensi' }} />
+              <Stack.Screen name="request/resignation/new" options={{ title: 'Pengunduran Diri' }} />
+              <Stack.Screen name="request/[type]/[id]" options={{ title: 'Detail Pengajuan' }} />
+              <Stack.Screen name="approval/[type]/[id]" options={{ title: 'Proses Persetujuan' }} />
+              <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />
+              <Stack.Screen name="team/freelancer/new" options={{ title: 'Tambah Freelancer' }} />
+              <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
+              <Stack.Screen name="client/index" options={{ title: 'Kelola Klien' }} />
+              <Stack.Screen name="client/company/new" options={{ title: 'Tambah Badan Usaha' }} />
+              <Stack.Screen name="client/company/[id]" options={{ title: 'Badan Usaha' }} />
+              <Stack.Screen name="client/company/[id]/edit" options={{ title: 'Ubah Data Badan Usaha' }} />
+              <Stack.Screen name="client/company/[id]/policy" options={{ title: 'Kebijakan Absensi' }} />
+              <Stack.Screen name="client/company/[id]/locations" options={{ title: 'Lokasi Absensi' }} />
+              <Stack.Screen name="client/company/[id]/location" options={{ title: 'Lokasi Absensi' }} />
+              <Stack.Screen name="client/company/[id]/divisions" options={{ title: 'Divisi' }} />
+              <Stack.Screen name="client/company/[id]/division" options={{ title: 'Divisi' }} />
+              <Stack.Screen name="client/accounts" options={{ title: 'Akun & Akses' }} />
+              <Stack.Screen name="client/account/new" options={{ title: 'Tambah Akun' }} />
+              <Stack.Screen name="client/account/[id]" options={{ title: 'Ubah Akun' }} />
+            </Stack.Protected>
 
-        </Stack>
+          </Stack>
+        </OfflineBanner>
       </ThemeProvider>
     </QueryClientProvider>
   );
