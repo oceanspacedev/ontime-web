@@ -84,6 +84,9 @@ export default function ProfileScreen() {
         {access.canResign ? (
           <Row icon="exit-outline" title="Pengunduran diri" subtitle="Ajukan atau lihat status resign" onPress={() => router.push('/request/resignation/new')} />
         ) : null}
+        {access.canManageCompanies || access.canManageAccounts ? (
+          <Row icon="business-outline" title="Kelola Klien" subtitle="Badan usaha, kebijakan absensi, lokasi dan akun" onPress={() => router.push('/client')} />
+        ) : null}
         <Row icon="contrast-outline" title="Tampilan" value={APPEARANCE_LABELS[appearance]} onPress={() => router.push('/settings/appearance')} />
       </Group>
 

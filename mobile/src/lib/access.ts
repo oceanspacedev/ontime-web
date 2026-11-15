@@ -38,6 +38,12 @@ export interface Access {
   /** Link to the CESA waste report when the server offers it to this user. */
   wasteUrl: string | null;
   isSuperadmin: boolean;
+  /** The PIC of a Klien: full responsibility for its companies, policies and accounts. */
+  isPic: boolean;
+  /** Kelola Klien: attendance policy, locations, companies and divisions. */
+  canManageCompanies: boolean;
+  /** Kelola Klien: Akun & akses. */
+  canManageAccounts: boolean;
   /** HR gave this employee annual leave; never true for interns and freelancers. */
   hasAnnualLeave: boolean;
   leaveTypes: LeaveTypeOption[];
@@ -90,6 +96,10 @@ export function deriveAccess(user: User | null): Access {
     isCoordinator: user?.access?.is_coordinator === true,
     wasteUrl: user?.access?.waste_url ?? null,
     isSuperadmin,
+    // Older servers send no client_admin block, so the Kelola Klien menu stays hidden.
+    isPic: user?.access?.client_admin?.is_pic === true,
+    canManageCompanies: user?.access?.client_admin?.can_manage_companies === true,
+    canManageAccounts: user?.access?.client_admin?.can_manage_accounts === true,
     hasAnnualLeave,
     leaveTypes,
     masterFacePhoto: profile?.master_face_photo ?? user?.master_face_photo ?? null,
