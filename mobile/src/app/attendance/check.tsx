@@ -9,7 +9,7 @@ import { ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, Vie
 import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { useDeviceInsets } from '@/components/OfflineBanner';
 import { type CapturedShot, type LivenessFrames, LivenessStepCard, LivenessThumbnails } from '@/components/LivenessGuide';
-import { bottomGap, Button, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
+import { bottomGap, Button, errorIcon, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { ApiError, attendanceApi, type AttendancePurpose, type Company, errorMessage, type LivenessStep, type LivenessStepKey, type OutletGeofence, type UploadFile } from '@/lib/api';
@@ -387,7 +387,7 @@ export default function AttendanceCheckScreen() {
               </>
             ) : challenge.isError ? (
               <View style={styles.overlayCenter}>
-                <Ionicons name="alert-circle-outline" size={44} color={ON_CAMERA} />
+                <Ionicons name={errorIcon(challenge.error, true)} size={44} color={ON_CAMERA} />
                 <Text style={styles.idleText}>{errorMessage(challenge.error)}</Text>
                 <Button title="Coba lagi" icon="refresh" variant="secondary" onPress={() => restartChallenge(true, null)} />
               </View>
@@ -443,6 +443,7 @@ export default function AttendanceCheckScreen() {
 
         {submitError ? (
           <CheckError
+            icon={errorIcon(submitError)}
             message={errorMessage(submitError)}
             hint={errorHint}
             onRetry={canRetrySubmit ? () => submit.mutate() : undefined}
@@ -489,12 +490,12 @@ export default function AttendanceCheckScreen() {
 }
 
 /** Inline error above the actions: the server's reason, what to do next and, when it helps, a retry. */
-function CheckError({ message, hint, onRetry, retryDisabled }: { message: string; hint: string | null; onRetry?: () => void; retryDisabled: boolean }) {
+function CheckError({ icon, message, hint, onRetry, retryDisabled }: { icon: IconName; message: string; hint: string | null; onRetry?: () => void; retryDisabled: boolean }) {
   const styles = useStyles();
   const { colors } = useTheme();
   return (
     <View style={styles.error} accessibilityRole="alert">
-      <Ionicons name="alert-circle" size={20} color={colors.danger} />
+      <Ionicons name={icon} size={20} color={colors.danger} />
       <View style={styles.errorBody}>
         <Text style={styles.errorText}>{message}</Text>
         {hint ? <Text style={styles.errorHint}>{hint}</Text> : null}

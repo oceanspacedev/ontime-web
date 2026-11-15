@@ -71,7 +71,7 @@ export function TeamFreelancerList({ onSchedule }: { onSchedule: (freelancer: Te
       {list.isPending ? (
         <LoadingView />
       ) : list.isError ? (
-        <ErrorBanner message={errorMessage(list.error)} onRetry={() => list.refetch()} />
+        <ErrorBanner error={list.error} onRetry={() => list.refetch()} />
       ) : list.data.data.length === 0 ? (
         <EmptyState icon="people-outline" title={status === 'active' ? 'Belum ada freelancer aktif' : 'Belum ada yang keluar'} />
       ) : (

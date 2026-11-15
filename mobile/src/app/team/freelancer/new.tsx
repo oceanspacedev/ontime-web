@@ -61,7 +61,7 @@ export default function NewFreelancerScreen() {
   if (options.isError) {
     return (
       <Screen>
-        <ErrorBanner message={errorMessage(options.error)} onRetry={() => options.refetch()} />
+        <ErrorBanner error={options.error} onRetry={() => options.refetch()} />
       </Screen>
     );
   }

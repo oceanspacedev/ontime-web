@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 
 import { Button, ErrorBanner, Field, Notice, Screen, Text } from '@/components/ui';
-import { authApi, errorMessage } from '@/lib/api';
+import { authApi, isNetworkError } from '@/lib/api';
 import { clearPendingMagicLink, savePendingMagicLink } from '@/lib/magicLink';
 import { useSession } from '@/lib/session';
 import { BRAND_GLOSS, BRAND_GRADIENT, fontSize, makeStyles, spacing, useTheme } from '@/theme';
@@ -69,6 +69,11 @@ export default function LoginScreen() {
   );
 }
 
+/** A failed sign-in step. A network failure can be sent again as it is; anything else needs new input. */
+function AuthError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return <ErrorBanner error={error} onRetry={isNetworkError(error) ? onRetry : undefined} />;
+}
+
 function PasswordForm() {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -89,7 +94,7 @@ function PasswordForm() {
 
   return (
     <View style={styles.form}>
-      {login.isError ? <ErrorBanner message={errorMessage(login.error)} /> : null}
+      {login.isError ? <AuthError error={login.error} onRetry={() => login.mutate()} /> : null}
       <Field
         label="Email"
         value={email}
@@ -172,8 +177,8 @@ function WhatsAppForm() {
     const minutes = Math.max(1, Math.round(challenge.expiresIn / 60));
     return (
       <View style={styles.form}>
-        {verifyOtp.isError ? <ErrorBanner message={errorMessage(verifyOtp.error)} /> : null}
-        {requestOtp.isError ? <ErrorBanner message={errorMessage(requestOtp.error)} /> : null}
+        {verifyOtp.isError ? <AuthError error={verifyOtp.error} onRetry={() => verifyOtp.mutate()} /> : null}
+        {requestOtp.isError ? <AuthError error={requestOtp.error} onRetry={() => requestOtp.mutate()} /> : null}
         <Notice tone="info" icon="logo-whatsapp" message={`Kode 6 digit dikirim ke WhatsApp ${challenge.destination}. Berlaku ${minutes} menit.`} />
         <Field
           label="Kode OTP"
@@ -213,7 +218,7 @@ function WhatsAppForm() {
 
   return (
     <View style={styles.form}>
-      {requestOtp.isError ? <ErrorBanner message={errorMessage(requestOtp.error)} /> : null}
+      {requestOtp.isError ? <AuthError error={requestOtp.error} onRetry={() => requestOtp.mutate()} /> : null}
       <Field
         label="Nomor WhatsApp"
         value={destination}
@@ -269,7 +274,7 @@ function EmailLinkForm() {
     const minutes = Math.max(1, Math.round(sent.expiresIn / 60));
     return (
       <View style={styles.form}>
-        {requestLink.isError ? <ErrorBanner message={errorMessage(requestLink.error)} /> : null}
+        {requestLink.isError ? <AuthError error={requestLink.error} onRetry={() => requestLink.mutate()} /> : null}
         <Notice
           tone="info"
           icon="mail-unread-outline"
@@ -292,7 +297,7 @@ function EmailLinkForm() {
 
   return (
     <View style={styles.form}>
-      {requestLink.isError ? <ErrorBanner message={errorMessage(requestLink.error)} /> : null}
+      {requestLink.isError ? <AuthError error={requestLink.error} onRetry={() => requestLink.mutate()} /> : null}
       <Field
         label="Email"
         value={email}
