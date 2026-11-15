@@ -174,6 +174,9 @@ export default function AttendanceCheckScreen() {
     setChallengeAttempt((attempt) => attempt + 1);
   }, []);
 
+  // isPending only turns true after the next render, so two quick taps could still send two requests.
+  const submitInFlight = useRef(false);
+
   const submit = useMutation({
     mutationFn: async () => {
       const payload: attendanceApi.CheckPayload = {};
@@ -213,6 +216,7 @@ export default function AttendanceCheckScreen() {
       Alert.alert(waiting ? `${recorded}, menunggu persetujuan` : recorded, response.message, [{ text: 'OK', onPress: () => router.back() }]);
     },
     onError: (error) => {
+      submitInFlight.current = false;
       if (error instanceof ApiError && error.status === 409) {
         void queryClient.invalidateQueries({ queryKey: ['attendance'] });
       }
@@ -232,6 +236,15 @@ export default function AttendanceCheckScreen() {
       }
     },
   });
+
+  // After a success the screen closes, so the guard stays on and the attempt is never sent twice.
+  const sendSubmit = useCallback(() => {
+    if (submitInFlight.current) {
+      return;
+    }
+    submitInFlight.current = true;
+    submit.mutate();
+  }, [submit]);
 
   const challengeData = isLiveness ? challenge.data ?? null : null;
   const expiresAt = challengeData ? challengeData.receivedAt + challengeData.expires_in * 1000 : null;
@@ -446,7 +459,7 @@ export default function AttendanceCheckScreen() {
             icon={errorIcon(submitError)}
             message={errorMessage(submitError)}
             hint={errorHint}
-            onRetry={canRetrySubmit ? () => submit.mutate() : undefined}
+            onRetry={canRetrySubmit ? sendSubmit : undefined}
             retryDisabled={!canSubmit}
           />
         ) : null}
@@ -481,7 +494,7 @@ export default function AttendanceCheckScreen() {
                 disabled={submit.isPending || challenge.isFetching}
               />
             ) : null}
-            <Button title={`Kirim ${title}`} icon="send" size="lg" onPress={() => submit.mutate()} disabled={!canSubmit} loading={submit.isPending} />
+            <Button title={`Kirim ${title}`} icon="send" size="lg" onPress={sendSubmit} disabled={!canSubmit} loading={submit.isPending} />
           </View>
         )}
       </View>

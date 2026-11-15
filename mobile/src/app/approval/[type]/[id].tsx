@@ -46,7 +46,8 @@ export default function ApprovalDetailScreen() {
   });
 
   const process = useMutation({
-    mutationFn: (action: 'approved' | 'rejected') => approvalsApi.process(type as ApprovalType, id, action, note.trim() || null),
+    mutationFn: (action: 'approved' | 'rejected') =>
+      approvalsApi.process(type as ApprovalType, id, action, note.trim() || null, (query.data?.data as { current_step?: number | null } | undefined)?.current_step ?? null),
     onSuccess: async (response) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.approvals }),

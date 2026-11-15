@@ -100,6 +100,10 @@ class TenantResource extends Resource
     }
 
     /**
+     * The PIC account fields, shared by the create page and the "Tambah PIC" table action. The email
+     * is unique across all accounts and never ignores the current record: that record is the Klien,
+     * not a user.
+     *
      * @return list<TextInput>
      */
     public static function picFields(): array
@@ -113,7 +117,7 @@ class TenantResource extends Resource
                 ->label('Email Login PIC')
                 ->email()
                 ->required()
-                ->unique('users', 'email')
+                ->unique('users', 'email', ignoreRecord: false)
                 ->maxLength(255),
             TextInput::make('pic_phone')
                 ->label('Nomor WhatsApp PIC')

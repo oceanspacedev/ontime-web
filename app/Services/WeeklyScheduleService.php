@@ -17,6 +17,7 @@ use Carbon\CarbonInterface;
 final class WeeklyScheduleService
 {
     /**
+     * @param  array{company_id?: int|null, division_id?: int|null, location_id?: int|null}  $filters
      * @return array{
      *     start: string,
      *     end: string,
@@ -27,15 +28,16 @@ final class WeeklyScheduleService
      *     }>,
      * }
      */
-    public function week(User $user, CarbonInterface $date): array
+    public function week(User $user, CarbonInterface $date, array $filters = []): array
     {
         $start = Carbon::parse($date)->startOfWeek();
         $end = $start->copy()->endOfWeek();
         $days = collect(range(0, 6))->map(fn (int $offset): string => $start->copy()->addDays($offset)->toDateString())->all();
 
-        $schedules = ShiftSchedule::query()
-            ->visibleTo($user)
-            ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
+        // A half-open range: the last day still matches where dates are stored with a time (SQLite).
+        $schedules = OutletRosterService::filterSchedules(ShiftSchedule::query()->visibleTo($user), $filters)
+            ->where('date', '>=', $start->toDateString())
+            ->where('date', '<', $end->copy()->addDay()->toDateString())
             ->with([...ShiftSchedule::workerEagerLoads(), 'shift.division', 'location'])
             ->get()
             ->filter(fn (ShiftSchedule $schedule): bool => $schedule->getWorkerProfile() !== null);

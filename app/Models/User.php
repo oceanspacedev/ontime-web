@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
@@ -29,6 +30,38 @@ class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, HasNormalizedPhone, HasRoles, Notifiable, PreventsDeletionWhileInUse;
+
+    /**
+     * Password hashes that were just checked against the typed password in this request, by user id.
+     * A login that rehashes such a hash keeps the same password, so it must not sign the account out.
+     *
+     * @var array<int|string, string>
+     */
+    private static array $verifiedPasswordHashes = [];
+
+    /**
+     * Remember that the account's current password hash was just verified (Validated auth event).
+     */
+    public static function rememberVerifiedPassword(self $user): void
+    {
+        self::$verifiedPasswordHashes[$user->getKey()] = (string) $user->getAuthPassword();
+    }
+
+    /**
+     * True when this password change is the automatic rehash on login: the old hash was the one just
+     * verified in this request and it needed a rehash, so the plain password stays the same.
+     */
+    private function isPasswordRehashAfterLogin(): bool
+    {
+        $verifiedHash = self::$verifiedPasswordHashes[$this->getKey()] ?? null;
+        unset(self::$verifiedPasswordHashes[$this->getKey()]);
+
+        $previousHash = (string) $this->getOriginal('password');
+
+        return $verifiedHash !== null
+            && hash_equals($verifiedHash, $previousHash)
+            && Hash::needsRehash($previousHash);
+    }
 
     public function deletionBlockedReason(): ?string
     {
@@ -99,6 +132,14 @@ class User extends Authenticatable implements FilamentUser
         static::creating(function (User $account): void {
             if ($account->tenant_id === null && ($actor = auth()->user()) instanceof User && ! $actor->isPlatformAdmin()) {
                 $account->tenant_id = $actor->tenant_id;
+            }
+        });
+
+        // A new password, from any path (Manajemen User, reset from the app, code), signs the account
+        // out of the app on every device. The automatic rehash on login keeps the same password.
+        static::updated(function (User $account): void {
+            if ($account->wasChanged('password') && ! $account->isPasswordRehashAfterLogin()) {
+                $account->tokens()->delete();
             }
         });
     }

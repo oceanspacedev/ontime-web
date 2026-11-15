@@ -107,6 +107,10 @@ class ResignationApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat diubah.'], 422);
         }
 
+        if (! ApprovalFlowService::isUntouchedByApprovers($resignation)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
+
         $validated = $request->validate([
             'resignation_date' => 'sometimes|date',
             'last_working_day' => 'sometimes|date|after_or_equal:resignation_date',
@@ -114,7 +118,22 @@ class ResignationApiController extends Controller
             'handover_notes' => 'nullable|string',
         ]);
 
-        $resignation->update($validated);
+        // Re-checked under a row lock: an approver may have acted while the form was being filled in.
+        $updated = DB::transaction(function () use ($resignation, $validated): bool {
+            $locked = Resignation::query()->lockForUpdate()->find($resignation->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $resignation->update($validated);
+
+            return true;
+        });
+
+        if (! $updated) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan pengunduran diri berhasil diperbarui.',
@@ -139,8 +158,27 @@ class ResignationApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat dibatalkan.'], 422);
         }
 
-        $resignation->approvalSteps()->delete();
-        $resignation->delete();
+        if (! ApprovalFlowService::isUntouchedByApprovers($resignation)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
+
+        // Re-checked under a row lock: an approver may have acted in the meantime.
+        $cancelled = DB::transaction(function () use ($resignation): bool {
+            $locked = Resignation::query()->lockForUpdate()->find($resignation->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $locked->approvalSteps()->delete();
+            $locked->delete();
+
+            return true;
+        });
+
+        if (! $cancelled) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan pengunduran diri berhasil dibatalkan.',

@@ -149,6 +149,10 @@ class LeaveRequestApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat diubah.'], 422);
         }
 
+        if (! ApprovalFlowService::isUntouchedByApprovers($leaveRequest)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
+
         $data = $request->only(['leave_type', 'start_date', 'end_date', 'reason']);
 
         if ($request->hasFile('attachment')) {
@@ -177,7 +181,22 @@ class LeaveRequestApiController extends Controller
             return response()->json(['message' => $error, 'errors' => ['leave_type' => [$error]]], 422);
         }
 
-        $leaveRequest->update($data);
+        // Re-checked under a row lock: an approver may have acted while the form was being filled in.
+        $updated = DB::transaction(function () use ($leaveRequest, $data): bool {
+            $locked = LeaveRequest::query()->lockForUpdate()->find($leaveRequest->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $leaveRequest->update($data);
+
+            return true;
+        });
+
+        if (! $updated) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan cuti berhasil diperbarui',
@@ -230,8 +249,27 @@ class LeaveRequestApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat dibatalkan.'], 422);
         }
 
-        $leaveRequest->approvalSteps()->delete();
-        $leaveRequest->delete();
+        if (! ApprovalFlowService::isUntouchedByApprovers($leaveRequest)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
+
+        // Re-checked under a row lock: an approver may have acted in the meantime.
+        $cancelled = DB::transaction(function () use ($leaveRequest): bool {
+            $locked = LeaveRequest::query()->lockForUpdate()->find($leaveRequest->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $locked->approvalSteps()->delete();
+            $locked->delete();
+
+            return true;
+        });
+
+        if (! $cancelled) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan cuti berhasil dibatalkan.',

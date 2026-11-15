@@ -134,6 +134,10 @@ class OvertimeRequestApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat diubah.'], 422);
         }
 
+        if (! ApprovalFlowService::isUntouchedByApprovers($overtimeRequest)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
+
         $data = $request->only(['date', 'start_time', 'end_time', 'reason']);
 
         if (isset($data['start_time']) || isset($data['end_time'])) {
@@ -147,7 +151,22 @@ class OvertimeRequestApiController extends Controller
             $data['duration_minutes'] = (int) $start->diffInMinutes($end);
         }
 
-        $overtimeRequest->update($data);
+        // Re-checked under a row lock: an approver may have acted while the form was being filled in.
+        $updated = DB::transaction(function () use ($overtimeRequest, $data): bool {
+            $locked = OvertimeRequest::query()->lockForUpdate()->find($overtimeRequest->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $overtimeRequest->update($data);
+
+            return true;
+        });
+
+        if (! $updated) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan lembur berhasil diperbarui',
@@ -200,8 +219,27 @@ class OvertimeRequestApiController extends Controller
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat dibatalkan.'], 422);
         }
 
-        $overtimeRequest->approvalSteps()->delete();
-        $overtimeRequest->delete();
+        if (! ApprovalFlowService::isUntouchedByApprovers($overtimeRequest)) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
+
+        // Re-checked under a row lock: an approver may have acted in the meantime.
+        $cancelled = DB::transaction(function () use ($overtimeRequest): bool {
+            $locked = OvertimeRequest::query()->lockForUpdate()->find($overtimeRequest->getKey());
+
+            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                return false;
+            }
+
+            $locked->approvalSteps()->delete();
+            $locked->delete();
+
+            return true;
+        });
+
+        if (! $cancelled) {
+            return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
+        }
 
         return response()->json([
             'message' => 'Pengajuan lembur berhasil dibatalkan.',

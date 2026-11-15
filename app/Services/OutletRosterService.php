@@ -11,6 +11,7 @@ use App\Models\Intern;
 use App\Models\ShiftSchedule;
 use App\Models\User;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 /**
@@ -44,6 +45,7 @@ final class OutletRosterService
     ];
 
     /**
+     * @param  array{company_id?: int|null, division_id?: int|null, location_id?: int|null}  $filters
      * @return list<array{
      *     location: array{id: int, name: string}|null,
      *     counts: array<string, int>,
@@ -62,10 +64,9 @@ final class OutletRosterService
      *     }>,
      * }>
      */
-    public function roster(User $user, CarbonInterface $date): array
+    public function roster(User $user, CarbonInterface $date, array $filters = []): array
     {
-        $schedules = ShiftSchedule::query()
-            ->visibleTo($user)
+        $schedules = self::filterSchedules(ShiftSchedule::query()->visibleTo($user), $filters)
             ->whereDate('date', $date->toDateString())
             ->with([...ShiftSchedule::workerEagerLoads(), 'shift.division', 'location'])
             ->get()
@@ -93,6 +94,39 @@ final class OutletRosterService
             ->sortBy(fn (array $outlet): string => $outlet['location'] === null ? "\u{FFFF}" : $outlet['location']['name'])
             ->values()
             ->all();
+    }
+
+    /**
+     * Narrow schedules to one company (the worker's), one brand (the worker's or the outlet's) or one outlet.
+     * Missing filters keep every schedule the user sees.
+     *
+     * @param  Builder<ShiftSchedule>  $query
+     * @param  array{company_id?: int|null, division_id?: int|null, location_id?: int|null}  $filters
+     * @return Builder<ShiftSchedule>
+     */
+    public static function filterSchedules(Builder $query, array $filters): Builder
+    {
+        $companyId = $filters['company_id'] ?? null;
+        $divisionId = $filters['division_id'] ?? null;
+        $locationId = $filters['location_id'] ?? null;
+
+        return $query
+            ->when($locationId, fn (Builder $atOutlet) => $atOutlet->where('company_location_id', $locationId))
+            ->when($companyId, fn (Builder $inCompany) => $inCompany->where(fn (Builder $workers) => self::whereWorkerIn($workers, 'company_id', (int) $companyId)))
+            ->when($divisionId, fn (Builder $inBrand) => $inBrand->where(fn (Builder $brand) => self::whereWorkerIn($brand, 'division_id', (int) $divisionId)
+                ->orWhereIn('company_location_id', CompanyLocation::query()->select('id')->where('division_id', $divisionId))));
+    }
+
+    /**
+     * @param  Builder<ShiftSchedule>  $query
+     * @return Builder<ShiftSchedule>
+     */
+    private static function whereWorkerIn(Builder $query, string $column, int $value): Builder
+    {
+        return $query
+            ->whereIn('employee_id', Employee::query()->select('id')->where($column, $value))
+            ->orWhereIn('intern_id', Intern::query()->select('id')->where($column, $value))
+            ->orWhereIn('freelancer_id', Freelancer::query()->select('id')->where($column, $value));
     }
 
     /**

@@ -18,6 +18,7 @@ use App\Notifications\ApprovalResolvedNotification;
 use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -48,6 +49,27 @@ class ApprovalFlowService
     public const APPROVER_ROLES = ['Approver', 'BOD', 'Admin', 'Koordinator'];
 
     /**
+     * Roles that can ever have something in the approval inbox. Anyone else only sees requests on a
+     * stage that names them directly.
+     *
+     * @var list<string>
+     */
+    public const INBOX_ROLES = ['Approver', 'BOD', 'Admin', 'Koordinator', 'Superadmin'];
+
+    /**
+     * Shown when a request changed (approved, rejected or moved to another stage) between the moment
+     * the approver opened it and the moment they acted on it.
+     */
+    public const ALREADY_PROCESSED_MESSAGE = 'Pengajuan ini sudah diproses.';
+
+    /**
+     * Statuses of a request that is still waiting for an approval.
+     *
+     * @var list<string>
+     */
+    private const PENDING_STATUSES = ['pending', 'pending_approval'];
+
+    /**
      * Users who can be named as a stage's approver for the company: active, holding an approval role,
      * and with data access reaching that company. Anyone else would approve requests they cannot see.
      *
@@ -76,10 +98,10 @@ class ApprovalFlowService
 
     /**
      * Active users holding $role whose data access reaches $companyId (and $divisionId, for a division
-     * rule), so a stage set to that role
-     * has someone to act on it.
+     * rule), so a stage set to that role has someone to act on it. $excludedUserId (the requester of a
+     * request) never counts: nobody holds a stage of their own request.
      */
-    public static function hasHolderForRole(string $role, int|string|null $companyId, int|string|null $divisionId = null): bool
+    public static function hasHolderForRole(string $role, int|string|null $companyId, int|string|null $divisionId = null, int|string|null $excludedUserId = null): bool
     {
         if ($companyId === null || $companyId === '') {
             return true;
@@ -91,27 +113,36 @@ class ApprovalFlowService
         }
 
         // The platform Superadmin never staffs a client's stage.
-        return User::role($role)->where('is_active', true)->get()->contains(function (User $user) use ($companyId, $divisionId): bool {
-            if ($user->hasRole('Superadmin')) {
-                return false;
-            }
+        return User::role($role)
+            ->where('is_active', true)
+            ->when(filled($excludedUserId), fn ($query) => $query->whereKeyNot($excludedUserId))
+            ->with('roles')
+            ->get()
+            ->contains(function (User $user) use ($companyId, $divisionId): bool {
+                if ($user->hasRole('Superadmin')) {
+                    return false;
+                }
 
-            if (filled($divisionId)) {
-                return DataAccessService::canAccessPlacement($user, $companyId, $divisionId);
-            }
+                if (filled($divisionId)) {
+                    return DataAccessService::canAccessPlacement($user, $companyId, $divisionId);
+                }
 
-            $companyIds = DataAccessService::placeableCompanyIds($user);
+                $companyIds = DataAccessService::placeableCompanyIds($user);
 
-            return $companyIds !== null && in_array((int) $companyId, $companyIds, true);
-        });
+                return $companyIds !== null && in_array((int) $companyId, $companyIds, true);
+            });
     }
 
     /**
      * A stage naming this account has someone to act on it: an active account that is not the
-     * platform Superadmin (who never staffs a client's stage).
+     * platform Superadmin (who never staffs a client's stage), nor the requester ($excludedUserId).
      */
-    private static function namedUserCanAct(int|string|null $userId): bool
+    private static function namedUserCanAct(int|string|null $userId, int|string|null $excludedUserId = null): bool
     {
+        if (filled($excludedUserId) && (int) $userId === (int) $excludedUserId) {
+            return false;
+        }
+
         return $userId !== null && User::query()
             ->whereKey($userId)
             ->where('is_active', true)
@@ -157,8 +188,8 @@ class ApprovalFlowService
 
         foreach ([LeaveRequest::class, OvertimeRequest::class, AttendanceCorrection::class, Resignation::class, Attendance::class] as $modelClass) {
             $modelClass::query()
-                ->whereIn('status', ['pending', 'pending_approval'])
-                ->with('approvalSteps')
+                ->whereIn('status', self::PENDING_STATUSES)
+                ->with(self::pendingEagerLoads($modelClass))
                 ->get()
                 ->each(function (Model $request) use ($days, &$reminded): void {
                     $stalledSince = $this->stalledSince($request);
@@ -215,21 +246,56 @@ class ApprovalFlowService
     }
 
     /**
-     * Reusable query method to retrieve pending requests requiring action from the given User.
+     * Relations every pending request needs to resolve its worker, stage and recipients without lazy loading.
+     *
+     * @param  class-string<Model>  $modelClass
+     * @return list<string>
      */
-    public function getPendingRequestsForUser(User $user, string $modelClass): Collection
+    private static function pendingEagerLoads(string $modelClass): array
     {
-        $eagerLoads = collect(['employee', 'intern', 'freelancer'])
+        return collect(['employee', 'intern', 'freelancer'])
             ->filter(fn (string $relation): bool => method_exists($modelClass, $relation))
             ->flatMap(fn (string $relation): array => ["{$relation}.company", "{$relation}.division", "{$relation}.user"])
             ->push('approvalSteps')
+            ->values()
             ->all();
+    }
+
+    /**
+     * Reusable query method to retrieve pending requests requiring action from the given User.
+     * Only the requests of the user's Klien are loaded (the Superadmin is unbounded); the stage and
+     * data access rules are then checked per request.
+     *
+     * @param  class-string<Model>  $modelClass
+     */
+    public function getPendingRequestsForUser(User $user, string $modelClass): Collection
+    {
+        if (! $user->hasAnyRole(self::INBOX_ROLES) && ! $this->isNamedOnPendingStep($user)) {
+            return (new $modelClass)->newCollection();
+        }
 
         return $modelClass::query()
-            ->with($eagerLoads)
-            ->whereIn('status', ['pending', 'pending_approval'])
+            ->with(self::pendingEagerLoads($modelClass))
+            ->whereIn('status', self::PENDING_STATUSES)
+            ->when(
+                ! $user->hasRole('Superadmin') && method_exists($modelClass, 'scopeWhereWorkerInCompanies'),
+                fn ($query) => $query->whereWorkerInCompanies(DataAccessService::tenantCompanyIds($user)),
+            )
             ->get()
-            ->filter(fn (Model $item) => $this->isUserAuthorizedToApprove($item, $user));
+            ->filter(fn (Model $item) => $this->isUserAuthorizedToApprove($item, $user))
+            ->values();
+    }
+
+    /**
+     * Whether a pending stage of any request names this user as its approver.
+     */
+    private function isNamedOnPendingStep(User $user): bool
+    {
+        return ApprovalRequestStep::query()
+            ->where('approver_type', 'user')
+            ->where('user_id', $user->id)
+            ->where('status', 'pending')
+            ->exists();
     }
 
     /**
@@ -461,31 +527,38 @@ class ApprovalFlowService
      */
     public function isUserAuthorizedToApprove(Model $requestModel, User $user): bool
     {
-        $statusValue = $requestModel->status instanceof \BackedEnum ? $requestModel->status->value : (string) $requestModel->status;
-        if (! in_array($statusValue, ['pending', 'pending_approval'])) {
+        if (! in_array(self::statusValueOf($requestModel), self::PENDING_STATUSES, true)) {
             return false;
         }
 
         $currentStepOrder = (int) ($requestModel->current_step ?? 1);
-        $step = $requestModel->approvalSteps()
-            ->where('step_order', $currentStepOrder)
-            ->first();
+
+        // Lists (inbox, reminders) load the steps once; a single request falls back to a query.
+        $loadedSteps = $requestModel->relationLoaded('approvalSteps') ? $requestModel->approvalSteps : null;
+
+        $step = $loadedSteps
+            ? $loadedSteps->first(fn (ApprovalRequestStep $candidate): bool => (int) $candidate->step_order === $currentStepOrder)
+            : $requestModel->approvalSteps()->where('step_order', $currentStepOrder)->first();
 
         if (! $step) {
             return false;
         }
 
         // Resolve the worker profile to get the requester and the company/division scope
-        $workerProfile = method_exists($requestModel, 'getWorkerProfile')
-            ? $requestModel->getWorkerProfile()
-            : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
+        $workerProfile = $this->workerOf($requestModel);
 
         $isOwnRequest = $workerProfile?->user_id !== null && (int) $workerProfile->user_id === (int) $user->id;
 
         // A requester may act on an intermediate stage that matches their own role (for example a BOD
         // at the BOD stage), but never on the final stage: someone else must give the last approval.
-        if ($isOwnRequest && ! $requestModel->approvalSteps()->where('step_order', '>', $currentStepOrder)->exists()) {
-            return false;
+        if ($isOwnRequest) {
+            $hasLaterStep = $loadedSteps
+                ? $loadedSteps->contains(fn (ApprovalRequestStep $candidate): bool => (int) $candidate->step_order > $currentStepOrder)
+                : $requestModel->approvalSteps()->where('step_order', '>', $currentStepOrder)->exists();
+
+            if (! $hasLaterStep) {
+                return false;
+            }
         }
 
         // Superadmin Override: the platform owner may still step in on any pending step (support), except
@@ -520,86 +593,164 @@ class ApprovalFlowService
 
     /**
      * Approve the current step for a request.
+     *
+     * Runs in a transaction on a locked, freshly read copy of the request, so two approvers acting at
+     * the same time (or on a page opened before the other one acted) can never both settle the same
+     * stage. Notifications go out once the transaction has committed.
+     *
+     * @throws ValidationException when the user may not act, or the request was already processed
      */
     public function approveStep(Model $requestModel, User $user, ?string $notes = null): void
     {
-        if (! $this->isUserAuthorizedToApprove($requestModel, $user)) {
-            throw ValidationException::withMessages([
-                'approve' => 'Anda tidak memiliki hak akses untuk menyetujui tahap approval ini.',
-            ]);
-        }
+        DB::transaction(function () use ($requestModel, $user, $notes): void {
+            $request = $this->lockForProcessing($requestModel);
 
-        $currentStepOrder = (int) ($requestModel->current_step ?? 1);
-        $maxSteps = (int) $requestModel->approvalSteps()->max('step_order');
-        $closesAllStages = $this->closesAllStages($user);
-        $isFinalApproval = $closesAllStages || $currentStepOrder >= $maxSteps;
-
-        // The final approval turns annual leave into used quota, so the worker must still be entitled.
-        if ($requestModel instanceof LeaveRequest && $isFinalApproval
-            && $error = app(AnnualLeaveService::class)->approvalError($requestModel)) {
-            throw ValidationException::withMessages(['approve' => $error]);
-        }
-
-        $requestModel->approvalSteps()
-            ->where(fn ($steps) => $steps->where('step_order', $currentStepOrder)
-                ->when($closesAllStages, fn ($query) => $query->orWhere(fn ($later) => $later->where('step_order', '>', $currentStepOrder)->where('status', 'pending'))))
-            ->get()
-            ->each(fn ($step) => $step->update([
-                'status' => 'approved',
-                'actioned_by' => $user->id,
-                'actioned_at' => now(),
-                'notes' => $notes,
-            ]));
-
-        if ($closesAllStages && $currentStepOrder < $maxSteps) {
-            $requestModel->update(['current_step' => $maxSteps]);
-        }
-
-        if (! $isFinalApproval) {
-            $requestModel->update([
-                'current_step' => $currentStepOrder + 1,
-            ]);
-
-            // Notify next step approvers
-            $workerNameNext = method_exists($requestModel, 'getWorkerProfile')
-                ? ($requestModel->getWorkerProfile()?->full_name ?? 'Pengguna')
-                : ($requestModel->employee?->full_name ?? 'Pengguna');
-
-            $requestType = $this->requestTypeOf($requestModel);
-
-            foreach ($this->getUsersAuthorizedForCurrentStep($requestModel) as $nextApprover) {
-                Notification::make()
-                    ->title("Pengajuan Membutuhkan Persetujuan Tahap {$requestModel->current_step}")
-                    ->body("Pengajuan dari {$workerNameNext} telah diproses ke tahap Anda.")
-                    ->icon('heroicon-o-bell')
-                    ->color('info')
-                    ->sendToDatabase($nextApprover);
-
-                $nextApprover->notify(new ApprovalRequestedNotification($requestModel, $requestType, $workerNameNext, (int) $requestModel->current_step));
-            }
-        } else {
-            if (method_exists($requestModel, 'applyGeofenceApproval')) {
-                $requestModel->applyGeofenceApproval();
-            } else {
-                $requestModel->update([
-                    'status' => 'approved',
+            if (! $this->isUserAuthorizedToApprove($request, $user)) {
+                throw ValidationException::withMessages([
+                    'approve' => 'Anda tidak memiliki hak akses untuk menyetujui tahap approval ini.',
                 ]);
             }
 
-            if (method_exists($requestModel, 'applyCorrection')) {
-                $requestModel->applyCorrection();
+            $currentStepOrder = (int) ($request->current_step ?? 1);
+            $maxSteps = (int) $request->approvalSteps()->max('step_order');
+            $closesAllStages = $this->closesAllStages($user);
+            $isFinalApproval = $closesAllStages || $currentStepOrder >= $maxSteps;
+
+            // The final approval turns annual leave into used quota, so the worker must still be entitled.
+            if ($request instanceof LeaveRequest && $isFinalApproval
+                && $error = app(AnnualLeaveService::class)->approvalError($request)) {
+                throw ValidationException::withMessages(['approve' => $error]);
             }
 
-            if (method_exists($requestModel, 'applyLeave')) {
-                $requestModel->applyLeave();
+            $request->approvalSteps()
+                ->where(fn ($steps) => $steps->where('step_order', $currentStepOrder)
+                    ->when($closesAllStages, fn ($query) => $query->orWhere(fn ($later) => $later->where('step_order', '>', $currentStepOrder)->where('status', 'pending'))))
+                ->get()
+                ->each(fn ($step) => $step->update([
+                    'status' => 'approved',
+                    'actioned_by' => $user->id,
+                    'actioned_at' => now(),
+                    'notes' => $notes,
+                ]));
+
+            if ($closesAllStages && $currentStepOrder < $maxSteps) {
+                $request->update(['current_step' => $maxSteps]);
             }
 
-            if (method_exists($requestModel, 'applyResignation')) {
-                $requestModel->applyResignation();
+            if (! $isFinalApproval) {
+                $request->update([
+                    'current_step' => $currentStepOrder + 1,
+                ]);
+
+                DB::afterCommit(fn () => $this->notifyNextApprovers($request));
+            } else {
+                if (method_exists($request, 'applyGeofenceApproval')) {
+                    $request->applyGeofenceApproval();
+                } else {
+                    $request->update([
+                        'status' => 'approved',
+                    ]);
+                }
+
+                if (method_exists($request, 'applyCorrection')) {
+                    $request->applyCorrection();
+                }
+
+                if (method_exists($request, 'applyLeave')) {
+                    $request->applyLeave();
+                }
+
+                if (method_exists($request, 'applyResignation')) {
+                    $request->applyResignation();
+                }
+
+                DB::afterCommit(fn () => $this->notifyRequester($request, 'approved'));
             }
 
-            $this->notifyRequester($requestModel, 'approved');
+            $this->syncProcessedModel($requestModel, $request);
+        });
+    }
+
+    /**
+     * Tell the approvers of the stage the request just moved to.
+     */
+    private function notifyNextApprovers(Model $requestModel): void
+    {
+        $workerName = $this->workerOf($requestModel)?->full_name ?? 'Pengguna';
+        $requestType = $this->requestTypeOf($requestModel);
+
+        foreach ($this->getUsersAuthorizedForCurrentStep($requestModel) as $nextApprover) {
+            Notification::make()
+                ->title("Pengajuan Membutuhkan Persetujuan Tahap {$requestModel->current_step}")
+                ->body("Pengajuan dari {$workerName} telah diproses ke tahap Anda.")
+                ->icon('heroicon-o-bell')
+                ->color('info')
+                ->sendToDatabase($nextApprover);
+
+            $nextApprover->notify(new ApprovalRequestedNotification($requestModel, $requestType, $workerName, (int) $requestModel->current_step));
         }
+    }
+
+    /**
+     * Re-read the request with a row lock and make sure it is still where the approver saw it: pending,
+     * on the same stage, and that stage not actioned yet. The returned copy keeps the worker relations
+     * already loaded on $requestModel, but always reads its steps from the database.
+     *
+     * Must be called inside a transaction.
+     *
+     * @throws ValidationException when the request changed in the meantime
+     */
+    private function lockForProcessing(Model $requestModel): Model
+    {
+        $seenStatus = self::statusValueOf($requestModel);
+        $seenStepOrder = (int) ($requestModel->current_step ?? 1);
+
+        $request = $requestModel->newQuery()->lockForUpdate()->find($requestModel->getKey());
+
+        $isUnchanged = $request !== null
+            && in_array($seenStatus, self::PENDING_STATUSES, true)
+            && self::statusValueOf($request) === $seenStatus
+            && (int) ($request->current_step ?? 1) === $seenStepOrder
+            && $request->approvalSteps()
+                ->where('step_order', $seenStepOrder)
+                ->where('status', 'pending')
+                ->lockForUpdate()
+                ->exists();
+
+        if (! $isUnchanged) {
+            throw ValidationException::withMessages(['request' => self::ALREADY_PROCESSED_MESSAGE]);
+        }
+
+        $request->setRelations(Arr::except($requestModel->getRelations(), ['approvalSteps']));
+
+        return $request;
+    }
+
+    /**
+     * Bring the caller's instance up to date with the processed copy, so it does not keep showing the
+     * request as it was before the approval.
+     */
+    private function syncProcessedModel(Model $requestModel, Model $processed): void
+    {
+        $requestModel->setRawAttributes($processed->getAttributes(), true);
+        $requestModel->unsetRelation('approvalSteps');
+    }
+
+    private static function statusValueOf(Model $requestModel): string
+    {
+        return $requestModel->status instanceof \BackedEnum ? (string) $requestModel->status->value : (string) $requestModel->status;
+    }
+
+    /**
+     * Whether the requester can still change or cancel the request: it is pending and no approver has
+     * acted on any of its stages yet.
+     */
+    public static function isUntouchedByApprovers(Model $requestModel): bool
+    {
+        return self::statusValueOf($requestModel) === 'pending'
+            && ! $requestModel->approvalSteps()
+                ->where(fn ($steps) => $steps->where('status', '!=', 'pending')->orWhereNotNull('actioned_at'))
+                ->exists();
     }
 
     /**
@@ -613,39 +764,46 @@ class ApprovalFlowService
 
     /**
      * Reject the current step for a request.
+     *
+     * Locked like approveStep(), so a request another approver just approved (or moved on) cannot be
+     * rejected from a stale page.
+     *
+     * @throws ValidationException when the user may not act, or the request was already processed
      */
     public function rejectStep(Model $requestModel, User $user, string $reason): void
     {
-        if (! $this->isUserAuthorizedToApprove($requestModel, $user)) {
-            throw ValidationException::withMessages([
-                'reject' => 'Anda tidak memiliki hak akses untuk menolak tahap approval ini.',
-            ]);
-        }
+        DB::transaction(function () use ($requestModel, $user, $reason): void {
+            $request = $this->lockForProcessing($requestModel);
 
-        $currentStepOrder = (int) ($requestModel->current_step ?? 1);
-        $step = $requestModel->approvalSteps()
-            ->where('step_order', $currentStepOrder)
-            ->first();
+            if (! $this->isUserAuthorizedToApprove($request, $user)) {
+                throw ValidationException::withMessages([
+                    'reject' => 'Anda tidak memiliki hak akses untuk menolak tahap approval ini.',
+                ]);
+            }
 
-        if ($step) {
-            $step->update([
-                'status' => 'rejected',
-                'actioned_by' => $user->id,
-                'actioned_at' => now(),
-                'notes' => $reason,
-            ]);
-        }
+            $request->approvalSteps()
+                ->where('step_order', (int) ($request->current_step ?? 1))
+                ->first()
+                ?->update([
+                    'status' => 'rejected',
+                    'actioned_by' => $user->id,
+                    'actioned_at' => now(),
+                    'notes' => $reason,
+                ]);
 
-        if (method_exists($requestModel, 'applyGeofenceRejection')) {
-            $requestModel->applyGeofenceRejection($reason);
-        } else {
-            $requestModel->update([
-                'status' => 'rejected',
-                'rejection_reason' => $reason,
-            ]);
-        }
+            if (method_exists($request, 'applyGeofenceRejection')) {
+                $request->applyGeofenceRejection($reason);
+            } else {
+                $request->update([
+                    'status' => 'rejected',
+                    'rejection_reason' => $reason,
+                ]);
+            }
 
-        $this->notifyRequester($requestModel, 'rejected', $reason);
+            DB::afterCommit(fn () => $this->notifyRequester($request, 'rejected', $reason));
+
+            $this->syncProcessedModel($requestModel, $request);
+        });
     }
 
     /**
@@ -721,6 +879,7 @@ class ApprovalFlowService
             ->where(fn ($query) => $query
                 ->whereHas('roles', fn ($roleQuery) => $roleQuery->whereIn('name', array_unique($roles)))
                 ->when($step?->approver_type === 'user' && $step->user_id, fn ($byUser) => $byUser->orWhere('id', $step->user_id)))
+            ->with('roles')
             ->get()
             ->filter(fn (User $user) => $this->isUserAuthorizedToApprove($requestModel, $user));
     }
@@ -732,14 +891,20 @@ class ApprovalFlowService
             : ($requestModel->employee ?? $requestModel->intern ?? $requestModel->freelancer);
     }
 
+    /**
+     * Whether someone other than the requester can act on the stage: the requester never holds a stage
+     * of their own request (and cannot give its final approval), so a BOD's own leave at the BOD stage
+     * falls back to the Admins when that BOD is the only one.
+     */
     private function stageHasHolder(Model $requestModel, ApprovalRequestStep $step): bool
     {
+        $worker = $this->workerOf($requestModel);
+        $requesterId = $worker?->user_id;
+
         if ($step->approver_type === 'user') {
-            return self::namedUserCanAct($step->user_id);
+            return self::namedUserCanAct($step->user_id, $requesterId);
         }
 
-        $worker = $this->workerOf($requestModel);
-
-        return $worker === null || self::hasHolderForRole((string) ($step->approver_role ?? 'Approver'), $worker->company_id, $worker->division_id);
+        return $worker === null || self::hasHolderForRole((string) ($step->approver_role ?? 'Approver'), $worker->company_id, $worker->division_id, $requesterId);
     }
 }

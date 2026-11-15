@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Enums\SystemRole;
+use App\Models\User;
 use App\Services\Core\CoreSsoProvider;
 use App\Services\Face\BasicFaceVerifier;
 use App\Services\Face\CompreFaceVerifier;
@@ -12,10 +13,12 @@ use App\Support\ObservabilityAccess;
 use App\Support\StorageUrl;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
+use Illuminate\Auth\Events\Validated;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
@@ -60,13 +63,22 @@ class AppServiceProvider extends ServiceProvider
             return $user->hasRole('Superadmin') ? true : null;
         });
 
-        // API tokens of deactivated accounts (for example after an approved resignation) stop working,
-        // and so do tokens left unused for longer than sanctum.idle_expiration.
+        // API tokens of deactivated accounts (for example after an approved resignation) or of accounts of
+        // an inactive Klien stop working, and so do tokens left unused for longer than sanctum.idle_expiration.
         Sanctum::authenticateAccessTokensUsing(
             fn (PersonalAccessToken $token, bool $isValid): bool => $isValid
-                && $token->tokenable?->is_active !== false
+                && $token->tokenable instanceof User
+                && $token->tokenable->canSignIn()
                 && ! IdleApiTokens::isIdle($token),
         );
+
+        // A login that rehashes the password keeps the same password, so it must not revoke the
+        // account's app tokens (see User::updated).
+        Event::listen(Validated::class, function (Validated $event): void {
+            if ($event->user instanceof User) {
+                User::rememberVerifiedPassword($event->user);
+            }
+        });
 
         if (class_exists(Socialite::class)) {
             Socialite::extend('core', function ($app) {
