@@ -3,7 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 
 import { AttendanceDetail } from '@/components/AttendanceDetail';
 import { ErrorBanner, LoadingView, Screen } from '@/components/ui';
-import { attendanceApi, errorMessage } from '@/lib/api';
+import { attendanceApi } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
 
 export default function AttendanceDetailScreen() {
@@ -21,7 +21,7 @@ export default function AttendanceDetailScreen() {
   if (query.isError) {
     return (
       <Screen>
-        <ErrorBanner message={errorMessage(query.error)} onRetry={() => query.refetch()} />
+        <ErrorBanner error={query.error} onRetry={() => query.refetch()} />
       </Screen>
     );
   }

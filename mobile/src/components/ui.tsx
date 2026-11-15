@@ -30,6 +30,7 @@ import {
 } from 'react-native';
 import { type Edge, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { errorMessage, isNetworkError } from '@/lib/api/client';
 import type { Tone } from '@/lib/format';
 import { BRAND_GLOSS, BRAND_GRADIENT, elevation, fonts, fontSize, makeStyles, type Palette, radius, spacing, useTheme } from '@/theme';
 
@@ -1004,17 +1005,54 @@ const useLoadingStyles = makeStyles((c) => ({
   text: { fontSize: fontSize.sm, color: c.textMuted },
 }));
 
-export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+/** Icon for an error: a network failure gets the "no connection" cloud, anything else the alert mark. */
+export function errorIcon(error: unknown, outline = false): IconName {
+  if (isNetworkError(error)) {
+    return outline ? 'cloud-offline-outline' : 'cloud-offline';
+  }
+  return outline ? 'alert-circle-outline' : 'alert-circle';
+}
+
+interface ErrorBannerProps {
+  /** The failure itself. Its text comes from errorMessage, and a network failure gets its own icon. */
+  error?: unknown;
+  /** Fixed text, for errors that are not a thrown value. Wins over `error`. */
+  message?: string;
+  /** Shows "Coba lagi". While a returned promise is pending the label turns into a spinner. */
+  onRetry?: () => Promise<unknown> | void;
+}
+
+export function ErrorBanner({ error, message, onRetry }: ErrorBannerProps) {
   const styles = useNoticeStyles();
   const { colors } = useTheme();
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    if (!onRetry || retrying) {
+      return;
+    }
+    setRetrying(true);
+    try {
+      await onRetry();
+    } catch {
+      // The failed retry shows up through the caller's own error state.
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   return (
     <View style={[styles.notice, { backgroundColor: colors.dangerSoft }]}>
-      <Ionicons name="alert-circle" size={20} color={colors.danger} />
-      <Text style={[styles.text, { color: colors.danger }]}>{message}</Text>
+      <Ionicons name={errorIcon(error)} size={20} color={colors.danger} />
+      <Text style={[styles.text, { color: colors.danger }]}>{message ?? errorMessage(error)}</Text>
       {onRetry ? (
-        <Pressable onPress={onRetry} hitSlop={8}>
-          <Text style={[styles.retry, { color: colors.danger }]}>Coba lagi</Text>
-        </Pressable>
+        retrying ? (
+          <ActivityIndicator size="small" color={colors.danger} />
+        ) : (
+          <Pressable onPress={handleRetry} hitSlop={8} accessibilityRole="button">
+            <Text style={[styles.retry, { color: colors.danger }]}>Coba lagi</Text>
+          </Pressable>
+        )
       ) : null}
     </View>
   );

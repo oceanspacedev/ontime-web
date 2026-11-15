@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 
-import { ApiError } from './api/client';
+import { ApiError, NetworkError } from './api/client';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -8,6 +8,10 @@ export const queryClient = new QueryClient({
       staleTime: 30 * 1000,
       retry: (failureCount, error) => {
         if (error instanceof ApiError && error.status < 500) {
+          return false;
+        }
+        // A timeout already kept the user waiting; show the message and its retry right away.
+        if (error instanceof NetworkError && error.kind === 'timeout') {
           return false;
         }
         return failureCount < 2;

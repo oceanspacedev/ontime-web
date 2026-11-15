@@ -23,6 +23,33 @@ export class ApiError extends Error {
   }
 }
 
+/** `offline`: the request never reached the server. `timeout`: no full answer arrived in time. */
+export type NetworkErrorKind = 'offline' | 'timeout';
+
+const NETWORK_MESSAGES: Record<NetworkErrorKind, string> = {
+  offline: 'Tidak ada koneksi internet. Periksa koneksi Anda lalu coba lagi.',
+  timeout: 'Koneksi internet lambat atau terputus. Periksa koneksi Anda lalu coba lagi.',
+};
+
+/**
+ * The server could not be reached: no connection, a DNS or TLS failure, or a request that timed
+ * out. The message is ready to show to the user; the technical reason stays in `cause`.
+ */
+export class NetworkError extends Error {
+  kind: NetworkErrorKind;
+
+  constructor(kind: NetworkErrorKind, cause?: unknown) {
+    super(NETWORK_MESSAGES[kind]);
+    this.name = 'NetworkError';
+    this.kind = kind;
+    this.cause = cause;
+  }
+}
+
+export function isNetworkError(error: unknown): error is NetworkError {
+  return error instanceof NetworkError;
+}
+
 export interface ApiConfig {
   getBaseUrl: () => string;
   getToken: () => string | null;
@@ -67,17 +94,12 @@ export function buildUrl(baseUrl: string, path: string, query?: QueryParams): st
   return parts.length ? `${url}?${parts.join('&')}` : url;
 }
 
+/** Text to show the user for any error. Network failures already carry a friendly message. */
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     return error.detail;
   }
   if (error instanceof Error) {
-    if (error.name === 'AbortError') {
-      return 'Server tidak merespons. Periksa koneksi internet Anda.';
-    }
-    if (/network request failed/i.test(error.message)) {
-      return 'Tidak bisa terhubung ke server. Periksa koneksi internet Anda.';
-    }
     return error.message;
   }
   return 'Terjadi kesalahan yang tidak diketahui.';
@@ -112,6 +134,42 @@ export function failureMessage(status: number, serverMessage: string | undefined
   return unreadableBody ? `Server membalas dengan data yang tidak dikenali (kode ${status}). Coba lagi nanti.` : `Permintaan gagal (${status}).`;
 }
 
+/**
+ * Sends the request and reads the whole answer. The one place that recognises a network failure:
+ * whatever `fetch` throws, and an answer that does not arrive in full within `timeoutMs`, becomes
+ * a NetworkError. The wording of the underlying error differs per platform and fetch
+ * implementation (Expo's fetch reports the raw native reason, such as "Unable to resolve host"),
+ * so it is never matched and never shown.
+ */
+async function exchange(url: string, init: RequestInit, timeoutMs: number): Promise<{ response: Response; text: string }> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // Timed here as well as through the abort signal: a connection that drops while the body is
+  // being read can leave the native read pending forever, and the abort alone would not end it.
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new NetworkError('timeout'));
+      controller.abort();
+    }, timeoutMs);
+  });
+
+  const answer = (async () => {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return { response, text: await response.text() };
+  })();
+  // After a timeout the abandoned request still settles; that late failure is expected.
+  answer.catch(() => {});
+
+  try {
+    return await Promise.race([answer, timeout]);
+  } catch (cause) {
+    throw isNetworkError(cause) ? cause : new NetworkError('offline', cause);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', query, json, form, skipAuthHandling = false, timeoutMs = 30000 } = options;
 
@@ -129,22 +187,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     body = JSON.stringify(json);
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  let response: Response;
-  try {
-    response = await fetch(buildUrl(options.baseUrl ?? config.getBaseUrl(), path, query), {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-
-  const text = await response.text();
+  const { response, text } = await exchange(buildUrl(options.baseUrl ?? config.getBaseUrl(), path, query), { method, headers, body }, timeoutMs);
   let payload: unknown = null;
   if (text) {
     try {

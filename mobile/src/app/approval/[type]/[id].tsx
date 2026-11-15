@@ -90,7 +90,7 @@ export default function ApprovalDetailScreen() {
   if (query.isError) {
     return (
       <Screen>
-        <ErrorBanner message={errorMessage(query.error)} onRetry={() => query.refetch()} />
+        <ErrorBanner error={query.error} onRetry={() => query.refetch()} />
       </Screen>
     );
   }

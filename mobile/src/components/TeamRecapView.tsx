@@ -45,7 +45,7 @@ export function TeamRecapView() {
       {recap.isPending ? (
         <LoadingView />
       ) : recap.isError ? (
-        <ErrorBanner message={errorMessage(recap.error)} onRetry={() => recap.refetch()} />
+        <ErrorBanner error={recap.error} onRetry={() => recap.refetch()} />
       ) : recap.data.data.length === 0 ? (
         <EmptyState icon="stats-chart-outline" title="Belum ada data bulan ini" />
       ) : (

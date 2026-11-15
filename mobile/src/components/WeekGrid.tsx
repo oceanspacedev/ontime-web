@@ -153,7 +153,7 @@ export function WeekGrid({ date, onChange, onEdit }: Props) {
       {week.isPending ? (
         <LoadingView />
       ) : week.isError ? (
-        <ErrorBanner message={errorMessage(week.error)} onRetry={() => week.refetch()} />
+        <ErrorBanner error={week.error} onRetry={() => week.refetch()} />
       ) : week.data.workers.length === 0 ? (
         <EmptyState icon="calendar-clear-outline" title="Belum ada jadwal minggu ini" message="Salin jadwal minggu lalu, atau tekan + untuk menjadwalkan." />
       ) : (
