@@ -1,14 +1,28 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, View } from 'react-native';
 
 import { Button, IconButton, Text } from '@/components/ui';
-import type { UploadFile } from '@/lib/api';
+import { errorMessage, type UploadFile } from '@/lib/api';
 import { guessMimeType, prepareUpload } from '@/lib/image';
 import { fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
 
+/** Same limit as the backend rule `max:5120` (kilobytes). */
 const MAX_BYTES = 5 * 1024 * 1024;
+
+/** Picker size, else the size of the cached copy; null when neither is known. */
+function fileSize(uri: string, reported: number | null | undefined): number | null {
+  if (reported) {
+    return reported;
+  }
+  try {
+    return new File(uri).size;
+  } catch {
+    return null;
+  }
+}
 
 interface Props {
   label?: string;
@@ -33,15 +47,20 @@ export function AttachmentField({ label = 'Lampiran (opsional)', value, onChange
     }
     const asset = result.assets[0];
     const type = asset.mimeType ?? guessMimeType(asset.name);
-    if (type.startsWith('image/')) {
-      onChange(await prepareUpload(asset.uri, 'lampiran'));
-      return;
+    try {
+      if (type.startsWith('image/')) {
+        onChange(await prepareUpload(asset.uri, 'lampiran'));
+        return;
+      }
+      const size = fileSize(asset.uri, asset.size);
+      if (size !== null && size > MAX_BYTES) {
+        Alert.alert('Berkas terlalu besar', 'Lampiran maksimal 5 MB.');
+        return;
+      }
+      onChange({ uri: asset.uri, name: asset.name, type });
+    } catch (error) {
+      Alert.alert('Gagal memproses berkas', errorMessage(error));
     }
-    if (asset.size && asset.size > MAX_BYTES) {
-      Alert.alert('Berkas terlalu besar', 'Lampiran maksimal 5 MB.');
-      return;
-    }
-    onChange({ uri: asset.uri, name: asset.name, type });
   };
 
   const pickPhoto = async () => {
@@ -50,12 +69,15 @@ export function AttachmentField({ label = 'Lampiran (opsional)', value, onChange
       Alert.alert('Izin dibutuhkan', 'Izinkan akses kamera untuk memotret lampiran.');
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });
-    if (result.canceled || !result.assets[0]) {
-      return;
+    try {
+      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });
+      if (result.canceled || !result.assets[0]) {
+        return;
+      }
+      onChange(await prepareUpload(result.assets[0].uri, 'lampiran'));
+    } catch (error) {
+      Alert.alert('Gagal memproses foto', errorMessage(error));
     }
-    const asset = result.assets[0];
-    onChange(await prepareUpload(asset.uri, 'lampiran', asset.width, asset.height));
   };
 
   return (

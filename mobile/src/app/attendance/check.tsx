@@ -2,10 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
-import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AttendanceModeChips } from '@/components/AttendanceModeChips';
@@ -13,9 +12,18 @@ import { type CapturedShot, type LivenessFrames, LivenessStepCard, LivenessThumb
 import { bottomGap, Button, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { ApiError, attendanceApi, type AttendancePurpose, type Company, errorMessage, type LivenessStep, type LivenessStepKey, type UploadFile } from '@/lib/api';
+import { ApiError, attendanceApi, type AttendancePurpose, type Company, errorMessage, type LivenessStep, type LivenessStepKey, type OutletGeofence, type UploadFile } from '@/lib/api';
 import { formatDistance, nearestLocation, type NearestLocation } from '@/lib/geo';
 import { prepareUpload } from '@/lib/image';
+import {
+  ApproximateLocationError,
+  enableDeviceLocation,
+  isServicesOffError,
+  LocationDeniedError,
+  locationErrorMessage,
+  readDevicePosition,
+} from '@/lib/location';
+import { queryKeys } from '@/lib/queryClient';
 import { BRAND_GLOSS, BRAND_GRADIENT, elevation, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
 
 /** The camera frame stays black in both color schemes, so its text and guide are light on dark. */
@@ -23,16 +31,6 @@ const ON_CAMERA = 'rgba(255, 255, 255, 0.78)';
 
 /** Server message for a mocked position when the policy rejects it; shown before sending too. */
 const MOCK_REJECT_MESSAGE = 'Lokasi palsu (mock location) terdeteksi. Matikan aplikasi pemalsu lokasi lalu coba lagi.';
-
-class LocationDeniedError extends Error {
-  canAskAgain: boolean;
-
-  constructor(canAskAgain: boolean) {
-    super('Izin lokasi ditolak.');
-    this.name = 'LocationDeniedError';
-    this.canAskAgain = canAskAgain;
-  }
-}
 
 interface DeviceLocation {
   latitude: number;
@@ -43,20 +41,9 @@ interface DeviceLocation {
   nearest: NearestLocation | null;
 }
 
-async function readLocation(company: Company | null): Promise<DeviceLocation> {
-  const permission = await Location.requestForegroundPermissionsAsync();
-  if (!permission.granted) {
-    throw new LocationDeniedError(permission.canAskAgain);
-  }
-  const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-  const { latitude, longitude, accuracy } = position.coords;
-  return {
-    latitude,
-    longitude,
-    accuracy: accuracy ?? null,
-    mocked: position.mocked === true,
-    nearest: nearestLocation(company, latitude, longitude),
-  };
+async function readLocation(company: Company | null, outlet: OutletGeofence | null): Promise<DeviceLocation> {
+  const position = await readDevicePosition();
+  return { ...position, nearest: nearestLocation(company, position.latitude, position.longitude, outlet) };
 }
 
 interface FetchedChallenge {
@@ -116,14 +103,38 @@ export default function AttendanceCheckScreen() {
   const [livenessNotice, setLivenessNotice] = useState<string | null>(null);
   const [now, setNow] = useState(0);
 
+  // The server only accepts the scheduled outlet (check in) or the outlet checked in at (check out),
+  // so the location preview compares against the same one.
+  const today = useQuery({
+    queryKey: queryKeys.today,
+    queryFn: attendanceApi.today,
+    enabled: needsGps,
+  });
+  const outlet = (isCheckIn ? today.data?.schedule?.outlet : today.data?.check_out_outlet) ?? null;
+
   const location = useQuery({
     queryKey: ['device-location', access.company?.id ?? 0, mode],
-    queryFn: () => readLocation(access.company),
+    queryFn: () => readLocation(access.company, null),
     enabled: needsGps,
     staleTime: 0,
     gcTime: 0,
     retry: false,
+    select: (data) => (outlet ? { ...data, nearest: nearestLocation(access.company, data.latitude, data.longitude, outlet) } : data),
   });
+
+  // Coming back from the location settings: read the position again so the screen recovers by itself.
+  const { isError: locationFailed, refetch: refetchLocation } = location;
+  useEffect(() => {
+    if (!needsGps) {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && locationFailed) {
+        void refetchLocation();
+      }
+    });
+    return () => subscription.remove();
+  }, [needsGps, locationFailed, refetchLocation]);
 
   const challenge = useQuery({
     queryKey: ['liveness-challenge', purpose, challengeAttempt],
@@ -173,7 +184,7 @@ export default function AttendanceCheckScreen() {
       }
       const prefix = isCheckIn ? 'check-in' : 'check-out';
       if ((selfieMode === 'photo' || selfieMode === 'face') && shot) {
-        payload.photo = await prepareUpload(shot.uri, prefix, shot.width, shot.height);
+        payload.photo = await prepareUpload(shot.uri, prefix);
       }
       if (isLiveness) {
         const active = challenge.data;
@@ -186,7 +197,7 @@ export default function AttendanceCheckScreen() {
           if (!frame) {
             throw new Error(`Foto langkah "${step.label}" belum diambil.`);
           }
-          uploads.push(await prepareUpload(frame.uri, `${prefix}-liveness-${index + 1}-${step.key}`, frame.width, frame.height));
+          uploads.push(await prepareUpload(frame.uri, `${prefix}-liveness-${index + 1}-${step.key}`));
         }
         payload.livenessChallengeId = active.challenge_id;
         payload.livenessFrames = uploads;
@@ -540,15 +551,26 @@ function LocationStatus({ location }: { location: UseQueryResult<DeviceLocation>
     return <LocationLine loading tint={colors.primary} background={colors.primarySoft} message="Membaca lokasi…" />;
   }
   if (location.isError) {
-    if (location.error instanceof LocationDeniedError) {
-      const canAskAgain = location.error.canAskAgain;
+    const error = location.error;
+    if (error instanceof LocationDeniedError || error instanceof ApproximateLocationError) {
       return (
         <LocationLine
           icon="location-outline"
           tint={colors.danger}
           background={colors.dangerSoft}
-          message="Izin lokasi ditolak. Presensi butuh lokasi, aktifkan izin lokasi untuk aplikasi ini."
-          right={canAskAgain ? <RetryPill label="Izinkan" onPress={() => location.refetch()} /> : <RetryPill label="Pengaturan" onPress={() => Linking.openSettings()} />}
+          message={error.message}
+          right={error.canAskAgain ? <RetryPill label="Izinkan" onPress={() => location.refetch()} /> : <RetryPill label="Pengaturan" onPress={() => Linking.openSettings()} />}
+        />
+      );
+    }
+    if (isServicesOffError(error)) {
+      return (
+        <LocationLine
+          icon="location-outline"
+          tint={colors.danger}
+          background={colors.dangerSoft}
+          message={locationErrorMessage(error)}
+          right={<RetryPill label="Aktifkan" onPress={() => void enableDeviceLocation().then(() => location.refetch())} />}
         />
       );
     }
@@ -557,7 +579,7 @@ function LocationStatus({ location }: { location: UseQueryResult<DeviceLocation>
         icon="alert-circle"
         tint={colors.danger}
         background={colors.dangerSoft}
-        message={`Lokasi gagal dibaca. ${errorMessage(location.error)}`}
+        message={locationErrorMessage(error)}
         right={<RetryPill label="Ulangi" onPress={() => location.refetch()} />}
       />
     );
@@ -568,6 +590,7 @@ function LocationStatus({ location }: { location: UseQueryResult<DeviceLocation>
   }
   const accuracy = location.data.accuracy !== null ? ` Akurasi ±${formatDistance(location.data.accuracy)}.` : '';
   const nearest = location.data.nearest;
+  const lowAccuracy = location.data.accuracy !== null && location.data.accuracy > LOW_ACCURACY_METERS;
   if (!nearest) {
     return <LocationLine icon="location" tint={colors.success} background={colors.successSoft} message={`Lokasi terbaca.${accuracy}`} right={reread} />;
   }
@@ -579,12 +602,15 @@ function LocationStatus({ location }: { location: UseQueryResult<DeviceLocation>
       message={
         nearest.inside
           ? `Di area ${nearest.name} (${formatDistance(nearest.distance)} dari titik kantor).`
-          : `${formatDistance(nearest.distance)} dari ${nearest.name}, di luar radius ${nearest.radius} m. Presensi akan menunggu persetujuan atasan.`
+          : `${formatDistance(nearest.distance)} dari ${nearest.isScheduledOutlet ? `outlet jadwal (${nearest.name})` : nearest.name}, di luar radius ${nearest.radius} m.${lowAccuracy ? ` Akurasi GPS rendah (±${formatDistance(location.data.accuracy ?? 0)}), tunggu sebentar lalu tekan Perbarui.` : ''} Presensi akan menunggu persetujuan atasan.`
       }
       right={reread}
     />
   );
 }
+
+/** Above this accuracy radius an out-of-area reading is likely GPS drift, worth reading again. */
+const LOW_ACCURACY_METERS = 100;
 
 const SHUTTER_SIZE = 84;
 const FACE_GUIDE_SIZE = 232;

@@ -40,10 +40,20 @@ class CheckInRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'latitude.numeric' => 'Lokasi GPS tidak valid. Perbarui lokasi lalu coba lagi.',
+            'latitude.between' => 'Lokasi GPS tidak valid. Perbarui lokasi lalu coba lagi.',
+            'longitude.numeric' => 'Lokasi GPS tidak valid. Perbarui lokasi lalu coba lagi.',
+            'longitude.between' => 'Lokasi GPS tidak valid. Perbarui lokasi lalu coba lagi.',
+            'accuracy.numeric' => 'Akurasi GPS tidak valid. Perbarui lokasi lalu coba lagi.',
+            'accuracy.min' => 'Akurasi GPS tidak valid. Perbarui lokasi lalu coba lagi.',
+            'is_mocked.boolean' => 'Status lokasi palsu tidak valid. Perbarui aplikasi lalu coba lagi.',
+            'photo.uploaded' => 'Foto selfie gagal terunggah. Periksa koneksi lalu coba lagi.',
             'photo.image' => 'Foto selfie harus berupa berkas gambar.',
             'photo.mimes' => 'Foto selfie harus berformat jpeg, png, jpg, atau webp.',
             'photo.max' => 'Foto selfie maksimal berukuran 5MB.',
             'liveness_frames.max' => 'Jumlah foto liveness tidak sesuai. Mulai ulang verifikasi.',
+            'liveness_frames.array' => 'Foto liveness tidak sesuai. Mulai ulang verifikasi.',
+            'liveness_frames.*.uploaded' => 'Foto liveness gagal terunggah. Periksa koneksi lalu coba lagi.',
             'liveness_frames.*.image' => 'Foto liveness harus berupa berkas gambar.',
             'liveness_frames.*.mimes' => 'Foto liveness harus berformat jpeg, png, jpg, atau webp.',
             'liveness_frames.*.max' => 'Setiap foto liveness maksimal berukuran 5MB.',

@@ -42,8 +42,13 @@ class CompreFaceVerifier implements FaceVerifier
         $selfie = $this->images->read($selfiePath);
         $master = $this->images->read($masterPath);
 
-        if (! $selfie || ! $master) {
-            return new FaceMatch(false, 0, 'Gagal membaca berkas foto master atau foto selfie dari storage.');
+        if (! $master) {
+            return new FaceMatch(false, 0, FaceMatch::MASTER_MISSING);
+        }
+
+        if (! $selfie) {
+            // The selfie was stored moments ago, so this is a storage problem: resend, not retake.
+            throw new FaceServiceUnavailable('Gagal membaca foto selfie dari storage.');
         }
 
         $response = $this->send(
