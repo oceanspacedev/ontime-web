@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -50,15 +51,24 @@ class TalentaEmployeeImportService
      */
     private array $summary;
 
+    /** The Klien this import works in; null keeps the companies without a Klien. */
+    private ?int $tenantId = null;
+
+    private bool $createCompanies = false;
+
     public function __construct(private ApprovalFlowService $approvalFlowService) {}
 
     /**
      * @param  list<int>|null  $allowedCompanyIds  null = every company; otherwise only rows of these companies are imported and no company is created
+     * @param  int|null  $tenantId  the Klien imported into: only its companies are matched and new ones belong to it
+     * @param  bool  $createCompanies  create missing companies even with $allowedCompanyIds set (the PIC importing into their own Klien)
      * @return array{success: bool, message: string, dry_run: bool, total: int, created: int, updated: int, unchanged: int, reactivated: int, moved: int, deactivated: int, skipped: int, new_companies: list<string>, new_divisions: int, new_job_titles: int, errors: list<string>}
      */
-    public function importFromContent(string $content, bool $dryRun = false, bool $deactivateMissing = false, ?array $allowedCompanyIds = null): array
+    public function importFromContent(string $content, bool $dryRun = false, bool $deactivateMissing = false, ?array $allowedCompanyIds = null, ?int $tenantId = null, bool $createCompanies = false): array
     {
         $this->resetSummary();
+        $this->tenantId = $tenantId;
+        $this->createCompanies = $createCompanies;
 
         try {
             $rows = $this->extractRows($this->decode($content));
@@ -147,7 +157,8 @@ class TalentaEmployeeImportService
             }
         }
 
-        $employee = Employee::query()->with(['division', 'jobTitle'])->where('nip', $nip)->first();
+        // NIPs are only unique inside a Klien: never match another client's employee.
+        $employee = Employee::query()->with(['division', 'jobTitle'])->whereIn('company_id', $this->tenantCompanies()->select('id'))->where('nip', $nip)->first();
 
         if ($employee && $allowedCompanyIds !== null && ! in_array((int) $employee->company_id, $allowedCompanyIds, true)) {
             $this->skip("{$label}: karyawan terdaftar di badan usaha di luar akses Anda.");
@@ -165,7 +176,7 @@ class TalentaEmployeeImportService
 
         $talentaId = filled($row['id'] ?? null) ? (string) $row['id'] : null;
 
-        if ($talentaId && Employee::query()->where('talenta_id', $talentaId)->where('nip', '!=', $nip)->exists()) {
+        if ($talentaId && Employee::query()->whereIn('company_id', $this->tenantCompanies()->select('id'))->where('talenta_id', $talentaId)->where('nip', '!=', $nip)->exists()) {
             throw new RuntimeException("ID Talenta {$talentaId} sudah dipakai karyawan lain.");
         }
 
@@ -237,11 +248,13 @@ class TalentaEmployeeImportService
             return $allowedCompanyIds === null || in_array((int) $company->id, $allowedCompanyIds, true) ? $company : null;
         }
 
-        if ($allowedCompanyIds !== null) {
+        if ($allowedCompanyIds !== null && ! $this->createCompanies) {
             return null;
         }
 
-        $company = Company::create(['name' => $branch, 'code' => $this->companyCodeFor($branch), 'is_active' => true]);
+        $company = new Company(['name' => $branch, 'code' => $this->companyCodeFor($branch), 'is_active' => true]);
+        $company->tenant_id = $this->tenantId;
+        $company->save();
         $this->approvalFlowService->createDefaultFlows($company);
 
         $this->companies[$this->normalize($branch)] = $company;
@@ -321,16 +334,30 @@ class TalentaEmployeeImportService
         $code = $base;
         $suffix = 2;
 
-        while (Company::query()->where('code', $code)->exists()) {
+        while ($this->tenantCompanies()->where('code', $code)->exists()) {
             $code = $base.$suffix++;
         }
 
         return $code;
     }
 
+    /**
+     * Companies of the Klien this import works in.
+     *
+     * @return Builder<Company>
+     */
+    private function tenantCompanies(): Builder
+    {
+        return Company::query()->when(
+            $this->tenantId === null,
+            fn ($query) => $query->whereNull('tenant_id'),
+            fn ($query) => $query->where('tenant_id', $this->tenantId),
+        );
+    }
+
     private function warmCaches(): void
     {
-        $this->companies = Company::query()->get()->keyBy(fn (Company $company): string => $this->normalize($company->name))->all();
+        $this->companies = $this->tenantCompanies()->get()->keyBy(fn (Company $company): string => $this->normalize($company->name))->all();
 
         $this->divisions = Division::query()
             ->get(['id', 'parent_id', 'name', 'company_id'])

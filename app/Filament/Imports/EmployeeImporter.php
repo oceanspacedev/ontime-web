@@ -139,7 +139,7 @@ class EmployeeImporter extends Importer
 
     public function resolveRecord(): Employee
     {
-        $employee = Employee::query()->firstOrNew(['nip' => trim((string) $this->data['nip'])]);
+        $employee = $this->withinImportTenant(Employee::query())->firstOrNew(['nip' => trim((string) $this->data['nip'])]);
         $this->guardExistingRecord($employee);
 
         return $employee;

@@ -30,7 +30,7 @@ class AuthController extends Controller
 
         $user = Auth::user();
 
-        if (! $user->is_active) {
+        if (! $user->canSignIn()) {
             Auth::guard('web')->logout();
 
             return response()->json(['message' => self::INACTIVE_MESSAGE], 403);

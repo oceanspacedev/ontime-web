@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\DataScope;
+use App\Enums\SystemRole;
 use App\Services\DataAccessService;
 use App\Traits\HasNormalizedPhone;
 use App\Traits\PreventsDeletionWhileInUse;
@@ -13,6 +14,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -21,7 +23,7 @@ use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
-#[Fillable(['name', 'email', 'phone', 'password', 'is_active', 'data_scope'])]
+#[Fillable(['tenant_id', 'name', 'email', 'phone', 'password', 'is_active', 'data_scope'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable implements FilamentUser
 {
@@ -42,7 +44,8 @@ class User extends Authenticatable implements FilamentUser
 
     /**
      * The one account that owns this phone number, on the account itself or on its linked employee,
-     * intern or freelancer record. A number shared by several accounts matches nobody.
+     * intern or freelancer record. A number shared by several accounts matches the one of them that
+     * can sign in, and nobody when that is still ambiguous.
      */
     public static function findByPhone(string $phone): ?self
     {
@@ -64,7 +67,15 @@ class User extends Authenticatable implements FilamentUser
             ->map(fn ($id): int => (int) $id)
             ->unique();
 
-        return $userIds->count() === 1 ? static::query()->find($userIds->first()) : null;
+        if ($userIds->count() === 1) {
+            return static::query()->find($userIds->first());
+        }
+
+        // A number shared with an inactive account (for example a crew record of another Klien whose
+        // contract ended) must not lock out the one account that can sign in.
+        $usable = static::query()->whereIn('id', $userIds)->get()->filter(fn (User $user): bool => $user->canSignIn());
+
+        return $usable->count() === 1 ? $usable->first() : null;
     }
 
     /**
@@ -80,6 +91,37 @@ class User extends Authenticatable implements FilamentUser
             'is_active' => 'boolean',
             'data_scope' => DataScope::class,
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // An account made by a client's own account belongs to that client's Klien.
+        static::creating(function (User $account): void {
+            if ($account->tenant_id === null && ($actor = auth()->user()) instanceof User && ! $actor->isPlatformAdmin()) {
+                $account->tenant_id = $actor->tenant_id;
+            }
+        });
+    }
+
+    /**
+     * The platform owner: outside every Klien, sees and manages everything.
+     */
+    public function isPlatformAdmin(): bool
+    {
+        return $this->hasRole(SystemRole::Superadmin->value);
+    }
+
+    /**
+     * The PIC of a Klien: an Admin who also adds Badan Usaha and Admin accounts for their client.
+     */
+    public function isTenantOwner(): bool
+    {
+        return $this->hasRole(SystemRole::Pic->value) && ! $this->isPlatformAdmin();
+    }
+
+    public function tenant(): BelongsTo
+    {
+        return $this->belongsTo(Tenant::class);
     }
 
     public function employee(): HasOne
@@ -229,10 +271,23 @@ class User extends Authenticatable implements FilamentUser
         return $this->hasRole('Employee') && $this->employee?->is($employee);
     }
 
+    /**
+     * The account may sign in: switched on, and its Klien (if any) is active.
+     */
+    public function canSignIn(): bool
+    {
+        // Only an account switched off explicitly is blocked; an unset flag counts as active, as before.
+        if ($this->is_active === false) {
+            return false;
+        }
+
+        return $this->tenant_id === null || (bool) $this->tenant()->value('is_active');
+    }
+
     public function canAccessPanel(Panel $panel): bool
     {
-        // Require the user to be active (if you use that field)
-        if (isset($this->is_active) && ! $this->is_active) {
+        // An inactive account, or an account of an inactive Klien, has no access.
+        if (! $this->canSignIn()) {
             return false;
         }
 

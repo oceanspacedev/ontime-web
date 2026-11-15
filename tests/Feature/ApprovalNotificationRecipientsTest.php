@@ -95,7 +95,8 @@ class ApprovalNotificationRecipientsTest extends TestCase
 
         $options = array_keys(ApprovalFlowResource::approverRoleOptions());
         sort($options);
-        $this->assertSame(['Admin', 'Approver', 'BOD', 'Koordinator', 'Superadmin'], $options);
+        // The platform Superadmin is not a client's approver.
+        $this->assertSame(['Admin', 'Approver', 'BOD', 'Koordinator'], $options);
 
         $this->assertFalse(ApprovalFlowService::hasHolderForRole('BOD', $this->company->id));
         $this->user('BOD', DataScope::Companies, companyIds: [$this->company->id]);

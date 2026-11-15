@@ -36,16 +36,21 @@ class ObservabilityAccessTest extends TestCase
         $this->get('/log-viewer')->assertForbidden();
     }
 
-    public function test_superadmin_and_admin_with_full_data_access_can_open_both(): void
+    public function test_only_the_superadmin_can_open_both(): void
     {
         $superadmin = $this->makeUser('Superadmin');
-        $globalAdmin = $this->makeUser('Admin', DataScope::All);
 
-        foreach ([$superadmin, $globalAdmin] as $user) {
-            $this->assertTrue(ObservabilityAccess::allowed($user));
-            $this->actingAs($user)->get('/horizon')->assertOk();
-            $this->actingAs($user)->get('/log-viewer')->assertOk();
-        }
+        $this->assertTrue(ObservabilityAccess::allowed($superadmin));
+        $this->actingAs($superadmin)->get('/horizon')->assertOk();
+        $this->actingAs($superadmin)->get('/log-viewer')->assertOk();
+
+        // "Semua" of a client Admin is every company of their Klien, not the platform: Horizon and the
+        // Log Viewer show every client's data.
+        $clientAdmin = $this->makeUser('Admin', DataScope::All);
+
+        $this->assertFalse(ObservabilityAccess::allowed($clientAdmin));
+        $this->actingAs($clientAdmin)->get('/horizon')->assertForbidden();
+        $this->actingAs($clientAdmin)->get('/log-viewer')->assertForbidden();
     }
 
     public function test_company_admin_and_non_managers_are_refused(): void

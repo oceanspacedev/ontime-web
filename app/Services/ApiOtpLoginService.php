@@ -296,7 +296,7 @@ class ApiOtpLoginService
      */
     private function verified(User $user): array
     {
-        if (! $user->is_active) {
+        if (! $user->canSignIn()) {
             return ['ok' => false, 'status' => 'inactive', 'user' => $user, 'retry_after' => 0];
         }
 

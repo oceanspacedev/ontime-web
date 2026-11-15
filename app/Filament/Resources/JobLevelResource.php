@@ -16,6 +16,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
 
 class JobLevelResource extends Resource
@@ -38,6 +39,29 @@ class JobLevelResource extends Resource
 
         // Reference data for the whole group: Superadmin, and the Admins (HR) who manage workers.
         return (bool) ($user?->hasRole('Superadmin') || ($user?->hasRole('Admin') && $user->canManageWorkers()));
+    }
+
+    /**
+     * Shared by every client, so only the platform Superadmin changes it; Admins pick from it.
+     */
+    public static function canCreate(): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
     }
 
     public static function form(Schema $schema): Schema

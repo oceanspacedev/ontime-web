@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\DataAccessService;
 use Carbon\Carbon;
 use Filament\Actions\Imports\Exceptions\RowImportFailedException;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 use Throwable;
@@ -41,6 +42,38 @@ trait ResolvesWorkerPlacement
         }
     }
 
+    /**
+     * Companies of the importing user's Klien; null for the Superadmin, who imports anywhere.
+     *
+     * @return list<int>|null
+     */
+    protected function importTenantCompanyIds(): ?array
+    {
+        $user = $this->importingUser();
+
+        if (! $user) {
+            return [];
+        }
+
+        return $user->isPlatformAdmin() ? null : DataAccessService::tenantCompanyIds($user);
+    }
+
+    /**
+     * Limit a workers query to the importing user's Klien, so a number used by another client never
+     * matches (company codes and worker numbers are only unique inside a Klien).
+     *
+     * @template TModel of Model
+     *
+     * @param  Builder<TModel>  $query
+     * @return Builder<TModel>
+     */
+    protected function withinImportTenant(Builder $query): Builder
+    {
+        $companyIds = $this->importTenantCompanyIds();
+
+        return $companyIds === null ? $query : $query->whereIn($query->qualifyColumn('company_id'), $companyIds === [] ? [0] : $companyIds);
+    }
+
     protected function companyFromState(mixed $value): Company
     {
         $key = Str::upper(trim((string) $value));
@@ -49,9 +82,11 @@ trait ResolvesWorkerPlacement
             $this->failRow('Badan usaha wajib diisi.');
         }
 
+        $tenantCompanyIds = $this->importTenantCompanyIds();
+
         $company = $this->companyCache[$key] ??= Company::query()
-            ->whereRaw('UPPER(code) = ?', [$key])
-            ->orWhereRaw('UPPER(name) = ?', [$key])
+            ->when($tenantCompanyIds !== null, fn (Builder $query) => $query->whereIn('id', $tenantCompanyIds === [] ? [0] : $tenantCompanyIds))
+            ->where(fn (Builder $query) => $query->whereRaw('UPPER(code) = ?', [$key])->orWhereRaw('UPPER(name) = ?', [$key]))
             ->first() ?? $this->failRow("Badan usaha \"{$value}\" tidak ditemukan.");
 
         $placeable = $this->importingUser() ? DataAccessService::placeableCompanyIds($this->importingUser()) : [];
@@ -191,7 +226,7 @@ trait ResolvesWorkerPlacement
             return null;
         }
 
-        $employee = Employee::query()->where('nip', $nip)->first() ?? $this->failRow("{$label} dengan NIP {$nip} tidak ditemukan.");
+        $employee = $this->withinImportTenant(Employee::query())->where('nip', $nip)->first() ?? $this->failRow("{$label} dengan NIP {$nip} tidak ditemukan.");
 
         if (! $this->importingUser()?->canManageWorker($employee)) {
             $this->failRow("{$label} dengan NIP {$nip} di luar akses Anda.");

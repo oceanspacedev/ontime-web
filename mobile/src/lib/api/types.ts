@@ -399,6 +399,14 @@ export interface UserAccess {
   is_coordinator: boolean;
   /** CESA food waste report link, for coordinators and F&B crew; null for everyone else. */
   waste_url?: string | null;
+  /** Kelola Klien from the app; missing on servers older than the client admin feature. */
+  client_admin?: ClientAdminAccess;
+}
+
+export interface ClientAdminAccess {
+  is_pic: boolean;
+  can_manage_companies: boolean;
+  can_manage_accounts: boolean;
 }
 
 export type WorkerType = 'employee' | 'intern' | 'freelancer';
@@ -552,4 +560,215 @@ export interface TeamRecapRow {
 export interface TeamRecap {
   month: string;
   data: TeamRecapRow[];
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Kelola Klien: a PIC or Admin runs their Klien's companies, policies, locations and accounts.
+ * -----------------------------------------------------------------------------------------------*/
+
+export interface ClientPermissions {
+  is_pic: boolean;
+  can_manage_companies: boolean;
+  can_create_company: boolean;
+  can_manage_accounts: boolean;
+}
+
+export interface ClientTenant {
+  id: number;
+  name: string;
+}
+
+export interface CompanySummary {
+  id: number;
+  name: string;
+  code: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  is_active: boolean;
+  mode_label: string;
+  locations_count: number;
+  divisions_count: number;
+  /** Employees, interns and freelancers together. */
+  workers_count: number;
+}
+
+export interface ClientOverview {
+  permissions: ClientPermissions;
+  tenant: ClientTenant | null;
+  companies: CompanySummary[];
+}
+
+export interface CompanyInput {
+  name: string;
+  code: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  is_active?: boolean;
+}
+
+export type MockLocationAction = PolicyFailAction;
+export type FaceFailAction = PolicyFailAction;
+export type PolicySelfieMode = SelfieMode;
+
+export interface ClientPolicy {
+  late_tolerance_minutes: number;
+  require_gps: boolean;
+  geofence_radius_meters: number;
+  mock_location_action: MockLocationAction;
+  selfie_mode: PolicySelfieMode;
+  face_match_threshold: number;
+  face_fail_action: FaceFailAction;
+  annual_leave_quota: number;
+  default_approval_stages: number;
+  /** HH:MM */
+  work_start_time: string;
+  /** HH:MM */
+  work_end_time: string;
+  mode_label: string;
+}
+
+export type ClientPolicyInput = Omit<ClientPolicy, 'mode_label'>;
+
+export interface OptionItem<T extends string = string> {
+  value: T;
+  label: string;
+}
+
+export interface SelfieModeOption extends OptionItem<PolicySelfieMode> {
+  description: string;
+  /** False when the server cannot offer it, like liveness without CompreFace. */
+  available: boolean;
+}
+
+export interface PolicyOptions {
+  selfie_modes: SelfieModeOption[];
+  mock_location_actions: OptionItem<MockLocationAction>[];
+  face_fail_actions: OptionItem<FaceFailAction>[];
+}
+
+export interface ClientPolicyResponse {
+  data: ClientPolicy;
+  options: PolicyOptions;
+  /** GPS can only be required once the company has a location. */
+  has_locations: boolean;
+}
+
+export interface ClientLocation {
+  id: number;
+  company_id: number;
+  division_id: number | null;
+  name: string;
+  address: string | null;
+  latitude: number;
+  longitude: number;
+  radius_meters: number | null;
+  is_active: boolean;
+}
+
+export interface LocationInput {
+  name: string;
+  address?: string | null;
+  latitude: number;
+  longitude: number;
+  radius_meters?: number | null;
+  division_id?: number | null;
+  is_active?: boolean;
+}
+
+export interface ClientDivision {
+  id: number;
+  company_id: number;
+  parent_id: number | null;
+  name: string;
+  code: string | null;
+  is_active: boolean;
+  /** "Parent > Child" */
+  path: string;
+}
+
+export interface DivisionInput {
+  name: string;
+  code?: string | null;
+  parent_id?: number | null;
+  is_active?: boolean;
+}
+
+export type DataScope = 'all' | 'companies' | 'divisions' | 'own';
+
+export interface ClientAccount {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  is_active: boolean;
+  roles: string[];
+  data_scope: DataScope;
+  data_scope_label: string;
+  companies: NamedRef[];
+  divisions: NamedRef[];
+  worker: { type: WorkerType; id: number; name: string; company: string | null } | null;
+  can_edit: boolean;
+}
+
+export interface AccountInput {
+  name: string;
+  /** Only sent when creating; the email cannot be changed afterwards. */
+  email?: string;
+  phone?: string | null;
+  roles: string[];
+  data_scope: DataScope;
+  company_ids?: number[];
+  division_ids?: number[];
+  /** Only sent when updating. */
+  is_active?: boolean;
+}
+
+export type NewAccountInput = AccountInput & { email: string };
+export type UpdateAccountInput = Omit<AccountInput, 'email'> & { is_active: boolean };
+
+export interface DataScopeOption extends OptionItem<DataScope> {
+  description: string;
+}
+
+export interface AccountOptions {
+  roles: string[];
+  scopes: DataScopeOption[];
+  companies: NamedRef[];
+  divisions: { id: number; company_id: number; label: string }[];
+}
+
+export interface AccountCredentials {
+  email: string;
+  password: string;
+  whatsapp_sent: boolean;
+  wa_url: string | null;
+}
+
+export interface ClientAccountsPagination {
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
+}
+
+export type ClientAccountList = Paginated<ClientAccount, ClientAccountsPagination>;
+
+export interface SavedResponse<T> {
+  message: string;
+  data: T;
+}
+
+export interface NewAccountResponse extends SavedResponse<ClientAccount> {
+  credentials: AccountCredentials;
+}
+
+export interface ResetPasswordResponse {
+  message: string;
+  credentials: AccountCredentials;
 }

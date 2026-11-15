@@ -67,11 +67,16 @@ class AccountDataAccessDelegationTest extends TestCase
 
     public function test_an_admin_cannot_manage_or_link_an_approver_account_reaching_another_company(): void
     {
-        $inReach = $this->account('Approver', DataScope::Companies, [$this->companyA->id]);
-        $broader = $this->account('BOD', DataScope::Companies, [$this->companyA->id, $this->companyB->id]);
-        $everything = $this->account('BOD', DataScope::All);
-        $otherCompany = $this->account('Approver', DataScope::Companies, [$this->companyB->id]);
+        // Every account works in company A, so only their data access decides whether they are in reach.
+        $inReach = $this->workerAccountWithAccess('Approver', DataScope::Companies, [$this->companyA->id]);
+        $broader = $this->workerAccountWithAccess('BOD', DataScope::Companies, [$this->companyA->id, $this->companyB->id]);
+        $everything = $this->workerAccountWithAccess('BOD', DataScope::All);
+        $otherCompany = $this->workerAccountWithAccess('Approver', DataScope::Companies, [$this->companyB->id]);
+        $unlinked = $this->account('Approver', DataScope::Companies, [$this->companyA->id]);
         $this->actingAs($this->adminA);
+
+        $this->assertFalse(ScopesToManagedCompanies::canManageAccount($unlinked), 'Only the PIC or a manager with data access "Semua" manages accounts without a worker profile.');
+        $this->assertArrayNotHasKey($unlinked->id, ScopesToManagedCompanies::assignableUserOptions());
 
         $this->assertTrue(ScopesToManagedCompanies::canManageAccount($inReach));
         $this->assertFalse(ScopesToManagedCompanies::canManageAccount($broader));
@@ -158,6 +163,17 @@ class AccountDataAccessDelegationTest extends TestCase
         $user->grantDataAccess($scope, companyIds: $companyIds, divisionIds: $divisionIds);
 
         return $user;
+    }
+
+    /**
+     * @param  list<int>  $companyIds
+     */
+    private function workerAccountWithAccess(string $role, DataScope $scope, array $companyIds = []): User
+    {
+        $user = $this->workerAccount($this->companyA, $role);
+        $user->grantDataAccess($scope, companyIds: $companyIds);
+
+        return $user->fresh();
     }
 
     private function workerAccount(Company $company, string $role): User

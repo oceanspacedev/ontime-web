@@ -93,7 +93,7 @@ class MasterDataApiController extends Controller
 
     public function jobTitles(Request $request): JsonResponse
     {
-        $query = JobTitle::with('division');
+        $query = JobTitle::with('division')->visibleTo($request->user());
 
         if ($request->has('division_id')) {
             $query->where('division_id', $request->input('division_id'));
@@ -102,9 +102,9 @@ class MasterDataApiController extends Controller
         return response()->json(['data' => $query->get()]);
     }
 
-    public function showJobTitle(int $id): JsonResponse
+    public function showJobTitle(Request $request, int $id): JsonResponse
     {
-        $jobTitle = JobTitle::with('division')->findOrFail($id);
+        $jobTitle = JobTitle::with('division')->visibleTo($request->user())->findOrFail($id);
 
         return response()->json(['data' => $jobTitle]);
     }
@@ -189,7 +189,7 @@ class MasterDataApiController extends Controller
 
     public function holidays(Request $request): JsonResponse
     {
-        $query = Holiday::query();
+        $query = $this->visibleHolidays($request);
 
         if ($request->has('year')) {
             $query->whereYear('date', $request->input('year'));
@@ -198,11 +198,26 @@ class MasterDataApiController extends Controller
         return response()->json(['data' => $query->orderBy('date')->get()]);
     }
 
-    public function showHoliday(int $id): JsonResponse
+    public function showHoliday(Request $request, int $id): JsonResponse
     {
-        $holiday = Holiday::findOrFail($id);
+        $holiday = $this->visibleHolidays($request)->findOrFail($id);
 
         return response()->json(['data' => $holiday]);
+    }
+
+    /**
+     * National holidays (no company) plus those of the companies the user can see; never another
+     * client's company holidays.
+     *
+     * @return Builder<Holiday>
+     */
+    private function visibleHolidays(Request $request): Builder
+    {
+        $companyIds = DataAccessService::visibleCompanyIds($request->user());
+
+        return Holiday::query()->when($companyIds !== null, fn ($query) => $query->where(fn ($visible) => $visible
+            ->whereNull('company_id')
+            ->orWhereIn('company_id', $companyIds === [] ? [0] : $companyIds)));
     }
 
     public function approvalFlows(Request $request): JsonResponse

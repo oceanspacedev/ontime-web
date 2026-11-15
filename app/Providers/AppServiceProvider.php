@@ -80,6 +80,22 @@ class AppServiceProvider extends ServiceProvider
         $this->explainBlockedDeletions();
         $this->limitOtpLogin();
         $this->limitPasswordLogin();
+        $this->limitClientAccountCredentials();
+    }
+
+    /**
+     * Each new account and password reset from the app sends credentials over WhatsApp: 10 a minute
+     * per signed-in user.
+     */
+    private function limitClientAccountCredentials(): void
+    {
+        RateLimiter::for('client-account-credentials', fn (Request $request): Limit => Limit::perMinute(10)
+            ->by('client-account-credentials:'.($request->user()?->getAuthIdentifier() ?? $request->ip()))
+            ->response(fn (Request $request, array $headers) => response()->json(
+                ['message' => 'Terlalu banyak permintaan. Silakan coba lagi sebentar lagi.', 'retry_after' => (int) ($headers['Retry-After'] ?? 60)],
+                429,
+                $headers,
+            )));
     }
 
     /**

@@ -35,4 +35,12 @@ export const queryKeys = {
   teamWorkers: (search: string) => ['team', 'workers', search] as const,
   teamFreelancers: (status: string, search: string) => ['team', 'freelancers', status, search] as const,
   teamRecap: (month: string) => ['team', 'recap', month] as const,
+  client: ['client'] as const,
+  clientOverview: ['client', 'overview'] as const,
+  clientPolicy: (companyId: number) => ['client', 'company', companyId, 'policy'] as const,
+  clientLocations: (companyId: number) => ['client', 'company', companyId, 'locations'] as const,
+  clientDivisions: (companyId: number) => ['client', 'company', companyId, 'divisions'] as const,
+  clientAccount: (id: number) => ['client', 'account', id] as const,
+  clientAccounts: (search: string, page: number) => ['client', 'accounts', search, page] as const,
+  clientAccountOptions: ['client', 'accounts', 'options'] as const,
 };

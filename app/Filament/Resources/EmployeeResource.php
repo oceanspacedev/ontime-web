@@ -39,6 +39,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Validation\Rules\Unique;
 use UnitEnum;
 
 class EmployeeResource extends Resource
@@ -88,7 +89,7 @@ class EmployeeResource extends Resource
                                     TextInput::make('nip')
                                         ->label('NIP')
                                         ->required()
-                                        ->unique(ignoreRecord: true)
+                                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => static::uniqueWithinTenant($rule, $get('company_id')))
                                         ->maxLength(50),
 
                                     TextInput::make('full_name')

@@ -58,7 +58,7 @@ class EmailOtpService
 
         $user = $matches->count() === 1 ? $matches->first() : null;
 
-        return $user?->is_active || ($user && $includeInactive) ? $user : null;
+        return $user?->canSignIn() || ($user && $includeInactive) ? $user : null;
     }
 
     /**
@@ -179,7 +179,7 @@ class EmailOtpService
                 ->lockForUpdate()
                 ->first();
 
-            if (! $user || ! $record || (! $user->is_active && ! $allowInactive) || ! $this->isUsable($record)
+            if (! $user || ! $record || (! $user->canSignIn() && ! $allowInactive) || ! $this->isUsable($record)
                 || self::normalizeEmail($user->email) !== $record->email) {
                 return null;
             }

@@ -211,7 +211,7 @@ class ShiftResource extends Resource
 
                 SelectFilter::make('division_id')
                     ->label('Brand')
-                    ->relationship('division', 'name', fn (Builder $query): Builder => $query->whereIn('id', Shift::query()->whereNotNull('division_id')->select('division_id'))),
+                    ->relationship('division', 'name', fn (Builder $query): Builder => $query->whereIn('id', static::getEloquentQuery()->withoutEagerLoads()->reorder()->whereNotNull('division_id')->select('shifts.division_id'))),
 
                 TernaryFilter::make('is_active')
                     ->label('Status Aktif'),
