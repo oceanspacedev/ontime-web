@@ -12,6 +12,7 @@ use App\Models\Division;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\User;
+use App\Services\ClientAccountService;
 use App\Services\DataAccessService;
 use BackedEnum;
 use Closure;
@@ -36,6 +37,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Unique;
 use UnitEnum;
 
 class UserResource extends Resource
@@ -89,13 +91,27 @@ class UserResource extends Resource
     }
 
     /**
-     * Superadmin and an Admin with access to everything may give any data access.
+     * The Superadmin picks from every company and division on the platform; everyone else only from
+     * what they may give inside their own Klien.
      */
     protected static function canGrantEverything(): bool
     {
+        return (bool) auth()->user()?->hasRole(SystemRole::Superadmin->value);
+    }
+
+    /**
+     * The Klien whose companies the access pickers offer: the one picked in the form for the
+     * Superadmin, the user's own for everyone else.
+     */
+    protected static function formTenantId(Get $get): ?int
+    {
         $user = auth()->user();
 
-        return $user && DataAccessService::canGrantAccess($user, DataScope::All);
+        if ($user?->hasRole(SystemRole::Superadmin->value)) {
+            return filled($get('tenant_id')) ? (int) $get('tenant_id') : null;
+        }
+
+        return $user?->tenant_id;
     }
 
     /**
@@ -118,7 +134,11 @@ class UserResource extends Resource
         $user = auth()->user();
         $labels = static::divisionPathLabels();
 
-        if (! $user || static::canGrantEverything()) {
+        if (! $user) {
+            return [];
+        }
+
+        if (static::canGrantEverything()) {
             return $labels;
         }
 
@@ -195,7 +215,7 @@ class UserResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return static::canManageWorkerData() && ! static::isCoordinator();
+        return DataAccessService::canManageAccounts(auth()->user());
     }
 
     public static function canEdit(Model $record): bool
@@ -210,7 +230,7 @@ class UserResource extends Resource
 
     public static function canDeleteAny(): bool
     {
-        return auth()->user()?->hasRole('Superadmin') ?? false;
+        return (bool) auth()->user()?->hasRole('Superadmin') || DataAccessService::isTenantOwner(auth()->user());
     }
 
     public static function form(Schema $schema): Schema
@@ -250,6 +270,16 @@ class UserResource extends Resource
                                 ->live()
                                 ->required(),
 
+                            Select::make('tenant_id')
+                                ->label('Klien')
+                                ->relationship('tenant', 'name')
+                                ->searchable()
+                                ->preload()
+                                ->live()
+                                ->placeholder('Tanpa klien')
+                                ->helperText('Akun hanya melihat dan mengelola data milik kliennya. Kosongkan untuk Superadmin.')
+                                ->visible(fn (): bool => static::canGrantEverything()),
+
                             Toggle::make('has_employee_profile')
                                 ->label('Kelola data karyawan untuk akun ini')
                                 ->helperText('Matikan untuk akun tanpa data karyawan, misalnya Superadmin atau BOD. Data karyawan yang sudah ada tidak akan dihapus.')
@@ -261,7 +291,7 @@ class UserResource extends Resource
                                         $component->state($record->employee()->exists());
                                     }
                                 })
-                                ->visible(fn (callable $livewire) => (bool) auth()->user()?->hasRole('Superadmin') && static::canManageEmployeeProfile($livewire->record))
+                                ->visible(fn (callable $livewire) => ((bool) auth()->user()?->hasRole('Superadmin') || DataAccessService::isTenantOwner(auth()->user())) && static::canManageEmployeeProfile($livewire->record))
                                 ->columnSpanFull(),
                         ]),
                     ]),
@@ -273,10 +303,9 @@ class UserResource extends Resource
                     ->schema([
                         Select::make('data_scope')
                             ->label('Tingkat Akses')
-                            ->options(fn (): array => collect(DataScope::cases())
-                                ->reject(fn (DataScope $scope): bool => $scope === DataScope::All && ! static::canGrantEverything())
-                                ->mapWithKeys(fn (DataScope $scope): array => [$scope->value => $scope->getLabel()])
-                                ->all())
+                            ->options(fn (): array => auth()->user()
+                                ? collect(app(ClientAccountService::class)->grantableScopes(auth()->user()))->pluck('label', 'value')->all()
+                                : [])
                             ->default(DataScope::Own->value)
                             ->required()
                             ->live()
@@ -290,11 +319,13 @@ class UserResource extends Resource
                             })
                             ->helperText(fn (Get $get, ?User $record): string => $record?->hasRole(SystemRole::Superadmin->value)
                                 ? 'Superadmin selalu punya akses Semua, apa pun pilihan di sini.'
-                                : (string) static::selectedScope($get)?->getDescription()),
+                                : (static::selectedScope($get) === DataScope::All ? 'Seluruh badan usaha milik kliennya.' : (string) static::selectedScope($get)?->getDescription())),
 
                         Select::make('accessibleCompanies')
                             ->label('Badan Usaha')
-                            ->relationship('accessibleCompanies', 'name', fn (Builder $query) => static::canGrantEverything() ? $query : $query->whereIn('companies.id', DataAccessService::placeableCompanyIds(auth()->user()) ?? []))
+                            ->relationship('accessibleCompanies', 'name', fn (Builder $query, Get $get) => static::canGrantEverything()
+                                ? $query->when(static::formTenantId($get), fn (Builder $tenant, int $tenantId) => $tenant->where('companies.tenant_id', $tenantId))
+                                : $query->whereIn('companies.id', DataAccessService::placeableCompanyIds(auth()->user()) ?? []))
                             ->multiple()
                             ->preload()
                             ->searchable()
@@ -422,7 +453,7 @@ class UserResource extends Resource
                                 ->label('NIP Karyawan')
                                 ->placeholder('Contoh: EMP-001')
                                 ->required()
-                                ->unique('employees', 'nip', ignoreRecord: true)
+                                ->unique('employees', 'nip', ignorable: fn (callable $livewire) => $livewire->record?->employee, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => static::uniqueWithinTenant($rule, $get('company_id')))
                                 ->default(fn (callable $livewire) => $livewire->record?->employee?->nip ?? null),
 
                             TextInput::make('full_name')

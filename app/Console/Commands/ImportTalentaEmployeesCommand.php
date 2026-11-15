@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Tenant;
 use App\Services\TalentaEmployeeImportService;
 use Illuminate\Console\Command;
 
@@ -10,7 +11,8 @@ class ImportTalentaEmployeesCommand extends Command
     protected $signature = 'employees:import-talenta
         {path : Path ke file JSON hasil export "list employee" Talenta}
         {--dry-run : Hitung perubahan tanpa menyimpan}
-        {--deactivate-missing : Nonaktifkan karyawan aktif yang tidak ada di file (hanya badan usaha yang ada di file)}';
+        {--deactivate-missing : Nonaktifkan karyawan aktif yang tidak ada di file (hanya badan usaha yang ada di file)}
+        {--klien= : Kode klien tujuan; badan usaha baru dibuat di klien ini}';
 
     protected $description = 'Import atau sinkronkan data karyawan dari file JSON Talenta';
 
@@ -24,10 +26,29 @@ class ImportTalentaEmployeesCommand extends Command
             return self::FAILURE;
         }
 
+        $tenantId = null;
+        // With clients on the platform, an import without a Klien would make companies outside every client.
+        if (blank($this->option('klien')) && Tenant::query()->exists()) {
+            $this->error('Pilih klien tujuan dengan --klien=KODE.');
+
+            return self::FAILURE;
+        }
+
+        if (filled($this->option('klien'))) {
+            $tenantId = Tenant::query()->where('code', (string) $this->option('klien'))->value('id');
+
+            if (! $tenantId) {
+                $this->error("Klien dengan kode {$this->option('klien')} tidak ditemukan.");
+
+                return self::FAILURE;
+            }
+        }
+
         $result = $importService->importFromContent(
             (string) file_get_contents($path),
             dryRun: (bool) $this->option('dry-run'),
             deactivateMissing: (bool) $this->option('deactivate-missing'),
+            tenantId: $tenantId === null ? null : (int) $tenantId,
         );
 
         if (! $result['success']) {

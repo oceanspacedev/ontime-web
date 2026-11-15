@@ -123,7 +123,7 @@ class DivisionApprovalRuleTest extends TestCase
         $options = ApprovalFlowService::approverUserOptions($this->company->id);
 
         $this->assertArrayHasKey($inside->id, $options);
-        $this->assertArrayHasKey($this->superadmin->id, $options);
+        $this->assertArrayNotHasKey($this->superadmin->id, $options, 'The platform Superadmin is never named as a client approver.');
         $this->assertArrayNotHasKey($outside->id, $options);
 
         $this->expectException(ValidationException::class);

@@ -119,7 +119,7 @@ class FreelancerImporter extends Importer
 
     public function resolveRecord(): Freelancer
     {
-        $record = Freelancer::query()->firstOrNew(['freelancer_number' => trim((string) $this->data['freelancer_number'])]);
+        $record = $this->withinImportTenant(Freelancer::query())->firstOrNew(['freelancer_number' => trim((string) $this->data['freelancer_number'])]);
         $this->guardExistingRecord($record);
 
         return $record;

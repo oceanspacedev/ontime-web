@@ -120,7 +120,7 @@ class InternImporter extends Importer
 
     public function resolveRecord(): Intern
     {
-        $record = Intern::query()->firstOrNew(['nis' => trim((string) $this->data['nis'])]);
+        $record = $this->withinImportTenant(Intern::query())->firstOrNew(['nis' => trim((string) $this->data['nis'])]);
         $this->guardExistingRecord($record);
 
         return $record;

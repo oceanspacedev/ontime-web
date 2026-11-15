@@ -6,10 +6,13 @@ use App\Filament\Concerns\HasWorkerImportExport;
 use App\Filament\Exports\EmployeeExporter;
 use App\Filament\Imports\EmployeeImporter;
 use App\Filament\Resources\EmployeeResource;
+use App\Models\Tenant;
+use App\Services\DataAccessService;
 use App\Services\TalentaEmployeeImportService;
 use Filament\Actions;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
@@ -43,6 +46,13 @@ class ListEmployees extends ListRecords
             ->modalSubmitActionLabel('Proses')
             ->modalWidth('lg')
             ->schema([
+                Select::make('tenant_id')
+                    ->label('Klien Tujuan')
+                    ->options(fn (): array => Tenant::query()->orderBy('name')->pluck('name', 'id')->all())
+                    ->helperText('Karyawan dicocokkan dan badan usaha baru dibuat di klien ini.')
+                    ->required(fn (): bool => Tenant::query()->exists())
+                    ->visible(fn (): bool => (bool) auth()->user()?->isPlatformAdmin()),
+
                 FileUpload::make('file')
                     ->label('File JSON Talenta')
                     ->required()
@@ -74,6 +84,8 @@ class ListEmployees extends ListRecords
                     dryRun: (bool) ($data['dry_run'] ?? false),
                     deactivateMissing: (bool) ($data['deactivate_missing'] ?? false),
                     allowedCompanyIds: auth()->user()->manageableCompanyIds(),
+                    tenantId: auth()->user()->isPlatformAdmin() ? (filled($data['tenant_id'] ?? null) ? (int) $data['tenant_id'] : null) : auth()->user()->tenant_id,
+                    createCompanies: DataAccessService::isTenantOwner(auth()->user()),
                 );
 
                 $this->notifyImportResult($result);

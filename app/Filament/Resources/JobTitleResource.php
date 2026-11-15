@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\JobTitleResource\Pages;
 use App\Models\Division;
 use App\Models\JobTitle;
+use App\Services\DataAccessService;
 use BackedEnum;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -18,6 +19,8 @@ use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
 
 class JobTitleResource extends Resource
@@ -40,6 +43,29 @@ class JobTitleResource extends Resource
 
         // Reference data for the whole group: Superadmin, and the Admins (HR) who manage workers.
         return (bool) ($user?->hasRole('Superadmin') || ($user?->hasRole('Admin') && $user->canManageWorkers()));
+    }
+
+    /**
+     * Shared by every client, so only the platform Superadmin changes it; Admins pick from it.
+     */
+    public static function canCreate(): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return (bool) auth()->user()?->hasRole('Superadmin');
     }
 
     public static function form(Schema $schema): Schema
@@ -71,6 +97,32 @@ class JobTitleResource extends Resource
             ]);
     }
 
+    /**
+     * Shared titles plus the titles of the user's own Klien; another client's divisions stay hidden.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $user = auth()->user();
+
+        return $user ? parent::getEloquentQuery()->visibleTo($user) : parent::getEloquentQuery()->whereRaw('1 = 0');
+    }
+
+    /**
+     * Divisions of the user's Klien, labelled "Company - Division" (every division for the Superadmin).
+     *
+     * @return array<int, string>
+     */
+    public static function tenantDivisionOptions(): array
+    {
+        $user = auth()->user();
+
+        return Division::with('company')
+            ->when($user && ! $user->isPlatformAdmin(), fn ($query) => $query->whereIn('company_id', DataAccessService::tenantCompanyIds($user)))
+            ->get()
+            ->mapWithKeys(fn (Division $division): array => [$division->id => ($division->company?->name ?? 'Perusahaan').' - '.$division->name])
+            ->all();
+    }
+
     public static function table(Table $table): Table
     {
         return $table
@@ -100,13 +152,7 @@ class JobTitleResource extends Resource
             ->filters([
                 SelectFilter::make('division_id')
                     ->label('Divisi')
-                    ->options(function () {
-                        return Division::with('company')->get()->mapWithKeys(function ($division) {
-                            $companyName = $division->company?->name ?? 'Perusahaan';
-
-                            return [$division->id => "{$companyName} - {$division->name}"];
-                        });
-                    }),
+                    ->options(fn (): array => static::tenantDivisionOptions()),
             ])
             ->actions([
                 EditAction::make(),

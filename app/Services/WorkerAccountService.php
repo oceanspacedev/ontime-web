@@ -42,6 +42,8 @@ final class WorkerAccountService
 
         $user = DB::transaction(function () use ($worker, $email, $role, $password): User {
             $user = User::create([
+                // The account belongs to the Klien of the worker's company.
+                'tenant_id' => $worker->company()->value('tenant_id'),
                 'name' => $worker->full_name,
                 'email' => $email,
                 'phone' => $worker->phone,

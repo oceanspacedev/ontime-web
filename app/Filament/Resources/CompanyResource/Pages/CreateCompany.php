@@ -4,7 +4,7 @@ namespace App\Filament\Resources\CompanyResource\Pages;
 
 use App\Filament\Resources\CompanyResource;
 use App\Models\Company;
-use App\Services\ApprovalFlowService;
+use App\Services\CompanyProvisioningService;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateCompany extends CreateRecord
@@ -12,13 +12,13 @@ class CreateCompany extends CreateRecord
     protected static string $resource = CompanyResource::class;
 
     /**
-     * Without approval flows its workers cannot file any request, so a new company starts with the default stages.
+     * Default approval flows, and the new company stays in reach of the PIC who added it.
      */
     protected function afterCreate(): void
     {
         /** @var Company $company */
         $company = $this->record;
 
-        app(ApprovalFlowService::class)->createDefaultFlows($company);
+        app(CompanyProvisioningService::class)->provision($company, auth()->user());
     }
 }

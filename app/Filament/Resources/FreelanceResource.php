@@ -34,6 +34,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\Rules\Unique;
 use UnitEnum;
 
 class FreelanceResource extends Resource
@@ -78,7 +79,7 @@ class FreelanceResource extends Resource
                                     TextInput::make('freelancer_number')
                                         ->label('Nomor Freelance')
                                         ->placeholder('Otomatis')
-                                        ->unique(ignoreRecord: true)
+                                        ->unique(ignoreRecord: true, modifyRuleUsing: fn (Unique $rule, Get $get): Unique => static::uniqueWithinTenant($rule, $get('company_id')))
                                         ->maxLength(50),
 
                                     TextInput::make('full_name')
@@ -304,7 +305,7 @@ class FreelanceResource extends Resource
 
                 SelectFilter::make('supervisor_id')
                     ->label('PIC / Supervisor (Karyawan)')
-                    ->relationship('supervisor', 'full_name'),
+                    ->relationship('supervisor', 'full_name', fn (Builder $query) => static::scopeToManagedWorkers($query)),
 
                 SelectFilter::make('status')
                     ->label('Status')

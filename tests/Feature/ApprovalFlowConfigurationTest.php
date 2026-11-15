@@ -72,7 +72,7 @@ class ApprovalFlowConfigurationTest extends TestCase
             $this->createFlowStep($requestType);
         }
 
-        $step = fn (string $name): array => ['name' => $name, 'approver_type' => 'role', 'approver_role' => 'Superadmin', 'user_id' => null];
+        $step = fn (string $name): array => ['name' => $name, 'approver_type' => 'role', 'approver_role' => 'Approver', 'user_id' => null];
 
         $this->actingAs($this->superadmin);
 

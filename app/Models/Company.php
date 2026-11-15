@@ -6,6 +6,7 @@ use App\Traits\HasNormalizedPhone;
 use App\Traits\PreventsDeletionWhileInUse;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -14,6 +15,7 @@ class Company extends Model
     use HasFactory, HasNormalizedPhone, PreventsDeletionWhileInUse;
 
     protected $fillable = [
+        'tenant_id',
         'name',
         'code',
         'email',
@@ -35,6 +37,13 @@ class Company extends Model
 
     protected static function booted(): void
     {
+        // A company made by a client's own account belongs to that client's Klien.
+        static::creating(function (Company $company): void {
+            if ($company->tenant_id === null && ($actor = auth()->user()) instanceof User && ! $actor->isPlatformAdmin()) {
+                $company->tenant_id = $actor->tenant_id;
+            }
+        });
+
         static::created(function (Company $company) {
             $company->policy()->create([
                 'late_tolerance_minutes' => 15,
@@ -56,6 +65,11 @@ class Company extends Model
         }
 
         return null;
+    }
+
+    public function tenant(): BelongsTo
+    {
+        return $this->belongsTo(Tenant::class);
     }
 
     public function divisions(): HasMany

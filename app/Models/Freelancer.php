@@ -48,7 +48,9 @@ class Freelancer extends Model
         $code = Str::upper(Str::slug((string) Company::query()->whereKey($companyId)->value('code'), '')) ?: 'X';
         $prefix = "FL-{$code}-";
 
+        // Codes repeat across Klien, so the count runs per company.
         $last = static::query()
+            ->where('company_id', $companyId)
             ->where('freelancer_number', 'like', $prefix.'%')
             ->pluck('freelancer_number')
             ->map(fn (string $number): int => (int) Str::after($number, $prefix))
