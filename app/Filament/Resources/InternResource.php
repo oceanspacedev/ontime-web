@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\GuardsWorkerRecords;
 use App\Filament\Concerns\OpensWorkerAccounts;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MasterFacePhotoField;
@@ -12,8 +13,6 @@ use App\Models\Intern;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
@@ -36,6 +35,7 @@ use UnitEnum;
 
 class InternResource extends Resource
 {
+    use GuardsWorkerRecords;
     use OpensWorkerAccounts;
     use ScopesToManagedCompanies;
 
@@ -92,7 +92,8 @@ class InternResource extends Resource
                                     TextInput::make('phone')
                                         ->label('Telepon')
                                         ->tel()
-                                        ->maxLength(50),
+                                        ->maxLength(50)
+                                        ->rules([static::uniqueWorkerPhoneRule()]),
 
                                     TextInput::make('institution')
                                         ->label('Asal Sekolah / Kampus')
@@ -176,7 +177,8 @@ class InternResource extends Resource
 
                                     DatePicker::make('end_date')
                                         ->label('Selesai')
-                                        ->native(false),
+                                        ->native(false)
+                                        ->rules([static::contractEndDateRule()]),
 
                                     Select::make('status')
                                         ->label('Status')
@@ -198,7 +200,9 @@ class InternResource extends Resource
                                     Select::make('user_id')
                                         ->label('Akun User')
                                         ->placeholder('Belum ada akun')
-                                        ->options(fn (?Intern $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->options(fn (?Intern $record, Get $get): array => static::assignableUserOptions($get('company_id')) + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->helperText('Hanya akun yang belum terhubung ke karyawan, magang, atau freelance lain.')
+                                        ->rules([static::linkableAccountRule()])
                                         ->searchable()
                                         ->nullable(),
                                 ]),
@@ -218,6 +222,7 @@ class InternResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query): Builder => static::withWorkHistoryFlag($query))
             ->columns([
                 TextColumn::make('nis')
                     ->label('NIS / ID')
@@ -336,11 +341,11 @@ class InternResource extends Resource
                     ->modalContent(fn (Intern $record) => view('filament.modals.print-intern', ['record' => $record])),
 
                 EditAction::make(),
-                DeleteAction::make(),
+                static::workerDeleteAction(),
             ])
             ->bulkActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    static::workerDeleteBulkAction(),
                 ]),
             ]);
     }

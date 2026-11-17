@@ -34,6 +34,9 @@ class CheckInRequest extends FormRequest
             'liveness_challenge_id' => ['nullable', 'string', 'max:64'],
             'liveness_frames' => ['nullable', 'array', 'max:3'],
             'liveness_frames.*' => ['image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
+            // "Masuk di luar jadwal": the shift covered and the colleague replaced ("employee:12").
+            'cover_shift_id' => ['nullable', 'integer', 'min:1'],
+            'replaces_worker' => ['nullable', 'string', 'max:40', 'regex:/^(employee|intern|freelancer):\d+$/'],
         ];
     }
 
@@ -57,6 +60,11 @@ class CheckInRequest extends FormRequest
             'liveness_frames.*.image' => 'Foto liveness harus berupa berkas gambar.',
             'liveness_frames.*.mimes' => 'Foto liveness harus berformat jpeg, png, jpg, atau webp.',
             'liveness_frames.*.max' => 'Setiap foto liveness maksimal berukuran 5MB.',
+            'cover_shift_id.integer' => 'Shift yang dipilih tidak valid.',
+            'cover_shift_id.min' => 'Shift yang dipilih tidak valid.',
+            'replaces_worker.string' => 'Rekan yang digantikan tidak valid.',
+            'replaces_worker.max' => 'Rekan yang digantikan tidak valid.',
+            'replaces_worker.regex' => 'Rekan yang digantikan tidak valid.',
         ];
     }
 }

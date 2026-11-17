@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Api\V1;
 
 use App\Services\ShiftAssignmentService;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -11,6 +12,16 @@ class UpdateTeamScheduleRequest extends FormRequest
     public function authorize(): bool
     {
         return (bool) $this->user()?->canManageWorkers();
+    }
+
+    /**
+     * Same Indonesian answer as the team's read endpoints, instead of Laravel's English default.
+     *
+     * @throws AuthorizationException
+     */
+    protected function failedAuthorization(): void
+    {
+        throw new AuthorizationException('Fitur tim hanya untuk koordinator.');
     }
 
     /**

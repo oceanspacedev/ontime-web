@@ -11,6 +11,7 @@ use App\Models\Division;
 use App\Models\Freelancer;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Models\Tenant;
 use App\Models\User;
 use App\Services\TeamRecapService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -101,9 +102,9 @@ class TeamRecapTest extends TestCase
         $rows = $this->readSheet($path);
         @unlink($path);
 
-        $this->assertSame(['Badan Usaha', 'Divisi / Brand', 'Outlet', 'ID Pekerja', 'Nama', 'Jenis', 'Hari Terjadwal', 'Hari Masuk', 'Tidak Hadir', 'Libur', 'Terlambat (kali)', 'Total Telat (menit)', 'Jam Terjadwal', 'Jam Kerja'], $rows[0]);
-        $this->assertSame(['PT Franchise', 'JCHICKEN', 'JChicken Ciledug', $this->bayu->freelancer_number, 'Bayu Adillah', 'Freelancer', '3', '1', '1', '0', '1', '20', '27', '8.75'], $rows[1]);
-        $this->assertSame(['Total', '3 baris', '4', '2', '1', '1', '1', '20', '31.5', '13.25'], [$rows[4][0], $rows[4][4], ...array_slice($rows[4], 6)]);
+        $this->assertSame(['Badan Usaha', 'Divisi / Brand', 'Outlet', 'ID Pekerja', 'Nama', 'Jenis', 'Hari Terjadwal', 'Hari Masuk', 'Tidak Hadir', 'Libur', 'Terlambat (kali)', 'Total Telat (menit)', 'Pulang Cepat (kali)', 'Total Pulang Cepat (menit)', 'Jam Terjadwal', 'Jam Kerja', 'Lembur (kali)', 'Total Lembur (jam)', 'Menunggu Persetujuan (hari)'], $rows[0]);
+        $this->assertSame(['PT Franchise', 'JCHICKEN', 'JChicken Ciledug', $this->bayu->freelancer_number, 'Bayu Adillah', 'Freelancer', '3', '1', '1', '0', '1', '20', '0', '0', '27', '8.75', '0', '0', '0'], $rows[1]);
+        $this->assertSame(['Total', '3 baris', '4', '2', '1', '1', '1', '20', '1', '5', '31.5', '13.25', '0', '0', '0'], [$rows[4][0], $rows[4][4], ...array_slice($rows[4], 6)]);
     }
 
     public function test_app_gets_the_recap_and_a_short_lived_download_link(): void
@@ -124,6 +125,31 @@ class TeamRecapTest extends TestCase
         $this->get(str_replace('month=2026-11', 'month=2026-10', $url))->assertForbidden();
 
         $this->travel(16)->minutes();
+        $this->get($url)->assertForbidden();
+    }
+
+    public function test_download_link_stops_working_once_the_klien_is_switched_off(): void
+    {
+        $tenant = Tenant::factory()->create(['name' => 'Klien Rekap', 'code' => 'KR', 'is_active' => true]);
+        Company::query()->update(['tenant_id' => $tenant->id]);
+        $this->coordinator->forceFill(['tenant_id' => $tenant->id])->save();
+        Sanctum::actingAs($this->coordinator);
+
+        $url = $this->getJson('/api/v1/team/recap/link?month=2026-11')->assertOk()->json('url');
+        $this->get($url)->assertOk()->assertDownload('rekap-tim-2026-11.xlsx');
+
+        $tenant->update(['is_active' => false]);
+
+        $this->get($url)->assertForbidden();
+    }
+
+    public function test_download_link_stops_working_once_the_account_is_switched_off(): void
+    {
+        Sanctum::actingAs($this->coordinator);
+        $url = $this->getJson('/api/v1/team/recap/link?month=2026-11')->assertOk()->json('url');
+
+        $this->coordinator->update(['is_active' => false]);
+
         $this->get($url)->assertForbidden();
     }
 

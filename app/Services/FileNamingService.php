@@ -41,6 +41,9 @@ class FileNamingService
     /**
      * Store an uploaded file with auditable naming.
      *
+     * @param  string|null  $extension  Use this extension instead of the client's one, for example
+     *                                  the type detected from the file's bytes.
+     *
      * @throws UploadStorageException when the disk refuses the write (it returns false or throws)
      */
     public static function storeUploadedFile(
@@ -48,9 +51,14 @@ class FileNamingService
         string $directory,
         string $prefix,
         ?string $identifier,
-        string $disk = 'public'
+        string $disk = 'public',
+        ?string $extension = null
     ): string {
         $filename = static::generateFileName($prefix, $identifier, $file);
+
+        if ($extension !== null) {
+            $filename = Str::beforeLast($filename, '.').'.'.$extension;
+        }
 
         try {
             $path = $file->storeAs($directory, $filename, ['disk' => $disk]);

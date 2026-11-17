@@ -1,12 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Alert } from 'react-native';
 
-import { Badge, EmptyState, ErrorBanner, Field, Group, LoadingView, Row, Segmented } from '@/components/ui';
+import { Badge, Button, EmptyState, ErrorBanner, Field, Group, LoadingView, Row, Segmented } from '@/components/ui';
 import { showNewAccount } from '@/lib/accountNotice';
 import { errorMessage, teamApi, type TeamFreelancer } from '@/lib/api';
 import { formatDate } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
+import { nextPage } from '@/lib/team';
 
 type Status = 'active' | 'ended';
 
@@ -23,7 +24,15 @@ export function TeamFreelancerList({ onSchedule }: { onSchedule: (freelancer: Te
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<Status>('active');
   const [search, setSearch] = useState('');
-  const list = useQuery({ queryKey: queryKeys.teamFreelancers(status, search.trim()), queryFn: () => teamApi.freelancers(status, search.trim()) });
+  // Thirty per page; "Muat lebih banyak" brings the next page so everyone in the total can be reached.
+  const list = useInfiniteQuery({
+    queryKey: queryKeys.teamFreelancers(status, search.trim()),
+    queryFn: ({ pageParam }) => teamApi.freelancers(status, search.trim(), pageParam),
+    initialPageParam: 1,
+    getNextPageParam: (last) => nextPage(last.pagination),
+  });
+  const freelancers = list.data?.pages.flatMap((page) => page.data) ?? [];
+  const total = list.data?.pages[0]?.pagination.total ?? 0;
   const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.team });
 
   const change = useMutation({
@@ -72,20 +81,29 @@ export function TeamFreelancerList({ onSchedule }: { onSchedule: (freelancer: Te
         <LoadingView />
       ) : list.isError ? (
         <ErrorBanner error={list.error} onRetry={() => list.refetch()} />
-      ) : list.data.data.length === 0 ? (
+      ) : freelancers.length === 0 ? (
         <EmptyState icon="people-outline" title={status === 'active' ? 'Belum ada freelancer aktif' : 'Belum ada yang keluar'} />
       ) : (
-        <Group title={`${list.data.pagination.total} freelancer`}>
-          {list.data.data.map((freelancer) => (
-            <Row
-              key={freelancer.id}
-              title={freelancer.name}
-              subtitle={[freelancer.number, freelancer.brand, freelancer.end_date ? `selesai ${formatDate(freelancer.end_date, 'short')}` : null].filter(Boolean).join(' · ')}
-              right={freelancer.is_active && !freelancer.has_account ? <Badge label="Tanpa akun" tone="warning" /> : undefined}
-              onPress={() => choose(freelancer)}
-            />
-          ))}
-        </Group>
+        <>
+          <Group title={`${total} freelancer`}>
+            {freelancers.map((freelancer) => (
+              <Row
+                key={freelancer.id}
+                title={freelancer.name}
+                subtitle={[freelancer.number, freelancer.brand, freelancer.end_date ? `selesai ${formatDate(freelancer.end_date, 'short')}` : null].filter(Boolean).join(' · ')}
+                right={
+                  freelancer.is_active && !freelancer.has_account ? (
+                    <Badge label="Tanpa akun" tone="warning" />
+                  ) : freelancer.contract_state === 'not_started' ? (
+                    <Badge label={freelancer.contract_state_label ?? 'Belum mulai'} tone="info" />
+                  ) : undefined
+                }
+                onPress={() => choose(freelancer)}
+              />
+            ))}
+          </Group>
+          {list.hasNextPage ? <Button title="Muat lebih banyak" variant="secondary" onPress={() => list.fetchNextPage()} loading={list.isFetchingNextPage} /> : null}
+        </>
       )}
     </>
   );

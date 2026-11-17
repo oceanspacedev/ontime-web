@@ -7,9 +7,13 @@ import { AttachmentField } from '@/components/AttachmentField';
 import { DateTimeField } from '@/components/DateTimeField';
 import { Button, Choice, Field, Group, Notice, Screen } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
-import { ApiError, errorMessage, requestsApi, type LeaveType, type UploadFile } from '@/lib/api';
+import { requestsApi, type LeaveType, type UploadFile } from '@/lib/api';
+import { unshownErrorMessage } from '@/lib/errors';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { queryKeys } from '@/lib/queryClient';
+
+/** Fields this form shows a server message under; any other 422 key goes to the footer notice. */
+const SHOWN_FIELDS = ['leave_type', 'start_date', 'end_date', 'reason', 'attachment'];
 
 export default function NewLeaveScreen() {
   const access = useAccess();
@@ -65,7 +69,7 @@ export default function NewLeaveScreen() {
   };
 
   const days = startDate && endDate && endDate >= startDate ? Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1 : null;
-  const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
+  const generalError = unshownErrorMessage(submit.error, SHOWN_FIELDS);
 
   return (
     <Screen

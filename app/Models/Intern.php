@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\GuardsWorkerDeletion;
 use App\Traits\HasNormalizedPhone;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Intern extends Model
 {
-    use HasFactory, HasNormalizedPhone;
+    use GuardsWorkerDeletion, HasFactory, HasNormalizedPhone;
 
     protected $fillable = [
         'user_id',

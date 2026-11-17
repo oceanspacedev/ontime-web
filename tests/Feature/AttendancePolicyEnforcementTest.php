@@ -37,6 +37,9 @@ class AttendancePolicyEnforcementTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Check-in opens 60 minutes before the start (company hours 08:00), so the clock is fixed in working hours.
+        $this->travelTo(today()->setTime(8, 0));
         $this->seed(RoleSeeder::class);
 
         config(['filesystems.default' => 'public']);

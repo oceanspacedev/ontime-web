@@ -18,6 +18,23 @@ final class SelfieUploadToken
 {
     public const VALID_FOR_MINUTES = 15;
 
+    /**
+     * Largest selfie the upload endpoint accepts, in kilobytes. Same limit as the API check-in and
+     * check-out photo ("max:5120" in CheckInRequest and CheckOutRequest).
+     */
+    public const MAX_KILOBYTES = 5120;
+
+    /**
+     * Image types a selfie may be, detected from its bytes, with the extension it is stored under.
+     *
+     * @var array<int, string>
+     */
+    public const ALLOWED_IMAGE_TYPES = [
+        IMAGETYPE_JPEG => 'jpg',
+        IMAGETYPE_PNG => 'png',
+        IMAGETYPE_WEBP => 'webp',
+    ];
+
     public const INVALID_MESSAGE = 'Foto selfie tidak valid atau kedaluwarsa. Ambil ulang foto.';
 
     public static function issue(string $path, User $user): string

@@ -4,6 +4,7 @@ namespace App\Filament\Resources\AttendanceCorrections\Pages;
 
 use App\Filament\Concerns\GeneratesApprovalSteps;
 use App\Filament\Resources\AttendanceCorrections\AttendanceCorrectionResource;
+use App\Models\AttendanceCorrection;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Validation\ValidationException;
 
@@ -35,6 +36,14 @@ class CreateAttendanceCorrection extends CreateRecord
         }
 
         $data['status'] = 'pending';
+
+        $errors = (new AttendanceCorrection($data))->submissionErrors();
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages(
+                collect($errors)->mapWithKeys(fn (string $message, string $field): array => ["data.{$field}" => $message])->all(),
+            );
+        }
 
         return $data;
     }

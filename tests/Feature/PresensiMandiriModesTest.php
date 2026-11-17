@@ -15,6 +15,7 @@ use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\User;
+use App\Services\AttendanceCheckService;
 use App\Services\Face\FaceDetection;
 use App\Services\Face\FaceMatch;
 use App\Services\Face\FaceVerifier;
@@ -44,6 +45,9 @@ class PresensiMandiriModesTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Check-in opens 60 minutes before the start (company hours 08:00), so the clock is fixed in working hours.
+        $this->travelTo(today()->setTime(8, 0));
         $this->seed(RoleSeeder::class);
 
         config(['filesystems.default' => 'public']);
@@ -160,7 +164,8 @@ class PresensiMandiriModesTest extends TestCase
 
     public function test_token_replayed_after_midnight_keeps_yesterdays_check_in_photo(): void
     {
-        $this->company->policy()->update(['require_photo' => true]);
+        // Hours starting just after midnight keep both check-ins (23:55 and 00:05) inside the check-in window.
+        $this->company->policy()->update(['require_photo' => true, 'work_start_time' => '00:30:00', 'work_end_time' => '09:00:00']);
         $employee = $this->makeEmployee();
         Storage::disk('public')->put('attendance-photos/late-night.jpg', 'selfie');
         $this->travelTo(today()->setTime(23, 55));
@@ -180,7 +185,9 @@ class PresensiMandiriModesTest extends TestCase
 
         Livewire::test(AbsenHariIni::class)
             ->call('processCheckIn', $token)
-            ->assertReturned(fn (array $result): bool => $result['ok'] === false && $result['message'] === 'Lokasi GPS wajib diisi.');
+            // The 23:55 check-in is booked to the shift's own day (it starts 00:30), so the replay is refused as a
+            // second check-in of that shift; either way the photo of the stored check-in must survive the refusal.
+            ->assertReturned(fn (array $result): bool => $result['ok'] === false && $result['message'] === AttendanceCheckService::ALREADY_CHECKED_IN_MESSAGE);
 
         $this->assertSame('attendance-photos/late-night.jpg', $yesterday->fresh()->check_in_photo);
         Storage::disk('public')->assertExists('attendance-photos/late-night.jpg');

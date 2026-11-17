@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { DaySwitcher } from '@/components/DaySwitcher';
@@ -9,10 +9,11 @@ import { TeamFreelancerList } from '@/components/TeamFreelancerList';
 import { TeamRecapView } from '@/components/TeamRecapView';
 import { WeekGrid } from '@/components/WeekGrid';
 import { Badge, EmptyState, ErrorBanner, Group, IconButton, LoadingView, Row, Screen, Segmented, Sheet } from '@/components/ui';
-import { errorMessage, teamApi, type RosterEntry, type RosterOutlet, type TeamFreelancer } from '@/lib/api';
+import { useCurrentDate } from '@/hooks/useCurrentDate';
+import { errorMessage, teamApi, type RosterEntry, type TeamFreelancer } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
-import { rosterBadge, rosterLine, rosterSummary, shiftDate } from '@/lib/team';
+import { BORROWED_READ_ONLY, canEditSchedule, followToday, outletTitle, rosterBadge, rosterEntryKey, rosterSubtitle, rosterSummary, shiftDate } from '@/lib/team';
 
 type TeamView = 'schedule' | 'week' | 'freelancers' | 'recap';
 
@@ -23,25 +24,26 @@ const VIEWS: { value: TeamView; label: string }[] = [
   { value: 'recap', label: 'Rekap' },
 ];
 
-/** Days off carry no outlet, so a group of only days off is titled "Libur". */
-function outletTitle(outlet: RosterOutlet): string {
-  if (outlet.location) {
-    return outlet.location.name;
-  }
-  return outlet.entries.every((entry) => entry.state === 'libur') ? 'Libur' : 'Tanpa outlet';
-}
-
 export default function TeamScreen() {
   const queryClient = useQueryClient();
-  const today = toDateString(new Date());
   const [view, setView] = useState<TeamView>('schedule');
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(() => toDateString(new Date()));
+  const previousToday = useRef(date);
+  // The day view follows the calendar: left on today (past midnight or days in the background), it moves on to the new today.
+  const today = useCurrentDate((next) => {
+    const previous = previousToday.current;
+    previousToday.current = next;
+    setDate((shown) => followToday(shown, previous, next));
+  });
   const [target, setTarget] = useState<ScheduleTarget | null>(null);
   const [adding, setAdding] = useState(false);
   const roster = useQuery({ queryKey: queryKeys.teamRoster(date), queryFn: () => teamApi.roster(date) });
   const options = useQuery({ queryKey: queryKeys.teamOptions, queryFn: teamApi.options });
 
-  const editEntry = (entry: RosterEntry) =>
+  /** A worker lent in from another brand is only shown; tapping explains who plans them. */
+  const editEntry = (entry: RosterEntry) => (canEditSchedule(entry) ? openEntry(entry) : Alert.alert(entry.worker.name, BORROWED_READ_ONLY));
+
+  const openEntry = (entry: RosterEntry) =>
     setTarget({
       worker: { type: entry.worker.type, id: entry.worker.id, name: entry.worker.name, company_id: entry.worker.company_id },
       date,
@@ -110,14 +112,14 @@ export default function TeamScreen() {
             <EmptyState icon="calendar-clear-outline" title="Belum ada jadwal" message="Tekan + untuk menjadwalkan pekerja." />
           ) : (
             roster.data.outlets.map((outlet) => (
-              <Group key={outlet.location?.id ?? 'none'} title={`${outletTitle(outlet)} · ${outlet.entries.length}`}>
+              <Group key={outlet.kind ?? outlet.location?.id ?? 'none'} title={`${outletTitle(outlet)} · ${outlet.entries.length}`}>
                 {outlet.entries.map((entry) => {
                   const badge = rosterBadge(entry, date, today);
                   return (
                     <Row
-                      key={entry.schedule_id}
+                      key={rosterEntryKey(entry)}
                       title={entry.worker.name}
-                      subtitle={entry.state === 'libur' ? undefined : entry.check_in ? `${rosterLine(entry)} · masuk ${entry.check_in}` : rosterLine(entry)}
+                      subtitle={rosterSubtitle(entry)}
                       right={badge ? <Badge label={badge.label} tone={badge.tone} /> : undefined}
                       onPress={() => editEntry(entry)}
                     />

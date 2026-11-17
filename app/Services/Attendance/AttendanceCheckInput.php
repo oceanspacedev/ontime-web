@@ -12,6 +12,8 @@ final readonly class AttendanceCheckInput
 {
     /**
      * @param  list<string>  $livenessFramePaths  Storage paths in the order of the challenge steps.
+     * @param  int|null  $coverShiftId  Check-in outside the schedule: the company shift the worker covers.
+     * @param  string|null  $replacesWorker  Check-in outside the schedule: the colleague replaced, as "employee:12".
      */
     public function __construct(
         public ?float $latitude = null,
@@ -21,5 +23,7 @@ final readonly class AttendanceCheckInput
         public ?string $photoPath = null,
         public ?string $livenessChallengeId = null,
         public array $livenessFramePaths = [],
+        public ?int $coverShiftId = null,
+        public ?string $replacesWorker = null,
     ) {}
 }

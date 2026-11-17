@@ -2,11 +2,15 @@
 
 namespace App\Models;
 
+use App\Services\OneSignalPushService;
 use App\Traits\ScopesToWorkerVisibility;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Support\Facades\DB;
+
+use function Illuminate\Support\defer;
 
 class Resignation extends Model
 {
@@ -66,10 +70,20 @@ class Resignation extends Model
             return;
         }
 
-        $employee->update(['status' => 'inactive']);
+        DB::transaction(function () use ($employee): void {
+            $employee->update(['status' => 'inactive']);
 
-        if ($employee->user) {
-            $employee->user->update(['is_active' => false]);
-        }
+            // Like an ended contract: rosters after the last working day no longer expect the leaver.
+            ShiftSchedule::query()
+                ->where('employee_id', $employee->getKey())
+                ->whereDate('date', '>', $this->last_working_day?->toDateString() ?? today()->toDateString())
+                ->delete();
+
+            if ($user = $employee->user) {
+                $user->update(['is_active' => false]);
+                $user->tokens()->delete();
+                DB::afterCommit(fn () => defer(fn () => app(OneSignalPushService::class)->forgetUser($user)));
+            }
+        });
     }
 }

@@ -380,13 +380,21 @@ trait ScopesToManagedCompanies
     }
 
     /**
-     * Accounts the current user may link to a worker.
+     * Accounts the current user may link to a worker: within reach (so within the user's Klien) and not
+     * linked to any employee, intern or freelancer yet, since one account checks in as one worker. With
+     * a company, only accounts of that company's Klien (this matters for a Superadmin, who reaches all).
      *
      * @return array<int, string>
      */
-    public static function assignableUserOptions(): array
+    public static function assignableUserOptions(int|string|null $companyId = null): array
     {
+        $tenantId = filled($companyId) ? Company::query()->whereKey($companyId)->value('tenant_id') : null;
+
         return static::scopeToManageableAccounts(User::query())
+            ->whereDoesntHave('employee')
+            ->whereDoesntHave('intern')
+            ->whereDoesntHave('freelancer')
+            ->when($tenantId !== null, fn (Builder $query) => $query->where('tenant_id', $tenantId))
             ->orderBy('name')
             ->pluck('name', 'id')
             ->all();

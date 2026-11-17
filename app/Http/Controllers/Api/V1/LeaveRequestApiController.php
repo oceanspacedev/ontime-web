@@ -14,6 +14,8 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Throwable;
 
 class LeaveRequestApiController extends Controller
 {
@@ -76,7 +78,7 @@ class LeaveRequestApiController extends Controller
         $endDate = Carbon::parse($request->input('end_date'));
         $daysCount = (int) $startDate->diffInDays($endDate) + 1;
 
-        if ($error = app(AnnualLeaveService::class)->validationError($profile, $request->input('leave_type'), $daysCount)) {
+        if ($error = app(AnnualLeaveService::class)->validationError($profile, $request->input('leave_type'), $daysCount, startDate: $startDate, endDate: $endDate)) {
             return response()->json(['message' => $error, 'errors' => ['leave_type' => [$error]]], 422);
         }
 
@@ -92,25 +94,32 @@ class LeaveRequestApiController extends Controller
             );
         }
 
-        // Saved together with its approval steps, so a missing approval flow leaves nothing behind.
-        $leaveRequest = DB::transaction(function () use ($employee, $intern, $freelancer, $request, $daysCount, $attachmentPath): LeaveRequest {
-            $leaveRequest = LeaveRequest::create([
-                'employee_id' => $employee?->id,
-                'intern_id' => $intern?->id,
-                'freelancer_id' => $freelancer?->id,
-                'leave_type' => $request->input('leave_type'),
-                'start_date' => $request->input('start_date'),
-                'end_date' => $request->input('end_date'),
-                'days_count' => $daysCount,
-                'reason' => $request->input('reason'),
-                'attachment' => $attachmentPath,
-                'status' => 'pending',
-            ]);
+        // Saved together with its approval steps, so a missing approval flow leaves nothing behind,
+        // not even the attachment stored above.
+        try {
+            $leaveRequest = DB::transaction(function () use ($employee, $intern, $freelancer, $request, $daysCount, $attachmentPath): LeaveRequest {
+                $leaveRequest = LeaveRequest::create([
+                    'employee_id' => $employee?->id,
+                    'intern_id' => $intern?->id,
+                    'freelancer_id' => $freelancer?->id,
+                    'leave_type' => $request->input('leave_type'),
+                    'start_date' => $request->input('start_date'),
+                    'end_date' => $request->input('end_date'),
+                    'days_count' => $daysCount,
+                    'reason' => $request->input('reason'),
+                    'attachment' => $attachmentPath,
+                    'status' => 'pending',
+                ]);
 
-            app(ApprovalFlowService::class)->generateSteps($leaveRequest, 'leave');
+                app(ApprovalFlowService::class)->generateSteps($leaveRequest, 'leave');
 
-            return $leaveRequest;
-        });
+                return $leaveRequest;
+            });
+        } catch (Throwable $exception) {
+            $this->deleteAttachment($attachmentPath);
+
+            throw $exception;
+        }
 
         return response()->json([
             'message' => 'Pengajuan cuti berhasil dibuat',
@@ -155,17 +164,6 @@ class LeaveRequestApiController extends Controller
 
         $data = $request->only(['leave_type', 'start_date', 'end_date', 'reason']);
 
-        if ($request->hasFile('attachment')) {
-            $identifier = $profile->employee_code ?? $profile->nik ?? (string) $profile->id;
-            $data['attachment'] = FileNamingService::storeUploadedFile(
-                $request->file('attachment'),
-                'leave-requests/attachments',
-                'LEAVE',
-                $identifier,
-                config('filesystems.default')
-            );
-        }
-
         if (isset($data['start_date']) || isset($data['end_date'])) {
             $start = Carbon::parse($data['start_date'] ?? $leaveRequest->start_date);
             $end = Carbon::parse($data['end_date'] ?? $leaveRequest->end_date);
@@ -177,25 +175,51 @@ class LeaveRequestApiController extends Controller
             $data['days_count'] = (int) $start->diffInDays($end) + 1;
         }
 
-        if ($error = app(AnnualLeaveService::class)->updateError($leaveRequest, $data['leave_type'] ?? null, (int) ($data['days_count'] ?? $leaveRequest->days_count))) {
+        if ($error = app(AnnualLeaveService::class)->updateError($leaveRequest, $data['leave_type'] ?? null, (int) ($data['days_count'] ?? $leaveRequest->days_count), $start ?? null, $end ?? null)) {
             return response()->json(['message' => $error, 'errors' => ['leave_type' => [$error]]], 422);
         }
 
+        $previousAttachment = $leaveRequest->attachment;
+
+        // Stored only once every check passed; the replaced file is removed once the change is saved.
+        if ($request->hasFile('attachment')) {
+            $identifier = $profile->employee_code ?? $profile->nik ?? (string) $profile->id;
+            $data['attachment'] = FileNamingService::storeUploadedFile(
+                $request->file('attachment'),
+                'leave-requests/attachments',
+                'LEAVE',
+                $identifier,
+                config('filesystems.default')
+            );
+        }
+
         // Re-checked under a row lock: an approver may have acted while the form was being filled in.
-        $updated = DB::transaction(function () use ($leaveRequest, $data): bool {
-            $locked = LeaveRequest::query()->lockForUpdate()->find($leaveRequest->getKey());
+        try {
+            $updated = DB::transaction(function () use ($leaveRequest, $data): bool {
+                $locked = LeaveRequest::query()->lockForUpdate()->find($leaveRequest->getKey());
 
-            if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
-                return false;
-            }
+                if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
+                    return false;
+                }
 
-            $leaveRequest->update($data);
+                $leaveRequest->update($data);
 
-            return true;
-        });
+                return true;
+            });
+        } catch (Throwable $exception) {
+            $this->deleteAttachment($data['attachment'] ?? null);
+
+            throw $exception;
+        }
 
         if (! $updated) {
+            $this->deleteAttachment($data['attachment'] ?? null);
+
             return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
+        }
+
+        if (isset($data['attachment']) && $previousAttachment !== $data['attachment']) {
+            $this->deleteAttachment($previousAttachment);
         }
 
         return response()->json([
@@ -207,10 +231,14 @@ class LeaveRequestApiController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        $leaveRequest = LeaveRequest::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
+        $leaveRequest = LeaveRequest::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->find($id);
 
-        if (! LeaveRequest::query()->visibleTo($user)->whereKey($leaveRequest->getKey())->exists()) {
-            return response()->json(['message' => 'Unauthorized access.'], 403);
+        if (! $leaveRequest) {
+            return response()->json(['message' => 'Pengajuan cuti tidak ditemukan atau sudah dibatalkan.'], 404);
+        }
+
+        if (! ApprovalApiController::canOpen($leaveRequest, $user)) {
+            return response()->json(['message' => 'Anda tidak memiliki akses ke pengajuan ini.'], 403);
         }
 
         return response()->json([
@@ -271,8 +299,21 @@ class LeaveRequestApiController extends Controller
             return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa dibatalkan.'], 422);
         }
 
+        // The cancelled request is gone, so its attachment has no owner left.
+        $this->deleteAttachment($leaveRequest->attachment);
+
         return response()->json([
             'message' => 'Pengajuan cuti berhasil dibatalkan.',
         ]);
+    }
+
+    /**
+     * Remove an attachment no request points to any more.
+     */
+    private function deleteAttachment(?string $path): void
+    {
+        if ($path) {
+            Storage::disk(config('filesystems.default'))->delete($path);
+        }
     }
 }

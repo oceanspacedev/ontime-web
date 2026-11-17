@@ -44,14 +44,16 @@ class CreateApprovalFlow extends CreateRecord
         $correctionSteps = $data['correction_steps'] ?? [];
         $resignationSteps = $data['resignation_steps'] ?? [];
         $geofenceSteps = $data['geofence_steps'] ?? [];
+        $shiftSwapSteps = $data['shift_swap_steps'] ?? [];
 
         $this->validateSteps($leaveSteps, 'Cuti / Izin');
         $this->validateSteps($overtimeSteps, 'Lembur');
         $this->validateSteps($correctionSteps, 'Koreksi Absensi');
         $this->validateSteps($resignationSteps, 'Pengunduran Diri');
         $this->validateSteps($geofenceSteps, 'Absensi Luar Geofence');
+        $this->validateSteps($shiftSwapSteps, 'Tukar Shift');
 
-        DB::transaction(function () use ($companyId, $leaveSteps, $overtimeSteps, $correctionSteps, $resignationSteps, $geofenceSteps) {
+        DB::transaction(function () use ($companyId, $leaveSteps, $overtimeSteps, $correctionSteps, $resignationSteps, $geofenceSteps, $shiftSwapSteps) {
             ApprovalFlow::companyWide()->where('company_id', $companyId)->delete();
 
             $this->insertSteps($companyId, 'leave', $leaveSteps);
@@ -59,6 +61,7 @@ class CreateApprovalFlow extends CreateRecord
             $this->insertSteps($companyId, 'correction', $correctionSteps);
             $this->insertSteps($companyId, 'resignation', $resignationSteps);
             $this->insertSteps($companyId, 'geofence', $geofenceSteps);
+            $this->insertSteps($companyId, 'shift_swap', $shiftSwapSteps);
         });
 
         return $company;

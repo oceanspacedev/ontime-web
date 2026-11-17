@@ -76,7 +76,7 @@ class UserResource extends JsonResource
             'freelancer' => $this->freelancer ? [
                 'id' => $this->freelancer->id,
                 'full_name' => $this->freelancer->full_name,
-                'institution' => $this->freelancer->institution ?? $this->freelancer->project ?? 'External Contractor',
+                'institution' => filled($this->freelancer->institution) ? $this->freelancer->institution : null,
                 'master_face_photo' => $this->formatStorageUrl($this->freelancer->master_face_photo),
                 'master_face_verified_at' => $this->freelancer->master_face_verified_at?->toISOString(),
                 'company' => $this->formatCompany($this->freelancer->company),

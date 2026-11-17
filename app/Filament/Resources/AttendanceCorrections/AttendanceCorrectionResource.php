@@ -104,6 +104,8 @@ class AttendanceCorrectionResource extends Resource
                             DatePicker::make('date')
                                 ->label('Tanggal Absensi')
                                 ->required()
+                                ->maxDate(fn () => today())
+                                ->validationMessages(['before_or_equal' => AttendanceCorrection::FUTURE_DATE_MESSAGE])
                                 ->default(today()),
 
                             TimePicker::make('corrected_check_in')
@@ -111,14 +113,18 @@ class AttendanceCorrectionResource extends Resource
                                 ->native(false)
                                 ->displayFormat('H:i')
                                 ->format('H:i')
-                                ->seconds(false),
+                                ->seconds(false)
+                                ->requiredWithout('corrected_check_out')
+                                ->validationMessages(['required_without' => 'Isi jam masuk atau jam pulang yang benar.']),
 
                             TimePicker::make('corrected_check_out')
                                 ->label('Usulan Jam Check Out (24 Jam)')
                                 ->native(false)
                                 ->displayFormat('H:i')
                                 ->format('H:i')
-                                ->seconds(false),
+                                ->seconds(false)
+                                ->requiredWithout('corrected_check_in')
+                                ->validationMessages(['required_without' => 'Isi jam masuk atau jam pulang yang benar.']),
 
                             FileUpload::make('attachment')
                                 ->label('Bukti Pendukung / Lampiran (Opsional)')

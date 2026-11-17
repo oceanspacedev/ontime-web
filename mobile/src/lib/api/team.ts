@@ -33,8 +33,9 @@ export function saveSchedule(change: ScheduleChange): Promise<{ message: string 
   return request<{ message: string }>('/team/schedules', { method: 'PUT', json: change });
 }
 
-export function freelancers(status: 'active' | 'ended', search: string): Promise<Paginated<TeamFreelancer>> {
-  return request<Paginated<TeamFreelancer>>('/team/freelancers', { query: { status, search: search || undefined } });
+/** One page (30 people) of the coordinator's freelancers. */
+export function freelancers(status: 'active' | 'ended', search: string, page: number = 1): Promise<Paginated<TeamFreelancer>> {
+  return request<Paginated<TeamFreelancer>>('/team/freelancers', { query: { status, search: search || undefined, page } });
 }
 
 export function addFreelancer(input: NewFreelancer): Promise<NewFreelancerResponse> {

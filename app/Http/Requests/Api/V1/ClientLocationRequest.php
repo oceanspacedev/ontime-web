@@ -43,7 +43,7 @@ class ClientLocationRequest extends FormRequest
             'address' => ['nullable', 'string'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'radius_meters' => ['nullable', 'integer', 'min:1'],
+            'radius_meters' => ['nullable', 'integer', 'min:1', 'max:'.CompanyPolicyService::MAX_GEOFENCE_RADIUS_METERS],
             'division_id' => ['nullable', 'integer', Rule::exists('divisions', 'id')->where('company_id', $this->company->id)],
             'is_active' => ['sometimes', 'boolean', $this->keepsGpsLocationRule()],
         ];
@@ -76,6 +76,7 @@ class ClientLocationRequest extends FormRequest
             'latitude.between' => 'Latitude harus di antara -90 dan 90.',
             'longitude.between' => 'Longitude harus di antara -180 dan 180.',
             'radius_meters.min' => 'Radius geofence minimal 1 meter.',
+            'radius_meters.max' => 'Radius geofence maksimal '.CompanyPolicyService::MAX_GEOFENCE_RADIUS_METERS.' meter.',
             'division_id.exists' => 'Brand harus divisi dari badan usaha ini.',
         ];
     }

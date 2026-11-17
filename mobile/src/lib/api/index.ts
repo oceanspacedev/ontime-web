@@ -6,5 +6,6 @@ export * as reportsApi from './reports';
 export * as devicesApi from './devices';
 export * as teamApi from './team';
 export * as clientAdminApi from './client-admin';
+export * as shiftSwapApi from './shiftSwap';
 export { ApiError, errorMessage, isNetworkError, NetworkError } from './client';
 export * from './types';

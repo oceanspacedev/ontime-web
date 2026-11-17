@@ -8,6 +8,7 @@ use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Models\AttendanceCorrection;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
+use App\Models\ShiftSwapRequest;
 use App\Services\ApprovalFlowService;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
@@ -35,7 +36,8 @@ class ApproverPendingWidget extends BaseWidget
         $pendingLeaves = $service->getPendingRequestsForUser($user, LeaveRequest::class)->count();
         $pendingOvertimes = $service->getPendingRequestsForUser($user, OvertimeRequest::class)->count();
         $pendingCorrections = $service->getPendingRequestsForUser($user, AttendanceCorrection::class)->count();
-        $total = $pendingLeaves + $pendingOvertimes + $pendingCorrections;
+        $pendingShiftSwaps = $service->getPendingRequestsForUser($user, ShiftSwapRequest::class)->count();
+        $total = $pendingLeaves + $pendingOvertimes + $pendingCorrections + $pendingShiftSwaps;
 
         return [
             Stat::make('Antrean Approval Saya', "{$total} Item")
@@ -55,6 +57,12 @@ class ApproverPendingWidget extends BaseWidget
                 ->color('primary')
                 ->icon('heroicon-o-document-check')
                 ->url(AttendanceCorrectionResource::getUrl('index')),
+
+            Stat::make('Tukar Shift Pending', "{$pendingShiftSwaps} Request")
+                ->description('Tukar shift yang sudah diterima rekan')
+                ->color('info')
+                ->icon('heroicon-o-arrows-right-left')
+                ->url(ApprovalSaya::getUrl()),
         ];
     }
 }

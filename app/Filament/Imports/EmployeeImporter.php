@@ -154,6 +154,7 @@ class EmployeeImporter extends Importer
         $employee->job_level_id = $this->jobLevelIdFromState($this->data['job_level'] ?? null);
         $employee->job_title_id = $this->jobTitleIdFor($division, $this->data['job_title'] ?? null);
         $employee->status ??= 'active';
+        $this->guardWorkerPhone($employee);
     }
 
     public static function getCompletedNotificationBody(Import $import): string

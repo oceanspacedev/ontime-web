@@ -25,7 +25,8 @@ class ClientAccountApiController extends Controller
     public function index(Request $request): JsonResponse
     {
         ClientAdminGate::ensureManagesAccounts($request->user());
-        $search = trim((string) $request->query('search', ''));
+        $validated = $request->validate(['search' => ['nullable', 'string', 'max:100']]);
+        $search = trim((string) ($validated['search'] ?? ''));
 
         $accounts = $this->accounts->manageableAccounts()
             ->with($this->relations())

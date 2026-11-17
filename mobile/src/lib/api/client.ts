@@ -1,3 +1,6 @@
+import { onlineManager } from '@tanstack/react-query';
+import { File } from 'expo-file-system';
+
 import type { UploadFile } from './types';
 
 export class ApiError extends Error {
@@ -51,13 +54,14 @@ export function isNetworkError(error: unknown): error is NetworkError {
 }
 
 export interface ApiConfig {
-  getBaseUrl: () => string;
+  /** Null when the build has no usable API host: every request then fails before leaving the device. */
+  getBaseUrl: () => string | null;
   getToken: () => string | null;
   onUnauthenticated: () => void;
 }
 
 let config: ApiConfig = {
-  getBaseUrl: () => '',
+  getBaseUrl: () => null,
   getToken: () => null,
   onUnauthenticated: () => {},
 };
@@ -170,6 +174,11 @@ async function exchange(url: string, init: RequestInit, timeoutMs: number): Prom
   }
 }
 
+const UNREADABLE_ANSWER_MESSAGE =
+  'Server membalas dengan data yang tidak dikenali. Jika memakai Wi-Fi umum, buka browser untuk login Wi-Fi atau ganti ke data seluler, lalu coba lagi.';
+
+const MISSING_HOST_MESSAGE = 'Alamat server aplikasi belum diatur untuk build ini. Hubungi admin untuk build yang benar.';
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', query, json, form, skipAuthHandling = false, timeoutMs = 30000 } = options;
 
@@ -187,28 +196,65 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     body = JSON.stringify(json);
   }
 
-  const { response, text } = await exchange(buildUrl(options.baseUrl ?? config.getBaseUrl(), path, query), { method, headers, body }, timeoutMs);
+  const baseUrl = options.baseUrl ?? config.getBaseUrl();
+  if (!baseUrl) {
+    throw new Error(MISSING_HOST_MESSAGE);
+  }
+
+  // A submit while the device is known to be offline fails at once instead of waiting for a fetch
+  // that cannot succeed (React Query sends mutations even offline: see queryClient defaults).
+  if (method !== 'GET' && !onlineManager.isOnline()) {
+    throw new NetworkError('offline');
+  }
+
+  const { response, text } = await exchange(buildUrl(baseUrl, path, query), { method, headers, body }, timeoutMs);
   let payload: unknown = null;
+  let unreadableBody = false;
   if (text) {
     try {
       payload = JSON.parse(text);
     } catch {
       payload = null;
+      unreadableBody = true;
     }
   }
 
   if (!response.ok) {
     const data = (payload ?? {}) as { message?: string; errors?: Record<string, string[]> };
-    if (response.status === 401 && !skipAuthHandling) {
+    // Only the token still in use ends the session: a late 401 for an earlier account's request
+    // (or a revoke sent with a captured token) must not sign out whoever is signed in now.
+    if (response.status === 401 && !skipAuthHandling && token === config.getToken()) {
       config.onUnauthenticated();
     }
-    throw new ApiError(response.status, failureMessage(response.status, data.message, payload === null && Boolean(text)), data.errors ?? null);
+    throw new ApiError(response.status, failureMessage(response.status, data.message, unreadableBody), data.errors ?? null);
+  }
+
+  // A 2xx answer that is not JSON is not ours: typically a Wi-Fi login page (captive portal) at a mall
+  // or outlet. Handing null to the screen would render nothing or crash with an English TypeError.
+  if (unreadableBody) {
+    throw new ApiError(response.status, UNREADABLE_ANSWER_MESSAGE);
   }
 
   return payload as T;
 }
 
+/** A multipart file part that expo/fetch can send: it reads the bytes itself when the body is built. */
+export interface FilePart {
+  name: string;
+  type: string;
+  bytes: () => Promise<Uint8Array>;
+}
+
+/**
+ * Adds a local file to a multipart form. The app's global fetch is expo/fetch (installed by Expo on
+ * every native build), which rejects React Native's `{uri, name, type}` descriptor with
+ * "Unsupported FormDataPart implementation" before any request is sent; a part with `bytes()` is
+ * what it accepts. The file is read only when the request body is built.
+ */
+export function filePart(file: UploadFile): FilePart {
+  return { name: file.name, type: file.type, bytes: () => new File(file.uri).bytes() };
+}
+
 export function appendFile(form: FormData, field: string, file: UploadFile): void {
-  // React Native's FormData accepts a {uri, name, type} descriptor for files.
-  form.append(field, file as unknown as Blob);
+  form.append(field, filePart(file) as unknown as Blob);
 }
