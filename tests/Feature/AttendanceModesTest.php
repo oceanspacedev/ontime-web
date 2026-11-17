@@ -54,7 +54,7 @@ class AttendanceModesTest extends TestCase
 
     private const MOCK_REJECTED = 'Lokasi palsu (mock location) terdeteksi. Matikan aplikasi pemalsu lokasi lalu coba lagi.';
 
-    private const MASTER_MISSING = 'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.';
+    private const MASTER_MISSING = 'Foto profil belum dipasang. Pasang foto profil berisi wajah Anda di menu Profil terlebih dahulu, karena foto itu dipakai untuk verifikasi wajah.';
 
     private const LIVENESS_REQUIRED = 'Verifikasi liveness wajib. Ambil foto sesuai langkah yang diminta.';
 

@@ -411,7 +411,7 @@ export default function AttendanceCheckScreen() {
         <View style={styles.idle}>
           <Ionicons name="scan-outline" size={56} color={ON_CAMERA} />
           <Text style={styles.idleText}>
-            Perusahaan mewajibkan verifikasi wajah. Daftarkan Foto Master Wajah dulu agar selfie presensi bisa dicocokkan.
+            Perusahaan mewajibkan verifikasi wajah. Pasang foto profil berisi wajah Anda dulu agar selfie presensi bisa dicocokkan.
           </Text>
         </View>
       );
@@ -536,7 +536,7 @@ export default function AttendanceCheckScreen() {
 
       <View style={[styles.actionsArea, { paddingBottom: bottomGap(insets.bottom) }]}>
         {missingMasterFace ? (
-          <Button title="Daftarkan Foto Master Wajah" icon="scan-outline" size="lg" onPress={() => router.replace('/attendance/master-face')} />
+          <Button title="Pasang Foto Profil" icon="scan-outline" size="lg" onPress={() => router.replace('/attendance/master-face')} />
         ) : awaitingCapture ? (
           <Pressable
             onPress={capture}

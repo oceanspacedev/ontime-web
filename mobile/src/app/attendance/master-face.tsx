@@ -25,6 +25,10 @@ export default function MasterFaceScreen() {
   const access = useAccess();
   const refreshUser = useRefreshUser();
   const [picked, setPicked] = useState<Picked | null>(null);
+  const current = access.masterFacePhoto;
+  // Face recognition and liveness both compare the check-in selfie with this photo.
+  const selfieMode = attendanceApi.selfieModeOf(access.company?.policy ?? null);
+  const requiresFace = selfieMode === 'face' || selfieMode === 'liveness';
 
   const pick = async (source: 'camera' | 'library') => {
     const permission = source === 'camera' ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -38,6 +42,7 @@ export default function MasterFaceScreen() {
       : await ImagePicker.launchImageLibraryAsync(options);
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
+      upload.reset();
       setPicked({ uri: asset.uri, width: asset.width, height: asset.height });
     }
   };
@@ -57,6 +62,11 @@ export default function MasterFaceScreen() {
     },
   });
 
+  const cancelPick = () => {
+    upload.reset();
+    setPicked(null);
+  };
+
   const remove = useMutation({
     mutationFn: attendanceApi.deleteMasterFace,
     onSuccess: (response) => {
@@ -67,14 +77,11 @@ export default function MasterFaceScreen() {
   });
 
   const confirmRemove = () => {
-    Alert.alert('Hapus foto master wajah?', 'Setelah dihapus, presensi dengan verifikasi wajah tidak bisa dilakukan sampai foto baru didaftarkan.', [
+    Alert.alert('Hapus foto profil?', requiresFace ? 'Perusahaan mewajibkan verifikasi wajah, jadi Anda tidak bisa absen sampai foto profil baru dipasang.' : 'Profil Anda akan kembali menampilkan inisial nama.', [
       { text: 'Batal', style: 'cancel' },
       { text: 'Hapus', style: 'destructive', onPress: () => remove.mutate() },
     ]);
   };
-
-  const current = access.masterFacePhoto;
-  const requiresFace = access.company?.policy?.require_face_recognition ?? false;
 
   return (
     <Screen>
@@ -83,12 +90,12 @@ export default function MasterFaceScreen() {
         icon="scan-outline"
         message={
           requiresFace
-            ? 'Perusahaan mewajibkan verifikasi wajah saat absen. Foto selfie presensi akan dibandingkan dengan foto ini.'
-            : 'Foto master wajah dipakai sebagai pembanding bila perusahaan mengaktifkan verifikasi wajah.'
+            ? 'Foto profil Anda juga dipakai untuk verifikasi wajah: selfie saat absen dibandingkan dengan foto ini, jadi gunakan foto wajah Anda sendiri.'
+            : 'Foto profil tampil di aplikasi. Bila perusahaan menyalakan verifikasi wajah, foto ini juga dipakai sebagai pembanding selfie saat absen.'
         }
       />
 
-      <Group title={picked ? 'Foto baru' : 'Foto terdaftar'} padded cardStyle={styles.photoCard}>
+      <Group title={picked ? 'Foto baru' : 'Foto profil'} padded cardStyle={styles.photoCard}>
         {picked || current ? (
           <Image source={{ uri: picked?.uri ?? current ?? undefined }} style={styles.photo} contentFit="cover" />
         ) : (
@@ -96,10 +103,10 @@ export default function MasterFaceScreen() {
             <View style={styles.placeholderIcon}>
               <Ionicons name="person-outline" size={56} color={colors.textMuted} />
             </View>
-            <Text style={styles.muted}>Belum ada foto master wajah.</Text>
+            <Text style={styles.muted}>Belum ada foto profil.</Text>
           </View>
         )}
-        {!picked && access.masterFaceVerifiedAt ? <Text style={styles.muted}>Didaftarkan {formatDateTime(access.masterFaceVerifiedAt)}</Text> : null}
+        {!picked && access.masterFaceVerifiedAt ? <Text style={styles.muted}>Dipasang {formatDateTime(access.masterFaceVerifiedAt)}</Text> : null}
         {upload.isError ? (
           <View style={styles.fullWidth}>
             <Notice tone="danger" message={errorMessage(upload.error)} />
@@ -107,18 +114,18 @@ export default function MasterFaceScreen() {
         ) : null}
       </Group>
 
-      <Text style={styles.tips}>Gunakan wajah menghadap depan, pencahayaan cukup, tanpa masker atau kacamata hitam.</Text>
+      <Text style={styles.tips}>Gunakan foto wajah Anda sendiri menghadap depan, pencahayaan cukup, tanpa masker atau kacamata hitam.</Text>
 
       {picked ? (
         <View style={styles.row}>
-          <Button title="Batal" variant="secondary" onPress={() => setPicked(null)} disabled={upload.isPending} style={styles.flex} />
+          <Button title="Batal" variant="secondary" onPress={cancelPick} disabled={upload.isPending} style={styles.flex} />
           <Button title="Simpan foto" icon="cloud-upload-outline" onPress={() => upload.mutate()} loading={upload.isPending} style={styles.flex} />
         </View>
       ) : (
         <View style={styles.actions}>
           <Button title="Ambil dengan kamera" icon="camera-outline" size="lg" onPress={() => pick('camera')} />
           <Button title="Pilih dari galeri" icon="images-outline" variant="secondary" onPress={() => pick('library')} />
-          {current ? <Button title="Hapus foto master wajah" icon="trash-outline" variant="danger" onPress={confirmRemove} loading={remove.isPending} /> : null}
+          {current ? <Button title="Hapus foto profil" icon="trash-outline" variant="danger" onPress={confirmRemove} loading={remove.isPending} /> : null}
         </View>
       )}
     </Screen>

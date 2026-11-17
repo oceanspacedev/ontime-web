@@ -119,7 +119,7 @@ function RootLayout() {
                   headerShown: false,
                 }}
               />
-              <Stack.Screen name="attendance/master-face" options={{ title: 'Foto Master Wajah' }} />
+              <Stack.Screen name="attendance/master-face" options={{ title: 'Foto Profil' }} />
               <Stack.Screen name="attendance/[id]" options={{ title: 'Detail Presensi' }} />
               <Stack.Screen name="calendar" options={{ title: 'Kalender Cuti Tim' }} />
               <Stack.Screen name="request/leave/new" options={{ title: 'Ajukan Cuti / Izin' }} />

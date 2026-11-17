@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Alert, Image, View } from 'react-native';
@@ -8,7 +9,7 @@ import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { attendanceApi } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { useSession } from '@/lib/session';
-import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance } from '@/theme';
+import { type AppearancePreference, fontSize, makeStyles, spacing, useAppearance, useTheme } from '@/theme';
 
 /** The OnTime logo tile, the same one the web panel shows (public/images/icon.svg). */
 const BRAND_TILE = require('../../../assets/brand-tile.png');
@@ -21,6 +22,7 @@ const APPEARANCE_LABELS: Record<AppearancePreference, string> = {
 
 export default function ProfileScreen() {
   const styles = useStyles();
+  const { colors } = useTheme();
   const user = useSession((state) => state.user);
   const signOut = useSession((state) => state.signOut);
   const appearance = useAppearance((state) => state.preference);
@@ -46,14 +48,28 @@ export default function ProfileScreen() {
   const displayName = access.profileName || user?.name || '';
   const selfieMode = attendanceApi.selfieModeOf(policy ?? null);
   const needsMasterFace = selfieMode === 'face' || selfieMode === 'liveness';
+  // Karyawan, magang and freelance set their own profile photo; it is also their master face.
+  const canSetPhoto = access.canUseAttendance;
+  const openPhoto = canSetPhoto ? () => router.push('/attendance/master-face') : undefined;
 
   return (
     <Screen title="Profil" onRefresh={() => refreshUser.mutate()}>
       <Group title="Profil Anda">
         <Row
-          left={<Avatar name={displayName} uri={access.masterFacePhoto} size={52} />}
+          left={
+            <View accessibilityLabel={canSetPhoto ? 'Ganti foto profil' : undefined}>
+              <Avatar name={displayName} uri={access.masterFacePhoto} size={52} />
+              {canSetPhoto ? (
+                <View style={[styles.cameraBadge, { backgroundColor: colors.primary, borderColor: colors.card }]}>
+                  <Ionicons name="camera" size={12} color="#FFFFFF" />
+                </View>
+              ) : null}
+            </View>
+          }
           title={displayName}
           subtitle={user?.email}
+          onPress={openPhoto}
+          chevron={false}
         />
       </Group>
 
@@ -71,13 +87,19 @@ export default function ProfileScreen() {
       ) : null}
 
       <Group title="Pengaturan">
-        {access.canUseAttendance && (needsMasterFace || access.masterFaceVerifiedAt) ? (
+        {canSetPhoto ? (
           <Row
-            icon="scan-outline"
-            title="Foto master wajah"
-            subtitle={access.masterFaceVerifiedAt ? `Didaftarkan ${formatDateTime(access.masterFaceVerifiedAt)}` : undefined}
-            value={access.masterFaceVerifiedAt ? 'Terdaftar' : 'Belum'}
-            onPress={() => router.push('/attendance/master-face')}
+            icon="person-circle-outline"
+            title="Foto profil"
+            subtitle={
+              needsMasterFace
+                ? 'Dipakai juga untuk verifikasi wajah saat absen'
+                : access.masterFaceVerifiedAt
+                  ? `Dipasang ${formatDateTime(access.masterFaceVerifiedAt)}`
+                  : 'Pasang foto agar profil lebih personal'
+            }
+            value={access.masterFacePhoto ? 'Ganti' : 'Pasang'}
+            onPress={openPhoto}
           />
         ) : null}
         {access.canResign ? (
@@ -99,6 +121,17 @@ export default function ProfileScreen() {
 }
 
 const useStyles = makeStyles((c) => ({
+  cameraBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: spacing.sm },
   footerLogo: { width: 18, height: 18 },
   footerText: { fontSize: fontSize.xs, color: c.textMuted },
