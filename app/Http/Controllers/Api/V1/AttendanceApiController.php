@@ -16,6 +16,8 @@ use App\Models\User;
 use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
+use App\Services\Face\FaceServiceUnavailable;
+use App\Services\Face\FaceVerifier;
 use App\Services\FileNamingService;
 use App\Services\GeofenceService;
 use App\Services\OffScheduleCheckInService;
@@ -213,17 +215,21 @@ class AttendanceApiController extends Controller
         ]);
     }
 
-    public function registerMasterFace(Request $request): JsonResponse
+    /**
+     * Set or replace the worker's profile photo. The same photo is the master face that face recognition
+     * and liveness compare check-in selfies with, so the worker sets both from one place.
+     */
+    public function registerMasterFace(Request $request, FaceVerifier $faceVerifier): JsonResponse
     {
         $request->validate([
             'photo' => ['required', 'file', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
         ], [
-            'photo.required' => 'Foto Master Wajah wajib diunggah.',
-            'photo.uploaded' => 'Foto Master Wajah gagal terunggah. Periksa koneksi lalu coba lagi.',
-            'photo.file' => 'Foto Master Wajah harus berupa berkas gambar.',
-            'photo.image' => 'Foto Master Wajah harus berupa berkas gambar.',
-            'photo.mimes' => 'Foto Master Wajah harus berformat jpeg, png, jpg, atau webp.',
-            'photo.max' => 'Foto Master Wajah maksimal berukuran 5MB.',
+            'photo.required' => 'Foto profil wajib diunggah.',
+            'photo.uploaded' => 'Foto profil gagal terunggah. Periksa koneksi lalu coba lagi.',
+            'photo.file' => 'Foto profil harus berupa berkas gambar.',
+            'photo.image' => 'Foto profil harus berupa berkas gambar.',
+            'photo.mimes' => 'Foto profil harus berformat jpeg, png, jpg, atau webp.',
+            'photo.max' => 'Foto profil maksimal berukuran 5MB.',
         ]);
 
         $user = $request->user();
@@ -235,7 +241,12 @@ class AttendanceApiController extends Controller
 
         $file = $request->file('photo');
         if (! $file || ! $file->isValid()) {
-            return response()->json(['message' => 'File foto master wajah tidak valid atau gagal disimpan di temporary server.'], 422);
+            return response()->json(['message' => 'File foto profil tidak valid atau gagal disimpan di temporary server.'], 422);
+        }
+
+        $faceProblem = $this->profilePhotoFaceProblem($faceVerifier, $file->getRealPath());
+        if ($faceProblem !== null) {
+            return response()->json(['message' => $faceProblem, 'errors' => ['photo' => [$faceProblem]]], 422);
         }
 
         $identifier = $profile->employee_code ?? $profile->nik ?? (string) ($profile->id ?? $user->id);
@@ -256,12 +267,36 @@ class AttendanceApiController extends Controller
         $photoUrl = StorageUrl::for($photoPath);
 
         return response()->json([
-            'message' => 'Foto Master Wajah berhasil diperbarui',
+            'message' => 'Foto profil berhasil diperbarui.',
             'data' => [
                 'master_face_photo' => $photoUrl,
                 'master_face_verified_at' => $profile->master_face_verified_at->toISOString(),
             ],
         ]);
+    }
+
+    /**
+     * Why a profile photo cannot serve as the master face, or null when it can. Only a driver that does
+     * real face recognition can tell; the built-in pixel comparison cannot, and an unreachable face
+     * service does not stop the worker from setting a photo.
+     */
+    private function profilePhotoFaceProblem(FaceVerifier $faceVerifier, string|false $path): ?string
+    {
+        if ($path === false || ! $faceVerifier->isAccurate()) {
+            return null;
+        }
+
+        try {
+            $faces = $faceVerifier->detect($path)->faces;
+        } catch (FaceServiceUnavailable) {
+            return null;
+        }
+
+        return match (true) {
+            $faces === 0 => 'Wajah tidak terlihat di foto. Foto profil juga dipakai untuk verifikasi wajah saat absen, jadi gunakan foto wajah Anda sendiri yang jelas.',
+            $faces > 1 => 'Ada lebih dari satu wajah di foto. Gunakan foto yang hanya berisi wajah Anda.',
+            default => null,
+        };
     }
 
     public function today(Request $request, AttendanceCheckService $attendanceCheck): JsonResponse
@@ -439,7 +474,7 @@ class AttendanceApiController extends Controller
         }
 
         if (! $profile->master_face_photo) {
-            return response()->json(['message' => 'Foto Master Wajah belum pernah didaftarkan.'], 400);
+            return response()->json(['message' => 'Foto profil belum pernah dipasang.'], 400);
         }
 
         $profile->update([
@@ -448,7 +483,7 @@ class AttendanceApiController extends Controller
         ]);
 
         return response()->json([
-            'message' => 'Foto Master Wajah berhasil dihapus.',
+            'message' => 'Foto profil berhasil dihapus.',
         ]);
     }
 }

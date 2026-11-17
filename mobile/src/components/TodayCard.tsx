@@ -126,14 +126,14 @@ export function TodayCard({ today, access }: Props) {
           icon="scan-outline"
           message={
             selfieMode === 'liveness'
-              ? 'Perusahaan mewajibkan verifikasi wajah dengan gerakan kepala (liveness). Daftarkan foto master wajah dulu sebelum absen.'
-              : 'Perusahaan mewajibkan verifikasi wajah. Daftarkan foto master wajah dulu sebelum absen.'
+              ? 'Perusahaan mewajibkan verifikasi wajah dengan gerakan kepala (liveness). Pasang foto profil berisi wajah Anda dulu sebelum absen.'
+              : 'Perusahaan mewajibkan verifikasi wajah. Pasang foto profil berisi wajah Anda dulu sebelum absen.'
           }
         />
       ) : null}
 
       {done || onLeave ? null : needsMasterFace ? (
-        <Button title="Daftarkan Foto Master Wajah" icon="scan-outline" size="lg" onPress={() => router.push('/attendance/master-face')} />
+        <Button title="Pasang Foto Profil" icon="scan-outline" size="lg" onPress={() => router.push('/attendance/master-face')} />
       ) : !today.has_checked_in ? (
         <Button title="Absen Masuk" icon="log-in-outline" size="lg" onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'in' } })} />
       ) : (

@@ -449,7 +449,7 @@ class WorkersDailyJourneyTest extends TestCase
         // Without a master face the check-in is refused before any face service call.
         $this->checkIn($this->employee)
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.');
+            ->assertJsonPath('message', 'Foto profil belum dipasang. Pasang foto profil berisi wajah Anda di menu Profil terlebih dahulu, karena foto itu dipakai untuk verifikasi wajah.');
 
         $this->postAs($this->employee, '/api/v1/attendance/master-face', ['photo' => UploadedFile::fake()->image('master.jpg', 80, 80)])
             ->assertOk();

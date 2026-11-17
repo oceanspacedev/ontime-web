@@ -19,7 +19,7 @@ export function applyCurrentUser({ user, epoch }: { user: User; epoch: number })
   return useSession.getState().setUser(user, epoch);
 }
 
-/** Re-reads /auth/me so role, policy and master-face changes made in the panel show up. */
+/** Re-reads /auth/me so role, policy and profile photo changes made in the panel show up. */
 export function useRefreshUser() {
   return useMutation({
     mutationFn: fetchCurrentUser,

@@ -229,8 +229,8 @@ Berhasil membalas 200 dengan isi yang persis sama seperti `POST /auth/login` (`m
 | POST | `/attendance/liveness-challenge` | Token + profil | Minta tantangan liveness (gerak kepala) |
 | POST | `/attendance/check-in` | Token + profil | Presensi masuk |
 | POST | `/attendance/check-out` | Token + profil | Presensi keluar |
-| POST | `/attendance/master-face` | Token + profil | Unggah/ganti foto master wajah |
-| DELETE | `/attendance/master-face` | Token + profil | Hapus foto master wajah |
+| POST | `/attendance/master-face` | Token + profil | Pasang/ganti foto profil (sekaligus foto master wajah) |
+| DELETE | `/attendance/master-face` | Token + profil | Hapus foto profil |
 | GET | `/attendances` | Token | Riwayat presensi (bentuk A) |
 | GET | `/attendances/{id}` | Token | Detail presensi |
 
@@ -382,14 +382,14 @@ Setiap 422 di `liveness_frames` berarti tantangan sudah terpakai: minta tantanga
 
 Nilai `status` presensi: `on_time` (Tepat Waktu), `late` (Terlambat), `absent` (Tidak Hadir), `leave` (Cuti / Izin), `holiday` (Hari Libur), `off` (Libur), `pending_approval` (Menunggu Persetujuan), `rejected` (Ditolak).
 
-**POST /attendance/master-face** (`multipart/form-data`): `photo` wajib, gambar jpeg/png/jpg/webp, maks 5 MB.
+**POST /attendance/master-face** (`multipart/form-data`): `photo` wajib, gambar jpeg/png/jpg/webp, maks 5 MB. Foto ini adalah foto profil pekerja (karyawan, magang, freelance) dan sekaligus foto master wajah yang dibandingkan dengan selfie pada verifikasi wajah dan liveness. Bila `FACE_DRIVER=compreface`, foto tanpa wajah atau dengan lebih dari satu wajah ditolak dengan 422 di `errors.photo`. Driver `basic` tidak bisa memeriksa wajah, dan layanan wajah yang tidak bisa dihubungi tidak menghalangi penyimpanan. Akun tanpa profil pekerja mendapat 422 `Profil pengguna tidak ditemukan.`
 
 ```json
-{"message": "Foto Master Wajah berhasil diperbarui",
+{"message": "Foto profil berhasil diperbarui.",
  "data": {"master_face_photo": "<url>", "master_face_verified_at": "2026-08-03T07:00:00.000000Z"}}
 ```
 
-**DELETE /attendance/master-face** membalas `{"message": "Foto Master Wajah berhasil dihapus."}`, atau 400 bila belum ada foto.
+**DELETE /attendance/master-face** membalas `{"message": "Foto profil berhasil dihapus."}`, atau 400 `Foto profil belum pernah dipasang.` bila belum ada foto.
 
 **GET /attendances**: query `start_date` + `end_date` (keduanya), atau `month` + `year` (keduanya), dan `status`. Urut tanggal terbaru. `GET /attendances/{id}`: 404 bila tidak ada, 403 bila bukan milik sendiri dan di luar data akses pemanggil.
 
