@@ -28,6 +28,9 @@ class PresensiMandiriCheckInTest extends TestCase
     {
         parent::setUp();
 
+        // Check-in opens 60 minutes before the start (company hours 08:00), so the clock is fixed in working hours.
+        $this->travelTo(today()->setTime(8, 0));
+
         Role::create(['name' => 'Employee']);
         Role::create(['name' => 'Intern']);
 

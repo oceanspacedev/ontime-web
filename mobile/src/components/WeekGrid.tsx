@@ -7,7 +7,7 @@ import type { ScheduleTarget } from '@/components/ScheduleSheet';
 import { errorMessage, teamApi, type TeamWeek } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
-import { shiftDate, shiftText, weekCellText, weekStart } from '@/lib/team';
+import { BORROWED_READ_ONLY, canEditSchedule, shiftDate, shiftText, weekCellText, weekStart } from '@/lib/team';
 import { fontSize, makeStyles, radius, spacing } from '@/theme';
 
 const OFF = 'off';
@@ -80,6 +80,10 @@ export function WeekGrid({ date, onChange, onEdit }: Props) {
   });
 
   const edit = (row: TeamWeek['workers'][number], day: string) => {
+    if (!canEditSchedule(row)) {
+      Alert.alert(row.worker.name, BORROWED_READ_ONLY);
+      return;
+    }
     if (brush) {
       paint.mutate({ row, day });
       return;
@@ -178,7 +182,7 @@ export function WeekGrid({ date, onChange, onEdit }: Props) {
                 {week.data.days.map((day) => {
                   const cell = row.days[day];
                   return (
-                    <Pressable key={day} style={[styles.cell, styles.box, cell?.is_day_off && styles.off]} onPress={() => edit(row, day)} accessibilityRole="button" accessibilityLabel={`${row.worker.name}, ${day}`}>
+                    <Pressable key={day} style={[styles.cell, styles.box, (cell?.is_day_off || !canEditSchedule(row)) && styles.off]} onPress={() => edit(row, day)} accessibilityRole="button" accessibilityLabel={`${row.worker.name}, ${day}`}>
                       <Text style={[styles.code, !cell && styles.empty]}>{weekCellText(cell)}</Text>
                       {cell?.borrowed_from ? <Text style={styles.borrowed}>pinjam</Text> : null}
                     </Pressable>

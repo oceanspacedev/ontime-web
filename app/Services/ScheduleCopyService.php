@@ -12,7 +12,8 @@ use Carbon\CarbonInterface;
  * week's roster instead of an empty one. Shared by the panel and the mobile API.
  *
  * Only workers inside the user's data access are copied. Days that already have a schedule are
- * left alone, and shifts that were switched off since are skipped, so a copy never overwrites work.
+ * left alone, and shifts that were switched off since are skipped, so a copy never overwrites work. A
+ * working day without a shift is copied too.
  */
 final class ScheduleCopyService
 {
@@ -34,7 +35,9 @@ final class ScheduleCopyService
         $schedules = ShiftSchedule::query()
             ->visibleTo($user)
             ->with([...ShiftSchedule::workerEagerLoads(), 'shift'])
-            ->whereBetween('date', [$source->toDateString(), $source->copy()->endOfWeek()->toDateString()])
+            // A half-open range: Sunday still matches where dates are stored with a time (SQLite).
+            ->where('date', '>=', $source->toDateString())
+            ->where('date', '<', $source->copy()->addWeek()->toDateString())
             ->get();
 
         foreach ($schedules as $schedule) {
@@ -46,7 +49,9 @@ final class ScheduleCopyService
                 continue;
             }
 
-            if (! $schedule->is_day_off && ! $schedule->shift?->is_active) {
+            // A working day without a shift (the default shift or the policy hours) is copied as it is; only a
+            // shift switched off since is skipped.
+            if (! $schedule->is_day_off && $schedule->shift_id !== null && ! $schedule->shift?->is_active) {
                 $result['skipped_unavailable']++;
 
                 continue;

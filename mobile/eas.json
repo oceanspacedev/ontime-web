@@ -10,6 +10,8 @@
         "buildType": "app-bundle"
       },
       "env": {
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://ontime.oceanspace.co.id/api/v1",
         "NPM_CONFIG_LEGACY_PEER_DEPS": "true",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
@@ -20,6 +22,7 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_APP_ENV": "preview",
         "NPM_CONFIG_LEGACY_PEER_DEPS": "true",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }

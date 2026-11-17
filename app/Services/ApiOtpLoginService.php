@@ -8,6 +8,7 @@ use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Throwable;
@@ -37,6 +38,12 @@ class ApiOtpLoginService
     private const OTP_PURPOSE = 'login';
 
     private const OTP_SUBJECT = 'api-login';
+
+    /** Cache key set while the mail provider is failing, so unknown addresses get the same 503. */
+    private const MAIL_DOWN_KEY = 'ontime:api-otp:email:mailer-down';
+
+    /** How long a failed send keeps the mail provider marked as down, in seconds. */
+    private const MAIL_DOWN_SECONDS = 300;
 
     public function __construct(
         private WhatsAppOtpService $whatsAppOtpService,
@@ -191,7 +198,9 @@ class ApiOtpLoginService
         }
 
         // Inactive accounts still get the email so the API can refuse them with a clear 403 once the
-        // code proves who is asking; unknown addresses silently move on to the code step.
+        // code proves who is asking; unknown addresses silently move on to the code step. While the
+        // mail provider is known to be failing, unknown addresses get the same delivery_failed answer
+        // as known ones, so an outage never reveals which address has an account.
         $user = $this->emailOtpService->findUser($email, includeInactive: true);
         if ($user !== null) {
             try {
@@ -202,9 +211,18 @@ class ApiOtpLoginService
                     $magicLinkOnly ? fn (string $token): string => route('app-login.link', ['token' => $token]) : null,
                     includeCode: ! $magicLinkOnly,
                 );
-            } catch (Throwable) {
+            } catch (Throwable $exception) {
+                Cache::put(self::MAIL_DOWN_KEY, true, now()->addSeconds(self::MAIL_DOWN_SECONDS));
+                Log::warning('Email login API: pengiriman email gagal, penyedia email ditandai bermasalah.', [
+                    'exception' => $exception::class,
+                ]);
+
                 return $this->failure('delivery_failed');
             }
+
+            Cache::forget(self::MAIL_DOWN_KEY);
+        } elseif (Cache::has(self::MAIL_DOWN_KEY)) {
+            return $this->failure('delivery_failed');
         }
 
         $expiresIn = $this->emailOtpService->expiresIn();

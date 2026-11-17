@@ -24,6 +24,11 @@ class CloseExpiredContracts extends Command
                 ->whereNotNull('end_date')
                 ->whereDate('end_date', '<', today())
                 ->each(function (Freelancer|Intern $worker) use ($accounts, &$closed): void {
+                    // Still in the night shift of the last contract day: closed by a later run, once checked out.
+                    if ($accounts->hasOpenShiftOn($worker, $worker->end_date)) {
+                        return;
+                    }
+
                     $accounts->endContract($worker, $worker->end_date);
                     $closed++;
                 });

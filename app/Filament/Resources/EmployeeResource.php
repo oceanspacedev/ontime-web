@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\GuardsWorkerRecords;
 use App\Filament\Concerns\OpensWorkerAccounts;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MasterFacePhotoField;
@@ -17,8 +18,6 @@ use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
 use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
@@ -44,6 +43,7 @@ use UnitEnum;
 
 class EmployeeResource extends Resource
 {
+    use GuardsWorkerRecords;
     use OpensWorkerAccounts;
     use ScopesToManagedCompanies;
 
@@ -105,7 +105,8 @@ class EmployeeResource extends Resource
                                     TextInput::make('phone')
                                         ->label('Telepon')
                                         ->tel()
-                                        ->maxLength(50),
+                                        ->maxLength(50)
+                                        ->rules([static::uniqueWorkerPhoneRule()]),
                                 ]),
 
                             Section::make('Penempatan')
@@ -231,7 +232,9 @@ class EmployeeResource extends Resource
                                     Select::make('user_id')
                                         ->label('Akun User')
                                         ->placeholder('Belum ada akun')
-                                        ->options(fn (?Employee $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->options(fn (?Employee $record, Get $get): array => static::assignableUserOptions($get('company_id')) + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->helperText('Hanya akun yang belum terhubung ke karyawan, magang, atau freelance lain.')
+                                        ->rules([static::linkableAccountRule()])
                                         ->searchable()
                                         ->nullable(),
                                 ]),
@@ -251,6 +254,7 @@ class EmployeeResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query): Builder => static::withWorkHistoryFlag($query))
             ->columns([
                 ImageColumn::make('avatar_url')
                     ->label('')
@@ -383,7 +387,7 @@ class EmployeeResource extends Resource
                             ->send();
                     }),
                 EditAction::make(),
-                DeleteAction::make(),
+                static::workerDeleteAction(),
             ])
             ->bulkActions([
                 BulkActionGroup::make([
@@ -455,7 +459,7 @@ class EmployeeResource extends Resource
                         })
                         ->deselectRecordsAfterCompletion(),
 
-                    DeleteBulkAction::make(),
+                    static::workerDeleteBulkAction(),
                 ]),
             ]);
     }

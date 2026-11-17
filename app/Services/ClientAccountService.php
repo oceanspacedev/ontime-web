@@ -230,7 +230,7 @@ final class ClientAccountService
     private function grantRule(User $actor, array $input): Closure
     {
         return function (string $attribute, mixed $value, Closure $fail) use ($actor, $input): void {
-            $scope = DataScope::tryFrom((string) $value);
+            $scope = is_string($value) ? DataScope::tryFrom($value) : null;
 
             if (! $scope) {
                 return;

@@ -7,7 +7,7 @@ import { AttendanceDetail } from '@/components/AttendanceDetail';
 import { RequestDetail } from '@/components/RequestDetail';
 import type { AnyRequest } from '@/components/RequestRow';
 import { Button, ErrorBanner, Field, Group, LoadingView, Notice, Screen } from '@/components/ui';
-import { approvalsApi, attendanceApi, errorMessage, requestsApi, type ApprovalType, type Attendance } from '@/lib/api';
+import { ApiError, approvalsApi, attendanceApi, errorMessage, requestsApi, type ApprovalType, type Attendance } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
 import { makeStyles, spacing } from '@/theme';
 
@@ -30,6 +30,17 @@ async function load(type: ApprovalType, id: number): Promise<Loaded> {
   }
 }
 
+/** Messages of a decision refused because the request is no longer at the stage the approver saw. */
+const STALE_MESSAGES = ['Pengajuan ini sudah diproses.', 'Pengajuan ini sudah tidak berstatus pending.'];
+
+/** Whether processing failed because the request was decided, moved on or cancelled after the screen loaded. */
+function isStaleDecision(error: unknown): boolean {
+  if (!(error instanceof ApiError)) {
+    return false;
+  }
+  return error.status === 404 || (error.status === 422 && STALE_MESSAGES.includes(error.message));
+}
+
 export default function ApprovalDetailScreen() {
   const styles = useStyles();
   const params = useLocalSearchParams<{ type: string; id: string }>();
@@ -47,16 +58,28 @@ export default function ApprovalDetailScreen() {
 
   const process = useMutation({
     mutationFn: (action: 'approved' | 'rejected') =>
-      approvalsApi.process(type as ApprovalType, id, action, note.trim() || null, (query.data?.data as { current_step?: number | null } | undefined)?.current_step ?? null),
+      approvalsApi.process(type as ApprovalType, id, action, note.trim() || null, query.data?.data.current_step ?? null),
     onSuccess: async (response) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.approvals }),
         queryClient.invalidateQueries({ queryKey: ['requests'] }),
         queryClient.invalidateQueries({ queryKey: ['attendance'] }),
+        // An approved backup check-in rosters the backup and can give the replaced colleague a day off.
+        queryClient.invalidateQueries({ queryKey: queryKeys.team }),
       ]);
       Alert.alert('Selesai', response.message, [{ text: 'OK', onPress: () => router.back() }]);
     },
-    onError: (error) => Alert.alert('Gagal', errorMessage(error)),
+    onError: (error) => {
+      // Decided or cancelled meanwhile (or moved to another stage): this screen is stale, so the lists are
+      // reloaded and the approver goes back instead of retrying the same tap.
+      if (isStaleDecision(error)) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.approvals });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.requestDetail(type ?? 'unknown', id) });
+        Alert.alert('Pengajuan sudah berubah', errorMessage(error), [{ text: 'OK', onPress: () => router.back() }]);
+        return;
+      }
+      Alert.alert('Gagal', errorMessage(error));
+    },
   });
 
   const approve = () => {
@@ -111,7 +134,7 @@ export default function ApprovalDetailScreen() {
     <Screen onRefresh={() => query.refetch()} footer={decisionActions}>
       {item.kind === 'geofence' ? (
         <>
-          <Notice tone="warning" message="Presensi ini dilakukan di luar area kantor atau verifikasi wajahnya tidak cocok. Periksa foto dan lokasinya sebelum memutuskan." />
+          <Notice tone="warning" message={attendanceApi.approvalReasonOf(item.data)} />
           <AttendanceDetail attendance={item.data} />
         </>
       ) : (

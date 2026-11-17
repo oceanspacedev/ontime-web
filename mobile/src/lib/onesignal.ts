@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
+import { Platform, TurboModuleRegistry } from 'react-native';
 import type { NotificationClickEvent, NotificationWillDisplayEvent, PushSubscriptionChangedState } from 'react-native-onesignal';
 
 /**
@@ -30,9 +30,26 @@ function appId(): string | null {
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
+/**
+ * Whether the OneSignal native module is in this binary. Expo Go on Android does not report itself as
+ * `storeClient` in every version, and requiring the SDK without the module crashes the app at start.
+ */
+function hasNativeModule(): boolean {
+  try {
+    return TurboModuleRegistry.get('OneSignal') !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** Push needs the native module, which Expo Go and the web do not have. */
 export function isPushAvailable(): boolean {
-  return (Platform.OS === 'android' || Platform.OS === 'ios') && Constants.executionEnvironment !== 'storeClient' && appId() !== null;
+  return (
+    (Platform.OS === 'android' || Platform.OS === 'ios') &&
+    Constants.executionEnvironment !== 'storeClient' &&
+    appId() !== null &&
+    hasNativeModule()
+  );
 }
 
 /** Start the SDK once, at the app root. Does not ask for permission. */

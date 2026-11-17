@@ -75,7 +75,7 @@ class MasterDataApiController extends Controller
 
     public function divisions(Request $request): JsonResponse
     {
-        $query = DataAccessService::scopeCompanies(Division::with('company'), $request->user());
+        $query = $this->visibleDivisions($request->user());
 
         if ($request->has('company_id')) {
             $query->where('company_id', $request->input('company_id'));
@@ -86,9 +86,23 @@ class MasterDataApiController extends Controller
 
     public function showDivision(Request $request, int $id): JsonResponse
     {
-        $division = DataAccessService::scopeCompanies(Division::with('company'), $request->user())->findOrFail($id);
+        $division = $this->visibleDivisions($request->user())->findOrFail($id);
 
         return response()->json(['data' => $division]);
+    }
+
+    /**
+     * Divisions inside the user's data access: a division-scoped account only sees its picked
+     * divisions and their sub-divisions, never a sibling of the same company.
+     *
+     * @return Builder<Division>
+     */
+    private function visibleDivisions(User $user): Builder
+    {
+        $query = DataAccessService::scopeCompanies(Division::with('company'), $user);
+        $divisionIds = DataAccessService::visibleDivisionIds($user);
+
+        return $divisionIds === null ? $query : $query->whereIn('divisions.id', $divisionIds);
     }
 
     public function jobTitles(Request $request): JsonResponse

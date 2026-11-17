@@ -9,6 +9,7 @@ export function countPending(pending: PendingApprovals | undefined): number {
     pending.overtime_requests.length +
     pending.attendance_corrections.length +
     pending.geofence_attendances.length +
-    pending.resignations.length
+    pending.resignations.length +
+    (pending.shift_swaps?.length ?? 0)
   );
 }

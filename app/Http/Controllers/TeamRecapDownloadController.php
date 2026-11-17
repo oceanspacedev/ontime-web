@@ -16,7 +16,8 @@ class TeamRecapDownloadController extends Controller
 {
     public function __invoke(Request $request, User $user, TeamRecapService $recaps): BinaryFileResponse
     {
-        abort_unless($user->is_active !== false && $user->canManageWorkers(), 403);
+        // The link outlives nothing the API would refuse: an inactive account or a switched-off Klien gets no file.
+        abort_unless($user->canSignIn() && $user->canManageWorkers(), 403);
 
         $month = Carbon::createFromFormat('Y-m', (string) $request->query('month'))->startOfMonth();
 

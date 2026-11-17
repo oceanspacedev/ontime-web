@@ -53,6 +53,17 @@ const RETRY_TIMEOUT_MS = 10000;
 /** A cached fix this recent and this precise is good enough for the office geofence. */
 const LAST_KNOWN_MAX_AGE_MS = 60000;
 const LAST_KNOWN_MAX_ACCURACY_M = 200;
+/**
+ * Right before sending a check only a cached fix this recent is accepted: a minute-old fix could be
+ * the one taken before the worker walked out of the geofence. Without one the submit fails with
+ * "Lokasi belum terbaca" instead of sending an old position.
+ */
+export const SUBMIT_LAST_KNOWN_MAX_AGE_MS = 10000;
+
+export interface ReadPositionOptions {
+  /** Oldest cached fix accepted when no fresh one arrives in time. */
+  lastKnownMaxAgeMs?: number;
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
@@ -129,8 +140,14 @@ export async function enableDeviceLocation(): Promise<void> {
  * each bounded in time so the screen never waits forever indoors. The mocked flag always comes from
  * the position that is used, so mock detection still works.
  */
-export async function readDevicePosition(): Promise<DevicePosition> {
-  const permission = await Location.requestForegroundPermissionsAsync();
+export async function readDevicePosition(options: ReadPositionOptions = {}): Promise<DevicePosition> {
+  const lastKnownMaxAgeMs = options.lastKnownMaxAgeMs ?? LAST_KNOWN_MAX_AGE_MS;
+  // Ask only when needed: on Android a request always opens the (invisible when already granted)
+  // permission activity, which pauses and resumes the app. Asking on every read made the screen's
+  // "read again when back in the app" refetch trigger itself forever on a real phone.
+  const current = await Location.getForegroundPermissionsAsync();
+  const mustAsk = !current.granted || (Platform.OS === 'android' && current.android?.accuracy === 'coarse');
+  const permission = mustAsk ? await Location.requestForegroundPermissionsAsync() : current;
   if (!permission.granted) {
     throw new LocationDeniedError(permission.canAskAgain);
   }
@@ -156,7 +173,7 @@ export async function readDevicePosition(): Promise<DevicePosition> {
     // Without the "improve accuracy" dialog: on Android, a refused dialog (or "device only" mode)
     // still gets a plain GPS reading this way instead of asking again.
     (await attempt({ accuracy: Location.Accuracy.High, mayShowUserSettingsDialog: false }, RETRY_TIMEOUT_MS)) ??
-    (await Location.getLastKnownPositionAsync({ maxAge: LAST_KNOWN_MAX_AGE_MS, requiredAccuracy: LAST_KNOWN_MAX_ACCURACY_M }).catch(() => null));
+    (await Location.getLastKnownPositionAsync({ maxAge: lastKnownMaxAgeMs, requiredAccuracy: LAST_KNOWN_MAX_ACCURACY_M }).catch(() => null));
 
   if (!position) {
     if (isServicesOffError(lastError)) {
@@ -167,4 +184,21 @@ export async function readDevicePosition(): Promise<DevicePosition> {
 
   const { latitude, longitude, accuracy } = position.coords;
   return { latitude, longitude, accuracy: accuracy ?? null, mocked: position.mocked === true };
+}
+
+/**
+ * The error to show when the position read right before sending a check fails. The known location
+ * errors keep their class (and Indonesian message); a native Expo error gets the Indonesian text,
+ * since the submit error notice shows the message as is.
+ */
+export function submitLocationError(error: unknown): Error {
+  if (
+    error instanceof LocationDeniedError ||
+    error instanceof ApproximateLocationError ||
+    error instanceof LocationServicesOffError ||
+    error instanceof LocationUnavailableError
+  ) {
+    return error;
+  }
+  return new Error(locationErrorMessage(error), { cause: error });
 }

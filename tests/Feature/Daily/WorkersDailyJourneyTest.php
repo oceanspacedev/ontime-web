@@ -356,6 +356,9 @@ class WorkersDailyJourneyTest extends TestCase
     public function test_gps_check_in_outside_the_geofence_waits_for_the_klien_approver(): void
     {
         $this->setPolicy(['require_gps' => true]);
+        // A rostered freelancer: only the geofence holds the check-in back (not "Masuk di luar jadwal").
+        $morning = Shift::create(['company_id' => $this->company->id, 'name' => 'Pagi', 'code' => 'PG', 'start_time' => '08:00', 'end_time' => '17:00']);
+        $this->scheduleShift($this->freelancer, $morning, self::MONDAY);
 
         $response = $this->checkIn($this->freelancer, ['latitude' => self::OUTSIDE_LAT, 'longitude' => self::OUTSIDE_LNG, 'is_mocked' => 'false'])
             ->assertOk()
@@ -536,9 +539,11 @@ class WorkersDailyJourneyTest extends TestCase
         $this->today($this->employee)->assertJsonPath('schedule.is_day_off', true);
 
         $this->travelTo(Carbon::parse(self::MONDAY.' 13:00:00'));
-        $this->checkIn($this->employee)
+        $closing = Shift::create(['company_id' => $this->company->id, 'name' => 'Closing', 'code' => 'CL', 'start_time' => '13:00', 'end_time' => '21:00']);
+        $this->checkIn($this->employee, ['cover_shift_id' => $closing->id])
             ->assertOk()
-            ->assertJsonPath('attendance.status', AttendanceStatus::OnTime->value)
+            ->assertJsonPath('requires_approval', true)
+            ->assertJsonPath('attendance.status', AttendanceStatus::PendingApproval->value)
             ->assertJsonPath('attendance.late_minutes', 0);
     }
 
@@ -595,7 +600,9 @@ class WorkersDailyJourneyTest extends TestCase
         $leave(['leave_type' => 'sick', 'attachment' => UploadedFile::fake()->create('virus.exe', 10, 'application/x-msdownload')])
             ->assertStatus(422)
             ->assertJsonValidationErrors('attachment');
-        $sick = $leave(['leave_type' => 'sick', 'attachment' => UploadedFile::fake()->create('surat-dokter.pdf', 50, 'application/pdf')])
+        // The 20th already holds the pending annual leave; no leave of any type may share its day.
+        $leave(['leave_type' => 'sick'])->assertStatus(422)->assertJsonValidationErrors('leave_type');
+        $sick = $leave(['leave_type' => 'sick', 'start_date' => '2026-11-21', 'end_date' => '2026-11-21', 'attachment' => UploadedFile::fake()->create('surat-dokter.pdf', 50, 'application/pdf')])
             ->assertCreated();
         $sickRecord = LeaveRequest::findOrFail($sick->json('data.id'));
         $this->assertNotNull($sickRecord->attachment);

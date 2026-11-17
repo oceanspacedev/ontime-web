@@ -55,6 +55,7 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
             'GPS Check-Out',
             'Status Kehadiran',
             'Menit Telat',
+            'Menit Pulang Cepat',
             'Keterangan / Notes',
         ];
     }
@@ -113,6 +114,7 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
                     default => (string) ($row->status ?? '-'),
                 }),
             $row->late_minutes ?? 0,
+            $row->early_leave_minutes ?? 0,
             $row->notes ?? ($row->is_corrected ? 'Koreksi Absensi' : '-'),
         ];
     }
@@ -228,7 +230,8 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
             'M' => 24,  // GPS Check-Out
             'N' => 22,  // Status
             'O' => 14,  // Menit Telat
-            'P' => 28,  // Keterangan
+            'P' => 16,  // Menit Pulang Cepat
+            'Q' => 28,  // Keterangan
         ];
     }
 
@@ -245,7 +248,7 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
         $sheet->getStyle("E2:N{$totalRows}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         $sheet->getStyle("E2:N{$totalRows}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
         $sheet->getStyle("A2:D{$totalRows}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
-        $sheet->getStyle("O2:O{$totalRows}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
+        $sheet->getStyle("O2:P{$totalRows}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
         $sheet->getStyle("I2:I{$totalRows}")->getNumberFormat()->setFormatCode(self::HOURS_FORMAT);
 
         return [

@@ -3,9 +3,10 @@
 namespace App\Models;
 
 use App\Enums\AttendanceStatus;
+use App\Services\AttendanceLatenessService;
+use App\Services\OffScheduleCheckInService;
 use App\Services\WorkScheduleService;
 use App\Traits\ScopesToWorkerVisibility;
-use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -35,8 +36,14 @@ class Attendance extends Model
         'check_out_lng',
         'status',
         'late_minutes',
+        'check_in_late_minutes',
+        'early_leave_minutes',
+        'is_off_schedule',
+        'replaced_worker_type',
+        'replaced_worker_id',
         'notes',
         'is_corrected',
+        'status_overridden',
         'is_out_of_bounds',
         'is_mock_location',
         'is_face_verified',
@@ -49,6 +56,48 @@ class Attendance extends Model
         'rejection_reason',
     ];
 
+    protected static function booted(): void
+    {
+        // The lateness judged at check-in only holds for that check-in time; a correction or an
+        // admin edit of the check-in leaves the approval to judge the new time again.
+        static::updating(function (Attendance $attendance): void {
+            if ($attendance->checkInMinuteChanged() && ! $attendance->isDirty('check_in_late_minutes')) {
+                $attendance->check_in_late_minutes = null;
+            }
+        });
+
+        // Leaving before the scheduled end ("pulang cepat") is judged whenever the check-out is set or
+        // moved: by the worker's check-out, an approved correction or an admin edit.
+        static::saving(function (Attendance $attendance): void {
+            if ($attendance->isDirty('check_out') && ! $attendance->isDirty('early_leave_minutes')) {
+                $attendance->early_leave_minutes = $attendance->check_out
+                    ? app(WorkScheduleService::class)->earlyLeaveMinutes($attendance)
+                    : null;
+            }
+        });
+    }
+
+    /**
+     * Whether a pending update moves the check-in to another minute. Lateness is counted in whole
+     * minutes and the admin form drops seconds, so saving it unchanged (08:30:27 → 08:30:00) keeps
+     * the lateness judged at check-in.
+     */
+    public function checkInMinuteChanged(): bool
+    {
+        if (! $this->isDirty('check_in')) {
+            return false;
+        }
+
+        $original = $this->getOriginal('check_in');
+        $current = $this->check_in;
+
+        if (! $original || ! $current) {
+            return $original != $current;
+        }
+
+        return ! $original->copy()->startOfMinute()->equalTo($current->copy()->startOfMinute());
+    }
+
     protected function casts(): array
     {
         return [
@@ -60,10 +109,15 @@ class Attendance extends Model
             'check_out_lat' => 'decimal:7',
             'check_out_lng' => 'decimal:7',
             'is_corrected' => 'boolean',
+            'status_overridden' => 'boolean',
             'is_out_of_bounds' => 'boolean',
             'is_mock_location' => 'boolean',
             'is_face_verified' => 'boolean',
             'face_match_score' => 'integer',
+            'check_in_late_minutes' => 'integer',
+            'early_leave_minutes' => 'integer',
+            'is_off_schedule' => 'boolean',
+            'replaced_worker_id' => 'integer',
             'liveness_verified' => 'boolean',
             'liveness_frames' => 'array',
             'current_step' => 'integer',
@@ -120,6 +174,19 @@ class Attendance extends Model
     }
 
     /**
+     * Lateness for reports and pay. A check-in waiting for approval keeps late_minutes at 0 until it is
+     * approved, so its lateness judged at check-in is reported instead of letting it read as on time.
+     */
+    public function reportedLateMinutes(): int
+    {
+        if ($this->status === AttendanceStatus::PendingApproval) {
+            return (int) ($this->check_in_late_minutes ?? $this->late_minutes ?? 0);
+        }
+
+        return (int) ($this->late_minutes ?? 0);
+    }
+
+    /**
      * Minutes between check-in and check-out, or null while either one is missing.
      */
     public function workedMinutes(): ?int
@@ -131,21 +198,69 @@ class Attendance extends Model
         return (int) max(0, $this->check_in->diffInMinutes($this->check_out));
     }
 
+    /**
+     * Lateness is the snapshot judged at check-in, which a roster change on that date keeps up to date
+     * ({@see AttendanceLatenessService::recalculate()}); a default shift or policy edited meanwhile does
+     * not change it. Rows without that value (for example a corrected check-in) are judged against the
+     * schedule that applies now, on the row's own business date.
+     *
+     * An approved off-schedule check-in ("Masuk di luar jadwal") also updates the rosters of its date.
+     */
     public function applyGeofenceApproval(): void
     {
-        $profile = $this->getWorkerProfile();
         $lateMinutes = 0;
+        // Read again: a roster change committed since this model was loaded may have judged it anew.
+        $snapshot = $this->exists ? static::query()->whereKey($this->getKey())->value('check_in_late_minutes') : $this->check_in_late_minutes;
 
-        if ($this->check_in && $profile) {
-            $workSchedule = app(WorkScheduleService::class);
-            $checkInTime = Carbon::parse($this->check_in);
-            $lateMinutes = $workSchedule->lateMinutes($workSchedule->resolve($profile, $checkInTime, (int) ($this->segment ?? 1)), $checkInTime);
+        if ($this->check_in && $snapshot !== null) {
+            $lateMinutes = (int) $snapshot;
+        } elseif ($this->check_in) {
+            $lateMinutes = app(AttendanceLatenessService::class)->judge($this)['late_minutes'];
         }
 
         $this->update([
             'status' => $lateMinutes > 0 ? AttendanceStatus::Late : AttendanceStatus::OnTime,
             'late_minutes' => $lateMinutes,
         ]);
+
+        if ($this->is_off_schedule) {
+            app(OffScheduleCheckInService::class)->applyApproval($this);
+        }
+    }
+
+    /**
+     * The colleague an off-schedule check-in replaced, or null.
+     */
+    public function replacedWorker(): Employee|Intern|Freelancer|null
+    {
+        if (! $this->replaced_worker_type || ! $this->replaced_worker_id) {
+            return null;
+        }
+
+        return app(OffScheduleCheckInService::class)->workerFromKey($this->replaced_worker_type.':'.$this->replaced_worker_id);
+    }
+
+    /**
+     * Why an off-schedule check-in waits for approval, for approvers and history, e.g.
+     * "Masuk di luar jadwal · menggantikan Budi · shift Closing". Null for a rostered check-in.
+     */
+    public function offScheduleLabel(): ?string
+    {
+        if (! $this->is_off_schedule) {
+            return null;
+        }
+
+        $replaced = $this->replacedWorker();
+        // Lists that did not load the shift (the approval inbox) read it directly instead of lazy loading.
+        $shift = $this->shift_id
+            ? ($this->relationLoaded('shift') ? $this->shift : Shift::query()->find($this->shift_id))
+            : null;
+
+        return implode(' · ', array_filter([
+            'Masuk di luar jadwal',
+            $replaced ? 'menggantikan '.$replaced->full_name : null,
+            $shift ? 'shift '.$shift->name : null,
+        ]));
     }
 
     /**

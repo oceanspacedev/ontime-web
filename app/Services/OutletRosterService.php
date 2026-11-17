@@ -34,6 +34,9 @@ final class OutletRosterService
 
     public const STATE_DAY_OFF = 'libur';
 
+    /** Checked in, but the approver refused the attendance: not a worked (or paid) presence. */
+    public const STATE_REJECTED = 'ditolak';
+
     public const STATE_LABELS = [
         self::STATE_PRESENT => 'Hadir',
         self::STATE_LATE => 'Terlambat',
@@ -42,6 +45,7 @@ final class OutletRosterService
         self::STATE_MISSING => 'Belum absen',
         self::STATE_UPCOMING => 'Belum mulai',
         self::STATE_DAY_OFF => 'Libur',
+        self::STATE_REJECTED => 'Ditolak',
     ];
 
     /**
@@ -212,6 +216,7 @@ final class OutletRosterService
             $schedule->is_day_off => self::STATE_DAY_OFF,
             $secondPending => $this->hasStarted($schedule, 2) ? self::STATE_MISSING : self::STATE_UPCOMING,
             $attendance?->check_in === null => $this->hasStarted($schedule) ? self::STATE_MISSING : self::STATE_UPCOMING,
+            $attendance->status === AttendanceStatus::Rejected => self::STATE_REJECTED,
             $attendance->check_out !== null => self::STATE_DONE,
             $attendance->status === AttendanceStatus::PendingApproval => self::STATE_WAITING,
             $attendance->status === AttendanceStatus::Late => self::STATE_LATE,

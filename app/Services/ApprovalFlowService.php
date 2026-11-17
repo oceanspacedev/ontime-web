@@ -12,6 +12,7 @@ use App\Models\Division;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\Resignation;
+use App\Models\ShiftSwapRequest;
 use App\Models\User;
 use App\Notifications\ApprovalRequestedNotification;
 use App\Notifications\ApprovalResolvedNotification;
@@ -38,6 +39,7 @@ class ApprovalFlowService
         'correction' => 'Koreksi Absensi',
         'resignation' => 'Pengunduran Diri',
         'geofence' => 'Presensi Luar Geofence',
+        'shift_swap' => 'Tukar Shift',
     ];
 
     /**
@@ -99,9 +101,13 @@ class ApprovalFlowService
     /**
      * Active users holding $role whose data access reaches $companyId (and $divisionId, for a division
      * rule), so a stage set to that role has someone to act on it. $excludedUserId (the requester of a
-     * request) never counts: nobody holds a stage of their own request.
+     * request, or both workers of a Tukar Shift) never counts: nobody holds a stage of their own request.
+     * $alsoPlacement (the colleague's company and division on a Tukar Shift) must be reached as well.
+     *
+     * @param  int|string|list<int|string>|null  $excludedUserId
+     * @param  array{company_id: int|string|null, division_id: int|string|null}|null  $alsoPlacement
      */
-    public static function hasHolderForRole(string $role, int|string|null $companyId, int|string|null $divisionId = null, int|string|null $excludedUserId = null): bool
+    public static function hasHolderForRole(string $role, int|string|null $companyId, int|string|null $divisionId = null, int|string|array|null $excludedUserId = null, ?array $alsoPlacement = null): bool
     {
         if ($companyId === null || $companyId === '') {
             return true;
@@ -118,8 +124,12 @@ class ApprovalFlowService
             ->when(filled($excludedUserId), fn ($query) => $query->whereKeyNot($excludedUserId))
             ->with('roles')
             ->get()
-            ->contains(function (User $user) use ($companyId, $divisionId): bool {
+            ->contains(function (User $user) use ($companyId, $divisionId, $alsoPlacement): bool {
                 if ($user->hasRole('Superadmin')) {
+                    return false;
+                }
+
+                if ($alsoPlacement !== null && ! DataAccessService::canAccessPlacement($user, $alsoPlacement['company_id'], $alsoPlacement['division_id'])) {
                     return false;
                 }
 
@@ -134,25 +144,41 @@ class ApprovalFlowService
     }
 
     /**
-     * A stage naming this account has someone to act on it: an active account that is not the
-     * platform Superadmin (who never staffs a client's stage), nor the requester ($excludedUserId).
+     * A stage naming this account has someone to act on it: an active account of the Klien
+     * ($tenantId, the Klien of the company) that is not the platform Superadmin (who never staffs a
+     * client's stage), nor the requester ($excludedUserId; both workers of a Tukar Shift). Same rule
+     * isUserAuthorizedToApprove applies.
+     *
+     * @param  int|string|list<int|string>|null  $excludedUserId
      */
-    private static function namedUserCanAct(int|string|null $userId, int|string|null $excludedUserId = null): bool
+    private static function namedUserCanAct(int|string|null $userId, int|string|null $tenantId, int|string|array|null $excludedUserId = null): bool
     {
-        if (filled($excludedUserId) && (int) $userId === (int) $excludedUserId) {
+        $excludedUserIds = array_map('intval', array_filter(Arr::wrap($excludedUserId), 'filled'));
+
+        if ($userId === null || in_array((int) $userId, $excludedUserIds, true)) {
             return false;
         }
 
-        return $userId !== null && User::query()
+        $user = User::query()
             ->whereKey($userId)
             ->where('is_active', true)
             ->whereDoesntHave('roles', fn ($query) => $query->where('name', 'Superadmin'))
-            ->exists();
+            ->first();
+
+        return $user !== null && self::sameTenant($user, $tenantId);
+    }
+
+    /**
+     * Whether the user belongs to the Klien $tenantId (no Klien on both sides counts as the same).
+     */
+    private static function sameTenant(User $user, int|string|null $tenantId): bool
+    {
+        return (int) $tenantId === (int) $user->tenant_id;
     }
 
     /**
      * Company-wide stages nobody can act on: a role without an active holder reaching the company,
-     * or a named user who is inactive or gone. Requests reaching such a stage wait for an Admin of the
+     * or a named user who is inactive, gone or moved to another Klien. Requests reaching such a stage wait for an Admin of the
      * client, who is the only one left to act on it.
      *
      * @return list<array{request_type: string, stage: string, who: string}>
@@ -163,7 +189,7 @@ class ApprovalFlowService
 
         foreach ($company->approvalFlows()->companyWide()->orderBy('request_type')->orderBy('step_order')->get() as $flow) {
             $staffed = $flow->approver_type === 'user'
-                ? self::namedUserCanAct($flow->user_id)
+                ? self::namedUserCanAct($flow->user_id, $company->tenant_id)
                 : self::hasHolderForRole((string) ($flow->approver_role ?? 'Approver'), $company->id);
 
             if (! $staffed) {
@@ -186,7 +212,7 @@ class ApprovalFlowService
     {
         $reminded = 0;
 
-        foreach ([LeaveRequest::class, OvertimeRequest::class, AttendanceCorrection::class, Resignation::class, Attendance::class] as $modelClass) {
+        foreach ([LeaveRequest::class, OvertimeRequest::class, AttendanceCorrection::class, Resignation::class, Attendance::class, ShiftSwapRequest::class] as $modelClass) {
             $modelClass::query()
                 ->whereIn('status', self::PENDING_STATUSES)
                 ->with(self::pendingEagerLoads($modelClass))
@@ -253,7 +279,8 @@ class ApprovalFlowService
      */
     private static function pendingEagerLoads(string $modelClass): array
     {
-        return collect(['employee', 'intern', 'freelancer'])
+        // A Tukar Shift also names the colleague: approval rights and data access depend on them too.
+        return collect(['employee', 'intern', 'freelancer', 'counterpartEmployee', 'counterpartIntern', 'counterpartFreelancer'])
             ->filter(fn (string $relation): bool => method_exists($modelClass, $relation))
             ->flatMap(fn (string $relation): array => ["{$relation}.company", "{$relation}.division", "{$relation}.user"])
             ->push('approvalSteps')
@@ -277,6 +304,9 @@ class ApprovalFlowService
         return $modelClass::query()
             ->with(self::pendingEagerLoads($modelClass))
             ->whereIn('status', self::PENDING_STATUSES)
+            // A Tukar Shift whose date passed can no longer be applied: it leaves the inbox at once, while
+            // shift-swaps:expire saves it as expired.
+            ->when(method_exists($modelClass, 'scopeNotOverdue'), fn ($query) => $query->notOverdue())
             ->when(
                 ! $user->hasRole('Superadmin') && method_exists($modelClass, 'scopeWhereWorkerInCompanies'),
                 fn ($query) => $query->whereWorkerInCompanies(DataAccessService::tenantCompanyIds($user)),
@@ -457,11 +487,14 @@ class ApprovalFlowService
         $flows = $this->flowsFor((int) $companyId, $workerProfile?->division_id, $requestType);
 
         if ($flows->isEmpty()) {
-            if ($requestType === 'geofence') {
+            // Geofence and Tukar Shift requests are filed by the app on its own (a check-in, a colleague's
+            // acceptance), and a company flow saved before these types existed may lack them: they fall back
+            // to the default Approver stage instead of failing.
+            if (in_array($requestType, ['geofence', 'shift_swap'], true)) {
                 $flows = collect([
                     (object) [
                         'step_order' => 1,
-                        'name' => 'Persetujuan Presensi Luar Geofence',
+                        'name' => 'Persetujuan '.self::requestTypeLabel($requestType),
                         'approver_type' => 'role',
                         'approver_role' => 'Approver',
                         'user_id' => null,
@@ -514,7 +547,9 @@ class ApprovalFlowService
                 ->color('warning')
                 ->sendToDatabase($approverUser);
 
-            $approverUser->notify(new ApprovalRequestedNotification($requestModel, $requestType, $workerName, (int) $requestModel->current_step, isNewRequest: true));
+            // Queued push: dispatched once the request is committed, so the job can load it and a
+            // rolled back request never notifies anyone.
+            DB::afterCommit(fn () => $approverUser->notify(new ApprovalRequestedNotification($requestModel, $requestType, $workerName, (int) $requestModel->current_step, isNewRequest: true)));
         }
 
         return $generatedSteps;
@@ -544,8 +579,18 @@ class ApprovalFlowService
             return false;
         }
 
+        // Neither worker of a Tukar Shift acts on any of its stages, not even through an override: the swap
+        // rewrites both their schedules, so someone else must decide.
+        if ($requestModel instanceof ShiftSwapRequest && ($requestModel->isRequestedBy($user) || $requestModel->isCounterpart($user))) {
+            return false;
+        }
+
         // Resolve the worker profile to get the requester and the company/division scope
         $workerProfile = $this->workerOf($requestModel);
+
+        // A Tukar Shift also rewrites the colleague's schedule, possibly in another division or outlet: the
+        // approver must reach both workers, so the colleague's own coordinator is never bypassed.
+        $counterpart = $this->counterpartOf($requestModel);
 
         $isOwnRequest = $workerProfile?->user_id !== null && (int) $workerProfile->user_id === (int) $user->id;
 
@@ -568,13 +613,19 @@ class ApprovalFlowService
         }
 
         // Admin and Koordinator Override: same authority, limited to the workers inside their data access
-        if ($workerProfile && $user->hasAnyRole(['Admin', 'Koordinator']) && $user->canManageWorker($workerProfile)) {
+        if ($workerProfile && $user->hasAnyRole(['Admin', 'Koordinator']) && $user->canManageWorker($workerProfile)
+            && ($counterpart === null || $user->canManageWorker($counterpart))) {
             return ! $isOwnRequest;
         }
 
         // 1. Direct User Assignment
+        // Only while the named account is still active and still belongs to the Klien of the requester:
+        // once either moves to another Klien, the old approver can no longer act on the request.
         if ($step->approver_type === 'user') {
-            return (int) $user->id === (int) $step->user_id;
+            return (int) $user->id === (int) $step->user_id
+                && $user->is_active !== false
+                && $workerProfile !== null
+                && $this->workerInTenantOf($user, $workerProfile);
         }
 
         // 2. Role + data access: the step's role, and the requester inside the approver's data access
@@ -585,7 +636,8 @@ class ApprovalFlowService
                 return false;
             }
 
-            return DataAccessService::canAccessPlacement($user, $workerProfile->company_id, $workerProfile->division_id);
+            return DataAccessService::canAccessPlacement($user, $workerProfile->company_id, $workerProfile->division_id)
+                && ($counterpart === null || DataAccessService::canAccessPlacement($user, $counterpart->company_id, $counterpart->division_id));
         }
 
         return false;
@@ -602,7 +654,9 @@ class ApprovalFlowService
      */
     public function approveStep(Model $requestModel, User $user, ?string $notes = null): void
     {
-        DB::transaction(function () use ($requestModel, $user, $notes): void {
+        $shiftSwapFailure = null;
+
+        DB::transaction(function () use ($requestModel, $user, $notes, &$shiftSwapFailure): void {
             $request = $this->lockForProcessing($requestModel);
 
             if (! $this->isUserAuthorizedToApprove($request, $user)) {
@@ -616,10 +670,30 @@ class ApprovalFlowService
             $closesAllStages = $this->closesAllStages($user);
             $isFinalApproval = $closesAllStages || $currentStepOrder >= $maxSteps;
 
-            // The final approval turns annual leave into used quota, so the worker must still be entitled.
-            if ($request instanceof LeaveRequest && $isFinalApproval
-                && $error = app(AnnualLeaveService::class)->approvalError($request)) {
-                throw ValidationException::withMessages(['approve' => $error]);
+            if ($request instanceof LeaveRequest && $isFinalApproval) {
+                $this->assertLeaveCanBeApproved($request);
+            }
+
+            // A Tukar Shift is only approved when it can be applied: the schedules are re-checked under row
+            // locks and swapped here. One that can no longer be applied ends as failed (or expired) instead of
+            // waiting for an approval that can never succeed; the approver is told why once that is saved.
+            if ($request instanceof ShiftSwapRequest && $isFinalApproval && $failure = app(ShiftSwapService::class)->applyApproved($request, $user)) {
+                $request->update(['status' => $failure['status'], 'failure_reason' => $failure['message']]);
+                $shiftSwapFailure = $failure['message'];
+
+                // Nobody decided against it: the open stages are closed by the system with the reason, so the
+                // history does not show them pending forever, and both workers hear it failed (not rejected).
+                $request->approvalSteps()->where('status', 'pending')->update([
+                    'status' => 'rejected',
+                    'actioned_by' => null,
+                    'actioned_at' => now(),
+                    'notes' => "Gagal diterapkan: {$failure['message']}",
+                ]);
+
+                app(ShiftSwapService::class)->notifyNotApplied($request, $failure['status'], $failure['message']);
+                $this->syncProcessedModel($requestModel, $request);
+
+                return;
             }
 
             $request->approvalSteps()
@@ -660,6 +734,12 @@ class ApprovalFlowService
                     $request->applyLeave();
                 }
 
+                // Re-checked with this approval written: a concurrent approval that slipped past the
+                // first check (or ran inside this transaction) rolls the whole approval back.
+                if ($request instanceof LeaveRequest && $error = app(AnnualLeaveService::class)->approvalError($request, lockRows: true)) {
+                    throw ValidationException::withMessages(['approve' => $error]);
+                }
+
                 if (method_exists($request, 'applyResignation')) {
                     $request->applyResignation();
                 }
@@ -669,6 +749,48 @@ class ApprovalFlowService
 
             $this->syncProcessedModel($requestModel, $request);
         });
+
+        if ($shiftSwapFailure !== null) {
+            throw ValidationException::withMessages(['approve' => $shiftSwapFailure]);
+        }
+    }
+
+    /**
+     * Checks made before the final approval of a leave, under a lock on the worker's profile row so
+     * final approvals of the same worker's leave run one at a time and each sees the leave the other
+     * just approved:
+     *
+     * - annual leave: the worker must still be entitled, the request may not overlap another pending
+     *   or approved leave, and it must fit the quota of each year it touches;
+     * - any leave: no leave day may already hold a check-in (any segment, also one waiting for
+     *   geofence approval). The approver rejects the leave, or the worker changes the dates.
+     *
+     * Must be called inside a transaction.
+     *
+     * @throws ValidationException
+     */
+    private function assertLeaveCanBeApproved(LeaveRequest $leave): void
+    {
+        $profile = $leave->getWorkerProfile();
+
+        if ($profile) {
+            $profile->newQuery()->withoutGlobalScopes()->whereKey($profile->getKey())->lockForUpdate()->first();
+        }
+
+        if ($error = app(AnnualLeaveService::class)->approvalError($leave, lockRows: true)) {
+            throw ValidationException::withMessages(['approve' => $error]);
+        }
+
+        $checkedInDates = $leave->checkedInDates(lockRows: true);
+
+        if ($checkedInDates !== []) {
+            $name = $profile?->full_name ?? 'Pekerja ini';
+            $dates = collect($checkedInDates)->map(fn (string $date): string => Carbon::parse($date)->format('d/m/Y'))->implode(', ');
+
+            throw ValidationException::withMessages([
+                'approve' => "{$name} sudah melakukan presensi pada tanggal {$dates}. Tolak pengajuan ini, atau minta pekerja mengubah tanggal cuti/izinnya.",
+            ]);
+        }
     }
 
     /**
@@ -802,6 +924,10 @@ class ApprovalFlowService
 
             DB::afterCommit(fn () => $this->notifyRequester($request, 'rejected', $reason));
 
+            if ($request instanceof ShiftSwapRequest) {
+                app(ShiftSwapService::class)->notifyRejectedByApprover($request, $reason);
+            }
+
             $this->syncProcessedModel($requestModel, $request);
         });
     }
@@ -835,6 +961,7 @@ class ApprovalFlowService
             $requestModel instanceof AttendanceCorrection => 'correction',
             $requestModel instanceof Resignation => 'resignation',
             $requestModel instanceof Attendance => 'geofence',
+            $requestModel instanceof ShiftSwapRequest => 'shift_swap',
             default => 'request',
         };
     }
@@ -884,6 +1011,24 @@ class ApprovalFlowService
             ->filter(fn (User $user) => $this->isUserAuthorizedToApprove($requestModel, $user));
     }
 
+    /**
+     * Whether the worker's company belongs to the user's Klien (no Klien on both sides counts as the same).
+     */
+    private function workerInTenantOf(User $user, Model $workerProfile): bool
+    {
+        return self::sameTenant($user, $this->tenantIdOfWorker($workerProfile));
+    }
+
+    /**
+     * The Klien of the worker's company.
+     */
+    private function tenantIdOfWorker(Model $workerProfile): int|string|null
+    {
+        return $workerProfile->relationLoaded('company')
+            ? $workerProfile->company?->tenant_id
+            : Company::query()->whereKey($workerProfile->company_id)->value('tenant_id');
+    }
+
     private function workerOf(Model $requestModel): ?Model
     {
         return method_exists($requestModel, 'getWorkerProfile')
@@ -899,12 +1044,22 @@ class ApprovalFlowService
     private function stageHasHolder(Model $requestModel, ApprovalRequestStep $step): bool
     {
         $worker = $this->workerOf($requestModel);
-        $requesterId = $worker?->user_id;
+        $counterpart = $this->counterpartOf($requestModel);
+        $excludedUserIds = array_values(array_filter([$worker?->user_id, $counterpart?->user_id]));
+        $alsoPlacement = $counterpart ? ['company_id' => $counterpart->company_id, 'division_id' => $counterpart->division_id] : null;
 
         if ($step->approver_type === 'user') {
-            return self::namedUserCanAct($step->user_id, $requesterId);
+            return $worker !== null && self::namedUserCanAct($step->user_id, $this->tenantIdOfWorker($worker), $excludedUserIds);
         }
 
-        return $worker === null || self::hasHolderForRole((string) ($step->approver_role ?? 'Approver'), $worker->company_id, $worker->division_id, $requesterId);
+        return $worker === null || self::hasHolderForRole((string) ($step->approver_role ?? 'Approver'), $worker->company_id, $worker->division_id, $excludedUserIds, $alsoPlacement);
+    }
+
+    /**
+     * For a Tukar Shift, the colleague whose schedule changes as well; null for every other request.
+     */
+    private function counterpartOf(Model $requestModel): ?Model
+    {
+        return $requestModel instanceof ShiftSwapRequest ? $requestModel->counterpartProfile() : null;
     }
 }

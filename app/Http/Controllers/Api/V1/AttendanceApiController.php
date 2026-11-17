@@ -2,29 +2,43 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\AttendanceStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\CheckInRequest;
 use App\Http\Requests\Api\V1\CheckOutRequest;
 use App\Http\Requests\Api\V1\LivenessChallengeRequest;
 use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
+use App\Models\AttendanceCorrection;
 use App\Models\CompanyLocation;
+use App\Models\LeaveRequest;
+use App\Models\User;
 use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
 use App\Services\FileNamingService;
 use App\Services\GeofenceService;
+use App\Services\OffScheduleCheckInService;
 use App\Services\UploadStorageException;
 use App\Services\WorkScheduleService;
 use App\Support\StorageUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
 {
+    /** How far back the Today card looks for a shift whose check-out was forgotten. */
+    private const UNCLOSED_LOOKBACK_DAYS = 7;
+
     public function livenessChallenge(LivenessChallengeRequest $request, AttendanceCheckService $attendanceCheck): JsonResponse
     {
+        // Refused before the worker spends GPS, poses and uploads on a check-in the leave would refuse anyway.
+        if ($request->validated('purpose') === AttendanceCheckService::PURPOSE_CHECK_IN && $this->isOnApprovedLeaveToday($request->user())) {
+            return $this->ruleError(new AttendanceRuleException(AttendanceCheckService::ON_LEAVE_MESSAGE, 409));
+        }
+
         try {
             return response()->json($attendanceCheck->livenessChallenge($request->user(), $request->validated('purpose')));
         } catch (AttendanceRuleException $exception) {
@@ -97,6 +111,8 @@ class AttendanceApiController extends Controller
             photoPath: $photoPath,
             livenessChallengeId: $request->input('liveness_challenge_id'),
             livenessFramePaths: $framePaths,
+            coverShiftId: $isCheckIn && $request->filled('cover_shift_id') ? (int) $request->input('cover_shift_id') : null,
+            replacesWorker: $isCheckIn && $request->filled('replaces_worker') ? (string) $request->input('replaces_worker') : null,
         );
 
         try {
@@ -113,6 +129,31 @@ class AttendanceApiController extends Controller
             'requires_approval' => $result->requiresApproval,
             'approval_reasons' => $result->approvalReasons,
         ]);
+    }
+
+    /**
+     * What the app offers for "Masuk di luar jadwal": whether a check-in now is outside the worker's
+     * schedule, the active shifts of the company to cover, and the colleagues rostered that date.
+     *
+     * The date is today, or yesterday when the optional cover_shift_id is a night shift covered after
+     * midnight: the check-in is then booked to yesterday, so the colleague it replaces is one rostered yesterday.
+     */
+    public function coverOptions(Request $request, OffScheduleCheckInService $offSchedule, AttendanceCheckService $attendanceCheck): JsonResponse
+    {
+        $validated = $request->validate(
+            ['cover_shift_id' => ['nullable', 'integer', 'min:1']],
+            ['cover_shift_id.integer' => 'Shift yang dipilih tidak valid.', 'cover_shift_id.min' => 'Shift yang dipilih tidak valid.'],
+        );
+        $user = $request->user();
+        $profile = $user->employee ?? $user->intern ?? $user->freelancer;
+
+        if (! $profile) {
+            return response()->json(['message' => 'Profil pengguna tidak ditemukan.'], 422);
+        }
+
+        $coverShiftId = isset($validated['cover_shift_id']) ? (int) $validated['cover_shift_id'] : null;
+
+        return response()->json($offSchedule->options($profile, $attendanceCheck->coverBusinessDate($user, $coverShiftId)));
     }
 
     private function ruleError(AttendanceRuleException $exception): JsonResponse
@@ -140,7 +181,8 @@ class AttendanceApiController extends Controller
             $query->where('status', $request->input('status'));
         }
 
-        $attendances = $query->orderBy('date', 'desc')->paginate(20);
+        // Many rows share a date (a team, split shifts): the id keeps the pages disjoint.
+        $attendances = $query->orderByDesc('date')->orderByDesc('segment')->orderByDesc('id')->paginate(20);
 
         return response()->json([
             'data' => AttendanceResource::collection($attendances->items()),
@@ -156,10 +198,14 @@ class AttendanceApiController extends Controller
     public function show(int $id, Request $request): JsonResponse
     {
         $user = $request->user();
-        $attendance = Attendance::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
+        $attendance = Attendance::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->find($id);
 
-        if (! Attendance::query()->visibleTo($user)->whereKey($attendance->getKey())->exists()) {
-            return response()->json(['message' => 'Unauthorized access.'], 403);
+        if (! $attendance) {
+            return response()->json(['message' => 'Data presensi tidak ditemukan.'], 404);
+        }
+
+        if (! ApprovalApiController::canOpen($attendance, $user)) {
+            return response()->json(['message' => 'Anda tidak memiliki akses ke presensi ini.'], 403);
         }
 
         return response()->json([
@@ -241,6 +287,8 @@ class AttendanceApiController extends Controller
 
         return response()->json([
             'date' => today()->toDateString(),
+            // Today is covered by an approved leave: check-in would be refused, so the app does not offer it.
+            'is_on_leave' => $this->isApprovedLeaveRow($doneToday->firstWhere('segment', 1)),
             'has_checked_in' => $attendance?->check_in !== null,
             'has_checked_out' => $attendance?->check_out !== null,
             'attendance' => $attendance ? new AttendanceResource($attendance) : null,
@@ -259,12 +307,104 @@ class AttendanceApiController extends Controller
                 'late_tolerance_minutes' => $hours['late_tolerance_minutes'],
                 'outlet' => $this->outletGeofence($hours['location']),
                 'section' => $hours['section'],
+                // Not expected to work today (day off, or a freelancer without a roster): a check-in needs approval and may cover a colleague.
+                'is_off_schedule' => $workSchedule->isOffSchedule($profile, $hours),
             ],
             // Where check-out is accepted: the outlet the open attendance was checked in at.
             'check_out_outlet' => $attendance?->check_in !== null && $attendance->check_out === null
                 ? $this->outletGeofence($attendance->loadMissing('location')->location)
                 : null,
+            // An earlier shift was never checked out: the app points to a correction, today's check-in stays open.
+            'unclosed_previous' => $this->unclosedPrevious($user, $attendance),
         ]);
+    }
+
+    /**
+     * The latest row of the last UNCLOSED_LOOKBACK_DAYS days (before today) that was checked in but never
+     * checked out and is not the one offered for check-out now (an overnight shift still running is checked
+     * out as usual). Every segment counts, so a forgotten segment 1 of a split shift is found too, and a
+     * forgotten shift before a day off still shows after it. A row whose date already has a pending
+     * correction gives way to an older one that has none. The worker asks for a correction with the real
+     * check-out time; checking out now would record the wrong time.
+     *
+     * @return array{date: string, check_in: string|null, shift: string|null, correction_pending: bool}|null
+     */
+    private function unclosedPrevious(User $user, ?Attendance $shown): ?array
+    {
+        $unclosed = Attendance::byWorker($user)
+            ->with('shift')
+            ->whereDate('date', '<', today())
+            ->whereDate('date', '>=', today()->subDays(self::UNCLOSED_LOOKBACK_DAYS))
+            ->whereNotNull('check_in')
+            ->whereNull('check_out')
+            ->where('status', '!=', AttendanceStatus::Rejected)
+            ->orderByDesc('date')
+            ->orderByDesc('segment')
+            ->get()
+            ->reject(fn (Attendance $row): bool => $shown !== null && $shown->is($row))
+            ->values();
+
+        if ($unclosed->isEmpty()) {
+            return null;
+        }
+
+        $pendingDates = AttendanceCorrection::query()
+            ->where(array_filter(Attendance::workerKeys($user)))
+            ->whereDate('date', '>=', $unclosed->last()->date)
+            ->whereDate('date', '<=', $unclosed->first()->date)
+            ->where('status', 'pending')
+            ->pluck('date')
+            ->map(fn ($date): string => Carbon::parse($date)->toDateString())
+            ->flip();
+
+        /** @var Attendance $row */
+        $row = $unclosed->first(fn (Attendance $row): bool => ! $pendingDates->has($row->date->toDateString())) ?? $unclosed->first();
+
+        return [
+            'date' => $row->date->toDateString(),
+            'check_in' => $row->check_in?->format('H:i'),
+            'shift' => $row->shift?->name,
+            'correction_pending' => $pendingDates->has($row->date->toDateString()),
+        ];
+    }
+
+    /**
+     * Whether today's first-segment row of the worker is an approved leave.
+     */
+    private function isOnApprovedLeaveToday(User $user): bool
+    {
+        return $this->isApprovedLeaveRow(Attendance::byWorker($user)->whereDate('date', today())->where('segment', 1)->first());
+    }
+
+    /**
+     * Whether the row is a leave day backed by an approved leave request, the same rule check-in applies.
+     *
+     * A leave row whose leave was deleted or re-dated no longer blocks check-in.
+     */
+    private function isApprovedLeaveRow(?Attendance $attendance): bool
+    {
+        if ($attendance === null || $attendance->check_in !== null || $attendance->status !== AttendanceStatus::Leave) {
+            return false;
+        }
+
+        $workerKeys = array_filter([
+            'employee_id' => $attendance->employee_id,
+            'intern_id' => $attendance->intern_id,
+            'freelancer_id' => $attendance->freelancer_id,
+        ]);
+
+        if ($workerKeys === []) {
+            return false;
+        }
+
+        $date = $attendance->date->toDateString();
+
+        return LeaveRequest::query()
+            ->where($workerKeys)
+            ->where('status', 'approved')
+            ->whereDate('start_date', '<=', $date)
+            ->whereDate('end_date', '>=', $date)
+            ->exists();
     }
 
     /**

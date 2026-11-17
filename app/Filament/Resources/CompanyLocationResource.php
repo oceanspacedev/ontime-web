@@ -104,6 +104,7 @@ class CompanyLocationResource extends Resource
                                 ->label('Radius Geofence (Meter)')
                                 ->numeric()
                                 ->minValue(1)
+                                ->maxValue(CompanyPolicyService::MAX_GEOFENCE_RADIUS_METERS)
                                 ->placeholder('Kosongkan untuk ikuti Kebijakan Perusahaan'),
 
                             Toggle::make('is_active')

@@ -7,6 +7,7 @@ use App\Models\AttendanceCorrection;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\Resignation;
+use App\Models\ShiftSwapRequest;
 use App\Services\ApprovalFlowService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -98,6 +99,22 @@ class ApprovalSaya extends Page
     }
 
     /**
+     * Tukar Shift requests on the user's stage. Neither worker of a swap ever sees it here, and one whose
+     * date passed is left out.
+     */
+    public function getPendingShiftSwapsProperty(): Collection
+    {
+        $user = auth()->user();
+        if (! $user) {
+            return collect();
+        }
+
+        $service = new ApprovalFlowService;
+
+        return $service->getPendingRequestsForUser($user, ShiftSwapRequest::class);
+    }
+
+    /**
      * Approve, after a confirmation, like the Setujui action on the request lists.
      */
     public function approveAction(): Action
@@ -145,6 +162,7 @@ class ApprovalSaya extends Page
             'correction' => AttendanceCorrection::find($id),
             'geofence' => Attendance::find($id),
             'resignation' => Resignation::find($id),
+            'shift_swap' => ShiftSwapRequest::find($id),
             default => null,
         };
 
@@ -179,6 +197,7 @@ class ApprovalSaya extends Page
             'correction' => AttendanceCorrection::find($id),
             'geofence' => Attendance::find($id),
             'resignation' => Resignation::find($id),
+            'shift_swap' => ShiftSwapRequest::find($id),
             default => null,
         };
 

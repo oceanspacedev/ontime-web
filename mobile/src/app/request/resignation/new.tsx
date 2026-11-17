@@ -6,10 +6,14 @@ import { Alert } from 'react-native';
 import { DateTimeField } from '@/components/DateTimeField';
 import { RequestRow } from '@/components/RequestRow';
 import { Button, Field, Group, LoadingView, Notice, Screen } from '@/components/ui';
-import { ApiError, errorMessage, requestsApi } from '@/lib/api';
+import { requestsApi } from '@/lib/api';
+import { unshownErrorMessage } from '@/lib/errors';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { queryKeys } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
+
+/** Fields this form shows a server message under; any other 422 key goes to the footer notice. */
+const SHOWN_FIELDS = ['resignation_date', 'last_working_day', 'reason', 'handover_notes'];
 
 export default function NewResignationScreen() {
   const queryClient = useQueryClient();
@@ -83,7 +87,7 @@ export default function NewResignationScreen() {
     );
   }
 
-  const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
+  const generalError = unshownErrorMessage(submit.error, SHOWN_FIELDS);
 
   return (
     <Screen

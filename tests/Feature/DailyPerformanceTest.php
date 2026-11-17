@@ -112,10 +112,10 @@ class DailyPerformanceTest extends TestCase
 
         $this->assertCount(2, $rows);
         [$outlet, $dayOff] = $rows;
-        $this->assertSame(['worker', 'outlet', 'scheduled_days', 'present_days', 'late_days', 'late_minutes', 'absent_days', 'off_days', 'scheduled_hours', 'worked_hours'], array_keys($outlet));
+        $this->assertSame(['worker', 'outlet', 'scheduled_days', 'present_days', 'pending_days', 'late_days', 'late_minutes', 'early_leave_days', 'early_leave_minutes', 'absent_days', 'off_days', 'scheduled_hours', 'worked_hours', 'overtime_count', 'overtime_hours'], array_keys($outlet));
         $this->assertSame(['type' => 'freelancer', 'id' => $bayu->id, 'number' => (string) $bayu->freelancer_number, 'name' => 'Bayu Adillah', 'company' => 'PT Franchise', 'division' => 'JCHICKEN'], $outlet['worker']);
         $this->assertSame(
-            ['outlet' => 'JChicken Ciledug', 'scheduled_days' => 3, 'present_days' => 1, 'late_days' => 1, 'late_minutes' => 15, 'absent_days' => 1, 'off_days' => 0, 'scheduled_hours' => 27.0, 'worked_hours' => 7.83],
+            ['outlet' => 'JChicken Ciledug', 'scheduled_days' => 3, 'present_days' => 1, 'pending_days' => 0, 'late_days' => 1, 'late_minutes' => 15, 'early_leave_days' => 1, 'early_leave_minutes' => 300, 'absent_days' => 1, 'off_days' => 0, 'scheduled_hours' => 27.0, 'worked_hours' => 7.83, 'overtime_count' => 0, 'overtime_hours' => 0.0],
             array_diff_key($outlet, ['worker' => true]),
         );
         $this->assertSame([null, 1], [$dayOff['outlet'], $dayOff['off_days']]);
@@ -198,8 +198,10 @@ class DailyPerformanceTest extends TestCase
         $response = $this->getJson('/api/v1/laporan-absensi?start_date=2026-11-02&end_date=2026-11-06')->assertOk();
 
         $response->assertJsonStructure(['start_date', 'end_date', 'summary' => ['total_present', 'total_late', 'total_leave', 'total_absent'], 'data', 'pagination' => ['current_page', 'last_page', 'per_page', 'total']]);
-        // Present: Bayu Mon + Tue, Sari Wed (checked in, then rejected). Absent: 2 explicit rows + Friday.
-        $this->assertSame(['total_present' => 3, 'total_late' => 1, 'total_leave' => 1, 'total_absent' => 3], $response->json('summary'));
+        // Present: Bayu Mon + Tue. Absent: Bayu's absent row and Sari's rejected check-in (rejected is not
+        // present, ATT-057), plus the weekdays each worker has nothing: Bayu Thu + Fri, Sari Mon + Tue + Fri
+        // (Thu is her leave).
+        $this->assertSame(['total_present' => 2, 'total_late' => 1, 'total_leave' => 1, 'total_absent' => 7], $response->json('summary'));
         $this->assertSame(5, $response->json('pagination.total'));
 
         $this->getJson('/api/v1/laporan-absensi?start_date=2026-11-02&end_date=2026-11-06&company_id='.($this->company->id + 999))
@@ -311,7 +313,7 @@ class DailyPerformanceTest extends TestCase
         $roster = $this->getJson('/api/v1/team/roster?date=2026-11-15')->assertOk()->json();
         $this->assertSame(['date', 'outlets'], array_keys($roster));
         $this->assertSame(['location', 'counts', 'entries'], array_keys($roster['outlets'][0]));
-        $this->assertSame(['schedule_id', 'worker', 'shift', 'location_id', 'borrowed_from', 'section', 'state', 'check_in', 'check_out', 'late_minutes', 'segments', 'attendances'], array_keys($roster['outlets'][0]['entries'][0]));
+        $this->assertSame(['schedule_id', 'worker', 'shift', 'location_id', 'borrowed_from', 'section', 'state', 'check_in', 'check_out', 'late_minutes', 'segments', 'attendances', 'can_edit'], array_keys($roster['outlets'][0]['entries'][0]));
 
         // The 15th is a Sunday, the last day of its week.
         $week = $this->getJson('/api/v1/team/week?date=2026-11-15')->assertOk()->json();

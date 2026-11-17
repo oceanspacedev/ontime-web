@@ -5,7 +5,10 @@ namespace App\Filament\Resources\Attendances;
 use App\Enums\AttendanceStatus;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Models\Attendance;
+use App\Support\StorageUrl;
 use BackedEnum;
+use Carbon\Carbon;
+use Closure;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -20,6 +23,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\BadgeColumn;
@@ -70,17 +74,68 @@ class AttendanceResource extends Resource
                             DateTimePicker::make('check_in')
                                 ->label('Waktu Check In')
                                 ->nullable()
-                                ->seconds(false),
+                                ->seconds(false)
+                                ->rules([
+                                    fn (?Attendance $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
+                                        if (filled($value) && $record?->date
+                                            && Carbon::parse($value)->toDateString() !== $record->date->toDateString()) {
+                                            $fail('Waktu check in harus pada tanggal absensi ('.$record->date->translatedFormat('d M Y').').');
+                                        }
+                                    },
+                                ]),
 
                             DateTimePicker::make('check_out')
                                 ->label('Waktu Check Out')
                                 ->nullable()
-                                ->seconds(false),
+                                ->seconds(false)
+                                ->rules([
+                                    fn (Get $get, ?Attendance $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get, $record): void {
+                                        if (blank($value)) {
+                                            return;
+                                        }
+
+                                        $checkOut = Carbon::parse($value);
+                                        $checkIn = $get('check_in');
+
+                                        if (filled($checkIn) && $checkOut->lessThanOrEqualTo(Carbon::parse($checkIn))) {
+                                            $fail('Waktu check out harus setelah waktu check in.');
+
+                                            return;
+                                        }
+
+                                        if ($record?->date
+                                            && ! in_array($checkOut->toDateString(), [$record->date->toDateString(), $record->date->copy()->addDay()->toDateString()], true)) {
+                                            $fail('Waktu check out harus pada tanggal absensi atau keesokan harinya (shift malam).');
+                                        }
+                                    },
+                                ]),
 
                             Select::make('status')
                                 ->label('Status')
                                 ->options(AttendanceStatus::class)
-                                ->required(),
+                                ->required()
+                                ->rules([
+                                    fn (Get $get, ?Attendance $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get, $record): void {
+                                        $status = $value instanceof AttendanceStatus ? $value : AttendanceStatus::tryFrom((string) $value);
+                                        $lateMinutes = (int) $get('late_minutes');
+
+                                        if ($record?->status === AttendanceStatus::PendingApproval
+                                            && $status !== AttendanceStatus::PendingApproval
+                                            && $record->approvalSteps()->where('status', 'pending')->exists()) {
+                                            $fail('Absensi ini masih menunggu persetujuan. Setujui atau tolak melalui menu Persetujuan, bukan dengan mengubah statusnya di sini.');
+
+                                            return;
+                                        }
+
+                                        if ($status === AttendanceStatus::Late && $lateMinutes <= 0) {
+                                            $fail('Status Terlambat membutuhkan jumlah menit keterlambatan lebih dari 0.');
+                                        }
+
+                                        if ($status === AttendanceStatus::OnTime && $lateMinutes > 0) {
+                                            $fail('Status Tepat Waktu tidak boleh memiliki menit keterlambatan. Kosongkan keterlambatan atau pilih status Terlambat.');
+                                        }
+                                    },
+                                ]),
 
                             TextInput::make('late_minutes')
                                 ->label('Keterlambatan (menit)')
@@ -324,6 +379,12 @@ class AttendanceResource extends Resource
                                 ->label('Keterlambatan')
                                 ->formatStateUsing(fn (?int $state): string => $state ? "{$state} menit" : '—'),
                             TextEntry::make('notes')->label('Catatan')->placeholder('—'),
+                            TextEntry::make('off_schedule')
+                                ->label('Di Luar Jadwal')
+                                ->state(fn (Attendance $record): ?string => $record->offScheduleLabel())
+                                ->visible(fn (Attendance $record): bool => (bool) $record->is_off_schedule)
+                                ->badge()
+                                ->color('warning'),
                         ]),
                     ]),
 

@@ -98,6 +98,7 @@ class ApprovalFlowResource extends Resource
                         $tab('correction', 'correction_steps', Heroicon::OutlinedPencilSquare),
                         $tab('resignation', 'resignation_steps', Heroicon::OutlinedArrowRightStartOnRectangle),
                         $tab('geofence', 'geofence_steps', Heroicon::OutlinedMapPin),
+                        $tab('shift_swap', 'shift_swap_steps', Heroicon::OutlinedArrowsRightLeft),
                     ]),
             ]);
     }
@@ -228,6 +229,11 @@ class ApprovalFlowResource extends Resource
                     ->label('Tahap Luar Geofence')
                     ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'geofence')->count().' Tahap')
                     ->color('warning'),
+
+                BadgeColumn::make('shift_swap_steps')
+                    ->label('Tahap Tukar Shift')
+                    ->state(fn (Company $record): string => $record->approvalFlows()->companyWide()->where('request_type', 'shift_swap')->count().' Tahap')
+                    ->color('info'),
 
                 BadgeColumn::make('staffing')
                     ->label('Pemegang Tahap')

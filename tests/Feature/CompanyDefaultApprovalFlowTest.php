@@ -33,7 +33,7 @@ class CompanyDefaultApprovalFlowTest extends TestCase
 
         $flows = ApprovalFlow::where('company_id', Company::where('code', 'BARU')->value('id'))->get();
 
-        $this->assertSame(['correction', 'geofence', 'leave', 'overtime', 'resignation'], $flows->pluck('request_type')->sort()->values()->all(), 'One stage per request type.');
+        $this->assertSame(['correction', 'geofence', 'leave', 'overtime', 'resignation', 'shift_swap'], $flows->pluck('request_type')->sort()->values()->all(), 'One stage per request type.');
         $this->assertSame(['Approver'], $flows->pluck('approver_role')->unique()->values()->all());
     }
 
@@ -90,6 +90,6 @@ class CompanyDefaultApprovalFlowTest extends TestCase
         $service->createDefaultFlows($company);
         $service->createDefaultFlows($company);
 
-        $this->assertSame(5, ApprovalFlow::where('company_id', $company->id)->count());
+        $this->assertSame(6, ApprovalFlow::where('company_id', $company->id)->count());
     }
 }

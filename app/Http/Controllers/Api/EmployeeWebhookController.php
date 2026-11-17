@@ -4,12 +4,21 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Services\WorkerAccountService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 class EmployeeWebhookController extends Controller
 {
-    public function handle(Request $request)
+    public function __construct(private WorkerAccountService $accounts) {}
+
+    /**
+     * Apply an employee change sent by the core (Talenta) system: "created"/"updated" sync the profile,
+     * "deleted" removes an employee without history and only sets one with history inactive, so the
+     * attendance, overtime, leave and resignation rows used for payroll are kept.
+     */
+    public function handle(Request $request): JsonResponse
     {
         $secret = (string) config('services.core.webhook_secret');
         $signature = (string) $request->header('X-Signature');
@@ -44,19 +53,34 @@ class EmployeeWebhookController extends Controller
             $employee = Employee::find($empData['id']);
             if ($employee) {
                 // Talent sends 'name', but Ontime has 'full_name'
-                $employee->update([
+                $employee->fill([
                     'full_name' => $empData['name'],
-                    'email' => $empData['email'],
-                    'phone' => $empData['phone'],
+                    'email' => $empData['email'] ?? null,
+                    'phone' => $empData['phone'] ?? null,
                     'status' => $empData['status'],
                 ]);
+
+                // WhatsApp OTP login finds the account by number: keep the old number rather than share one.
+                if ($this->accounts->phoneConflicts($employee)) {
+                    Log::warning("Employee webhook kept the old phone of employee {$employee->id}: the new number belongs to another active worker or account.");
+                    $employee->phone = $employee->getRawOriginal('phone');
+                }
+
+                $employee->save();
             } else {
                 // If it doesn't exist, we might need to create it with dummy required fields
                 // For now, ontime schema has many required fields like company_id, so we only update.
                 Log::warning("Webhook received for unknown employee ID {$empData['id']} in ontime.");
             }
         } elseif ($action === 'deleted') {
-            Employee::where('id', $empData['id'])->delete();
+            $employee = Employee::find($empData['id']);
+
+            if ($employee && $this->accounts->deletionBlockedReason($employee) !== null) {
+                Log::info("Employee webhook set employee {$employee->id} inactive instead of deleting: it has payroll history.");
+                $this->accounts->deactivateEmployee($employee);
+            } else {
+                $employee?->delete();
+            }
         }
 
         return response()->json(['status' => 'success']);

@@ -126,6 +126,9 @@ function RootLayout() {
               <Stack.Screen name="request/overtime/new" options={{ title: 'Ajukan Lembur' }} />
               <Stack.Screen name="request/correction/new" options={{ title: 'Ajukan Koreksi Absensi' }} />
               <Stack.Screen name="request/resignation/new" options={{ title: 'Pengunduran Diri' }} />
+              <Stack.Screen name="request/shift-swap/index" options={{ title: 'Tukar Shift' }} />
+              <Stack.Screen name="request/shift-swap/new" options={{ title: 'Ajukan Tukar Shift' }} />
+              <Stack.Screen name="approval/shift-swap/[id]" options={{ title: 'Persetujuan Tukar Shift' }} />
               <Stack.Screen name="request/[type]/[id]" options={{ title: 'Detail Pengajuan' }} />
               <Stack.Screen name="approval/[type]/[id]" options={{ title: 'Proses Persetujuan' }} />
               <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />

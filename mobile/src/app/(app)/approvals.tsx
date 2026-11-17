@@ -1,17 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
-import { router } from 'expo-router';
+import { type Href, router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView } from 'react-native';
 
 import { AttendanceRow } from '@/components/AttendanceRow';
 import { type AnyRequest, RequestRow } from '@/components/RequestRow';
+import { ShiftSwapCard } from '@/components/ShiftSwapCard';
 import { Choice, EmptyState, ErrorBanner, Group, LoadingView, Screen } from '@/components/ui';
 import { approvalsApi, type ApprovalType } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
 import { queryKeys } from '@/lib/queryClient';
 import { makeStyles, spacing } from '@/theme';
 
-type Filter = 'all' | ApprovalType;
+type Filter = 'all' | ApprovalType | 'shift_swap';
 
 const FILTERS: { value: Filter; label: string }[] = [
   { value: 'all', label: 'Semua' },
@@ -20,6 +21,7 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: 'correction', label: 'Koreksi' },
   { value: 'geofence', label: 'Luar Area' },
   { value: 'resignation', label: 'Resign' },
+  { value: 'shift_swap', label: 'Tukar Shift' },
 ];
 
 const TITLE = 'Persetujuan';
@@ -49,7 +51,8 @@ export default function ApprovalsScreen() {
   }
 
   const data = pending.data;
-  const show = (type: ApprovalType) => filter === 'all' || filter === type;
+  const show = (type: ApprovalType | 'shift_swap') => filter === 'all' || filter === type;
+  const shiftSwaps = data.shift_swaps ?? [];
   const sections: { type: ApprovalType; title: string; items: AnyRequest[] }[] = [
     { type: 'leave', title: 'Cuti / Izin', items: data.leave_requests.map((item) => ({ kind: 'leave', data: item })) },
     { type: 'overtime', title: 'Lembur', items: data.overtime_requests.map((item) => ({ kind: 'overtime', data: item })) },
@@ -59,7 +62,8 @@ export default function ApprovalsScreen() {
   const total = countPending(data);
   const visibleCount =
     sections.filter((section) => show(section.type)).reduce((sum, section) => sum + section.items.length, 0) +
-    (show('geofence') ? data.geofence_attendances.length : 0);
+    (show('geofence') ? data.geofence_attendances.length : 0) +
+    (show('shift_swap') ? shiftSwaps.length : 0);
 
   return (
     <Screen title={TITLE} subtitle={pendingSubtitle(total)} onRefresh={() => pending.refetch()}>
@@ -92,6 +96,14 @@ export default function ApprovalsScreen() {
               showWorker
               onPress={() => router.push({ pathname: '/approval/[type]/[id]', params: { type: 'geofence', id: String(attendance.id) } })}
             />
+          ))}
+        </Group>
+      ) : null}
+
+      {show('shift_swap') && shiftSwaps.length > 0 ? (
+        <Group title={`Tukar Shift · ${shiftSwaps.length}`}>
+          {shiftSwaps.map((swap) => (
+            <ShiftSwapCard key={swap.id} swap={swap} onPress={() => router.push(`/approval/shift-swap/${swap.id}` as Href)} />
           ))}
         </Group>
       ) : null}

@@ -9,8 +9,8 @@ use App\Filament\Resources\OvertimeRequests\Pages\ListOvertimeRequests;
 use App\Models\OvertimeRequest;
 use App\Services\ApprovalFlowService;
 use App\Services\DataAccessService;
+use App\Services\OvertimeRequestService;
 use BackedEnum;
-use Carbon\Carbon;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -93,37 +93,22 @@ class OvertimeRequestResource extends Resource
     {
         $user = auth()->user();
 
-        // Eager load the worker so table columns and approve/reject checks do not lazy load per row.
-        $query = parent::getEloquentQuery()->with(['employee', 'intern', 'freelancer']);
+        // Eager load the worker and its company so table columns, approve/reject checks and the actual
+        // duration action's tenant check do not lazy load per row.
+        $query = parent::getEloquentQuery()->with(['employee.company', 'intern.company', 'freelancer.company']);
 
         return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
 
     public static function form(Schema $schema): Schema
     {
-        $calculateDuration = function (Get $get, Set $set) {
-            $start = $get('start_time');
-            $end = $get('end_time');
-
-            if (! empty($start) && ! empty($end)) {
-                try {
-                    $startFormatted = substr((string) $start, 0, 5);
-                    $endFormatted = substr((string) $end, 0, 5);
-
-                    $startTime = Carbon::createFromFormat('H:i', $startFormatted);
-                    $endTime = Carbon::createFromFormat('H:i', $endFormatted);
-
-                    if ($endTime->lessThanOrEqualTo($startTime)) {
-                        $endTime->addDay();
-                    }
-
-                    $diffMinutes = (int) $startTime->diffInMinutes($endTime);
-                    $set('duration_minutes', $diffMinutes);
-                } catch (\Throwable $e) {
-                    // Ignore parsing failures
-                }
-            }
+        // Shown only: the stored duration is always derived again from the times when saving.
+        $calculateDuration = function (Get $get, Set $set): void {
+            $set('duration_minutes', OvertimeRequestService::durationMinutes($get('start_time'), $get('end_time')));
         };
+
+        // Hours of a request an approver already acted on are fixed: reject it and let the worker file again.
+        $hoursLocked = fn (?OvertimeRequest $record): bool => $record !== null && ! ApprovalFlowService::isUntouchedByApprovers($record);
 
         return $schema
             ->components([
@@ -134,7 +119,11 @@ class OvertimeRequestResource extends Resource
                             DatePicker::make('date')
                                 ->label('Tanggal Lembur')
                                 ->required()
-                                ->default(today()),
+                                ->default(today())
+                                ->disabled($hoursLocked)
+                                ->helperText(fn (?OvertimeRequest $record): ?string => $hoursLocked($record)
+                                    ? 'Tanggal dan jam lembur yang sudah diproses tidak bisa diubah. Tolak pengajuan ini lalu minta pekerja mengajukan ulang.'
+                                    : 'Hari ini, paling lama 31 hari ke belakang atau 31 hari ke depan.'),
 
                             TimePicker::make('start_time')
                                 ->label('Jam Mulai Lembur (24 Jam)')
@@ -143,6 +132,7 @@ class OvertimeRequestResource extends Resource
                                 ->format('H:i')
                                 ->seconds(false)
                                 ->required()
+                                ->disabled($hoursLocked)
                                 ->live()
                                 ->afterStateUpdated($calculateDuration),
 
@@ -153,21 +143,17 @@ class OvertimeRequestResource extends Resource
                                 ->format('H:i')
                                 ->seconds(false)
                                 ->required()
+                                ->disabled($hoursLocked)
                                 ->live()
                                 ->afterStateUpdated($calculateDuration),
 
                             TextInput::make('duration_minutes')
                                 ->label('Estimasi Durasi (Menit)')
                                 ->numeric()
+                                ->disabled()
+                                ->dehydrated(false)
                                 ->placeholder('Otomatis terhitung dari jam mulai & selesai')
-                                ->helperText(fn (Get $get): ?string => $get('duration_minutes') ? 'Setara dengan '.round(((int) $get('duration_minutes')) / 60, 1).' jam' : null)
-                                ->required(),
-
-                            TextInput::make('actual_duration_minutes')
-                                ->label('Durasi Aktual Lembur (Menit)')
-                                ->numeric()
-                                ->placeholder('Diisi setelah lembur selesai')
-                                ->columnSpanFull(),
+                                ->helperText(fn (Get $get): ?string => $get('duration_minutes') ? 'Setara dengan '.round(((int) $get('duration_minutes')) / 60, 1).' jam. Maksimal 12 jam; jam selesai sebelum jam mulai berarti melewati tengah malam.' : 'Maksimal 12 jam; jam selesai sebelum jam mulai berarti melewati tengah malam.'),
 
                             Textarea::make('reason')
                                 ->label('Tugas / Alasan Lembur')
@@ -287,20 +273,31 @@ class OvertimeRequestResource extends Resource
                     ->label('Isi Durasi Aktual')
                     ->icon('heroicon-o-pencil-square')
                     ->color('info')
-                    ->visible(fn (OvertimeRequest $record) => $record->status === 'approved')
+                    ->visible(fn (OvertimeRequest $record): bool => OvertimeRequestService::canFillActualDuration($record, auth()->user()))
                     ->fillForm(fn (OvertimeRequest $record): array => [
                         'actual_duration_minutes' => $record->actual_duration_minutes ?? $record->duration_minutes,
                     ])
                     ->schema([
                         TextInput::make('actual_duration_minutes')
                             ->label('Durasi Aktual Lembur (Menit)')
-                            ->numeric()
+                            ->integer()
+                            ->minValue(1)
+                            ->maxValue(OvertimeRequestService::MAX_DURATION_MINUTES)
+                            ->helperText('Maksimal 720 menit (12 jam).')
                             ->required(),
                     ])
                     ->action(function (OvertimeRequest $record, array $data): void {
-                        $record->update([
-                            'actual_duration_minutes' => (int) $data['actual_duration_minutes'],
-                        ]);
+                        try {
+                            app(OvertimeRequestService::class)->fillActualDuration($record, auth()->user(), $data['actual_duration_minutes'] ?? null);
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Durasi aktual tidak disimpan')
+                                ->body(collect($exception->errors())->flatten()->first())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('Durasi Aktual Diperbarui')

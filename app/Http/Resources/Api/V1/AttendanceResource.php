@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Services\OffScheduleCheckInService;
 use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -11,6 +12,7 @@ class AttendanceResource extends JsonResource
     public function toArray(Request $request): array
     {
         $profile = $this->employee ?? $this->intern ?? $this->freelancer;
+        $replaced = $this->is_off_schedule ? $this->resource->replacedWorker() : null;
 
         return [
             'id' => $this->id,
@@ -37,6 +39,18 @@ class AttendanceResource extends JsonResource
             'liveness_verified' => $this->liveness_verified,
             'liveness_notes' => $this->liveness_notes,
             'late_minutes' => $this->late_minutes,
+            'early_leave_minutes' => $this->early_leave_minutes !== null ? (int) $this->early_leave_minutes : null,
+            // The stage an approver sees, sent back on process so a stage that moved on meanwhile is refused.
+            'current_step' => $this->current_step !== null ? (int) $this->current_step : null,
+            'total_steps' => $this->approval_steps_count ?? ($this->relationLoaded('approvalSteps') ? $this->approvalSteps->count() : null),
+            'rejection_reason' => $this->rejection_reason,
+            // "Masuk di luar jadwal": the colleague replaced and a ready label for approvers and history.
+            'is_off_schedule' => (bool) $this->is_off_schedule,
+            'replaced_worker' => $replaced ? [
+                'key' => app(OffScheduleCheckInService::class)->keyOf($replaced),
+                'name' => $replaced->full_name,
+            ] : null,
+            'off_schedule_label' => $this->resource->offScheduleLabel(),
             'employee' => $this->employee ? $this->formatWorkerProfile($this->employee) : null,
             'intern' => $this->intern ? $this->formatWorkerProfile($this->intern) : null,
             'freelancer' => $this->freelancer ? $this->formatWorkerProfile($this->freelancer) : null,

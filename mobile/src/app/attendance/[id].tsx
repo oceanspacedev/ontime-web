@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams } from 'expo-router';
 
 import { AttendanceDetail } from '@/components/AttendanceDetail';
-import { ErrorBanner, LoadingView, Screen } from '@/components/ui';
+import { ErrorBanner, LoadingView, Notice, Screen } from '@/components/ui';
 import { attendanceApi } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
 
@@ -25,9 +25,11 @@ export default function AttendanceDetailScreen() {
       </Screen>
     );
   }
+  const attendance = query.data;
   return (
     <Screen>
-      <AttendanceDetail attendance={query.data} />
+      {attendance.status === 'rejected' && attendance.rejection_reason ? <Notice tone="danger" message={`Alasan penolakan: ${attendance.rejection_reason}`} /> : null}
+      <AttendanceDetail attendance={attendance} />
     </Screen>
   );
 }

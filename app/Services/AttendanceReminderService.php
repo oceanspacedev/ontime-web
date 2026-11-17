@@ -76,7 +76,7 @@ final class AttendanceReminderService
                     continue;
                 }
 
-                [$title, $body, $action] = $this->message($kind, $slot);
+                [$title, $body, $action] = $this->message($kind, $slot, $now);
                 Notification::send($slot['user'], new AttendanceReminderNotification($title, $body, [
                     'kind' => 'attendance_reminder',
                     'reminder' => $kind,
@@ -115,12 +115,12 @@ final class AttendanceReminderService
                 ->keyBy($column);
 
             $workers = $model::query()
-                ->with(['user', 'shift', 'company.policy'])
+                ->with(['user.tenant', 'shift', 'company.policy'])
                 ->whereNotNull('user_id')
                 ->whereNotIn('status', WorkerAccountService::ENDED_STATUSES)
                 ->where(fn ($query) => $query->whereNotNull('shift_id')->orWhereIn('id', $schedules->keys()))
                 ->get()
-                ->filter(fn (Model $worker): bool => $worker->user !== null && $worker->user->is_active !== false);
+                ->filter(fn (Model $worker): bool => $worker->user !== null && self::maySignIn($worker->user));
 
             if ($workers->isEmpty()) {
                 continue;
@@ -217,10 +217,14 @@ final class AttendanceReminderService
     }
 
     /**
+     * A forgotten check-out noticed only on a later day than the shift ended (a day shift ending late in
+     * the evening) is not checked out any more: the app shows "Kemarin belum absen pulang" with a link to
+     * the correction form, and so does the push ("correction" opens the home screen with that notice).
+     *
      * @param  array{shift: Shift, start: Carbon, end: Carbon, location: CompanyLocation|null}  $slot
      * @return array{0: string, 1: string, 2: string} Title, body, and what the app should open.
      */
-    private function message(string $kind, array $slot): array
+    private function message(string $kind, array $slot, Carbon $now): array
     {
         $shift = $slot['shift']->name;
         $start = $slot['start']->format('H:i');
@@ -231,8 +235,20 @@ final class AttendanceReminderService
             self::SHIFT_SOON => ["Shift {$shift} mulai {$start}", "Jangan lupa absen masuk{$at}.", 'check_in'],
             self::NOT_CHECKED_IN => ['Anda belum absen masuk', "Shift {$shift} mulai {$start}. Absen sekarang{$at}.", 'check_in'],
             self::TIME_TO_LEAVE => ['Waktunya pulang', "Shift {$shift} selesai {$end}. Jangan lupa absen pulang.", 'check_out'],
+            self::FORGOT_CHECK_OUT => $now->isSameDay($slot['end'])
+                ? ['Anda belum absen pulang', "Shift {$shift} selesai {$end}. Absen pulang sekarang, atau ajukan koreksi bila sudah pulang.", 'check_out']
+                : ['Kemarin belum absen pulang', "Shift {$shift} selesai {$end}. Ajukan koreksi dengan jam pulang yang sebenarnya. Absen masuk hari ini tetap bisa.", 'correction'],
             default => ['Anda belum absen pulang', "Shift {$shift} selesai {$end}. Absen pulang sekarang, atau ajukan koreksi bila sudah pulang.", 'check_out'],
         };
+    }
+
+    /**
+     * Same rule as {@see User::canSignIn()}, read from the eager-loaded Klien: a reminder is only worth
+     * sending to an account that can open the app and act on it.
+     */
+    private static function maySignIn(User $user): bool
+    {
+        return $user->is_active !== false && ($user->tenant_id === null || (bool) $user->tenant?->is_active);
     }
 
     /**
@@ -247,8 +263,8 @@ final class AttendanceReminderService
         }
 
         $sent = 0;
-        $coordinators = User::role('Koordinator')->where('is_active', true)->get()
-            ->filter(fn (User $user): bool => DataAccessService::isCoordinator($user));
+        $coordinators = User::role('Koordinator')->with('tenant')->where('is_active', true)->get()
+            ->filter(fn (User $user): bool => self::maySignIn($user) && DataAccessService::isCoordinator($user));
 
         foreach ($coordinators as $coordinator) {
             /** @var Collection<int, string> $names */

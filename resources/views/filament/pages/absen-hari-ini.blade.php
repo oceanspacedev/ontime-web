@@ -151,6 +151,48 @@
 
                 <!-- Section Kamera Live Stream Preview & Side-by-Side Action Buttons -->
                 <div>
+                    @php
+                        $coverOptions = ! $attendance?->check_in ? $this->coverOptions : null;
+                    @endphp
+                    @if($coverOptions['is_off_schedule'] ?? false)
+                        <div class="mb-4 p-4 space-y-3 bg-amber-50/60 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl">
+                            <div>
+                                <h4 class="text-sm font-bold text-amber-900 dark:text-amber-200">Masuk di luar jadwal</h4>
+                                <p class="text-xs text-amber-700 dark:text-amber-300">
+                                    {{ $coverOptions['off_schedule_reason'] === 'no_schedule' ? 'Anda belum punya jadwal shift hari ini.' : 'Hari ini jadwal Anda libur.' }}
+                                    Absen masuk tetap bisa dikirim sebagai pengganti darurat, tetapi menunggu persetujuan atasan.
+                                </p>
+                            </div>
+                            @if(count($coverOptions['shifts']) === 0)
+                                <p class="text-xs font-medium text-red-700 dark:text-red-300">Belum ada shift aktif di badan usaha Anda. Hubungi koordinator atau PIC.</p>
+                            @else
+                                <label class="block space-y-1">
+                                    <span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Shift yang digantikan (wajib)</span>
+                                    <x-filament::input.wrapper>
+                                        <x-filament::input.select wire:model="offScheduleShiftId">
+                                            <option value="">Pilih shift</option>
+                                            @foreach($coverOptions['shifts'] as $shift)
+                                                <option value="{{ $shift['id'] }}">{{ $shift['name'] }} {{ $shift['start_time'] }}–{{ $shift['end_time'] }}</option>
+                                            @endforeach
+                                        </x-filament::input.select>
+                                    </x-filament::input.wrapper>
+                                </label>
+                            @endif
+                            @if(count($coverOptions['colleagues']) > 0)
+                                <label class="block space-y-1">
+                                    <span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Menggantikan siapa (opsional)</span>
+                                    <x-filament::input.wrapper>
+                                        <x-filament::input.select wire:model="offScheduleReplaces">
+                                            <option value="">Tidak ada</option>
+                                            @foreach($coverOptions['colleagues'] as $colleague)
+                                                <option value="{{ $colleague['key'] }}">{{ collect([$colleague['name'], $colleague['shift']['start_time'] ?? null, $colleague['outlet']['name'] ?? null])->filter()->implode(' · ') }}{{ $colleague['has_checked_in'] ? ' (sudah absen)' : '' }}</option>
+                                            @endforeach
+                                        </x-filament::input.select>
+                                    </x-filament::input.wrapper>
+                                </label>
+                            @endif
+                        </div>
+                    @endif
                     @if(!$attendance || !$attendance->check_out)
                         @include('filament.components.camera-capture', [
                             'policy' => $policy,
@@ -188,6 +230,10 @@
                                     @if($attendance->status === \App\Enums\AttendanceStatus::PendingApproval)
                                         <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
                                             Menunggu Persetujuan
+                                        </span>
+                                    @elseif($attendance->status === \App\Enums\AttendanceStatus::Rejected)
+                                        <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800">
+                                            Ditolak
                                         </span>
                                     @elseif($attendance->status === \App\Enums\AttendanceStatus::Late)
                                         <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">

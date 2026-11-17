@@ -71,6 +71,11 @@ export function AttendanceRow({ attendance, showWorker, onPress }: { attendance:
           {attendance.late_minutes ? <Text style={styles.late}>Terlambat {attendance.late_minutes} menit</Text> : null}
           {attendance.is_corrected ? <Text style={styles.note}>Sudah dikoreksi</Text> : null}
         </View>
+        {attendance.is_off_schedule ? (
+          <Text style={styles.note} numberOfLines={2}>
+            {attendance.off_schedule_label ?? 'Masuk di luar jadwal'}
+          </Text>
+        ) : null}
       </View>
 
       <Ionicons name="chevron-forward" size={20} color={colors.textSubtle} />

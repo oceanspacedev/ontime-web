@@ -4,6 +4,7 @@ namespace App\Filament\Resources\ApprovalFlows\Pages;
 
 use App\Filament\Resources\ApprovalFlows\ApprovalFlowResource;
 use App\Models\ApprovalFlow;
+use App\Services\ApprovalFlowService;
 use Filament\Actions\Action;
 use Filament\Resources\Pages\EditRecord;
 use Illuminate\Database\Eloquent\Model;
@@ -70,6 +71,18 @@ class EditApprovalFlow extends EditRecord
             ->get()
             ->toArray();
 
+        // A flow saved before Tukar Shift existed has no stage for it; it is offered the default Approver stage
+        // (what such requests fall back to anyway), so saving the flow keeps working and keeps that stage.
+        $data['shift_swap_steps'] = ApprovalFlow::companyWide()->where('company_id', $companyId)
+            ->where('request_type', 'shift_swap')
+            ->orderBy('step_order')
+            ->get()
+            ->toArray() ?: [[
+                'name' => 'Persetujuan '.ApprovalFlowService::requestTypeLabel('shift_swap'),
+                'approver_type' => 'role',
+                'approver_role' => 'Approver',
+            ]];
+
         return $data;
     }
 
@@ -82,14 +95,16 @@ class EditApprovalFlow extends EditRecord
         $correctionSteps = $data['correction_steps'] ?? [];
         $resignationSteps = $data['resignation_steps'] ?? [];
         $geofenceSteps = $data['geofence_steps'] ?? [];
+        $shiftSwapSteps = $data['shift_swap_steps'] ?? [];
 
         $this->validateSteps($leaveSteps, 'Cuti / Izin');
         $this->validateSteps($overtimeSteps, 'Lembur');
         $this->validateSteps($correctionSteps, 'Koreksi Absensi');
         $this->validateSteps($resignationSteps, 'Pengunduran Diri');
         $this->validateSteps($geofenceSteps, 'Absensi Luar Geofence');
+        $this->validateSteps($shiftSwapSteps, 'Tukar Shift');
 
-        DB::transaction(function () use ($companyId, $leaveSteps, $overtimeSteps, $correctionSteps, $resignationSteps, $geofenceSteps) {
+        DB::transaction(function () use ($companyId, $leaveSteps, $overtimeSteps, $correctionSteps, $resignationSteps, $geofenceSteps, $shiftSwapSteps) {
             ApprovalFlow::companyWide()->where('company_id', $companyId)->delete();
 
             $this->insertSteps($companyId, 'leave', $leaveSteps);
@@ -97,6 +112,7 @@ class EditApprovalFlow extends EditRecord
             $this->insertSteps($companyId, 'correction', $correctionSteps);
             $this->insertSteps($companyId, 'resignation', $resignationSteps);
             $this->insertSteps($companyId, 'geofence', $geofenceSteps);
+            $this->insertSteps($companyId, 'shift_swap', $shiftSwapSteps);
         });
 
         return $record;

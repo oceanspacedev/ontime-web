@@ -293,16 +293,8 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                 TextColumn::make('status')
                     ->label('Status')
                     ->badge()
-                    ->color(fn ($state): string => match ($state instanceof AttendanceStatus ? $state->value : (string) $state) {
-                        'late' => 'warning',
-                        'leave' => 'info',
-                        default => 'success',
-                    })
-                    ->formatStateUsing(fn (Attendance $record): string => match ($record->status instanceof AttendanceStatus ? $record->status->value : (string) $record->status) {
-                        'late' => "Terlambat ({$record->late_minutes}m)",
-                        'leave' => 'Cuti / Izin',
-                        default => 'Hadir',
-                    }),
+                    ->color(fn ($state): string|array|null => AttendanceStatus::tryFrom($state instanceof AttendanceStatus ? $state->value : (string) $state)?->getColor() ?? 'gray')
+                    ->formatStateUsing(fn (Attendance $record): string => $this->statusLabel($record)),
 
                 TextColumn::make('notes')
                     ->label('Keterangan')
@@ -343,6 +335,27 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                         ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
                 ]),
             ]);
+    }
+
+    /**
+     * The row's real status: on time reads "Hadir", late carries its minutes, and absent, rejected and
+     * pending rows keep their own label instead of falling back to "Hadir".
+     */
+    public function statusLabel(Attendance $record): string
+    {
+        $status = $record->status instanceof AttendanceStatus ? $record->status : AttendanceStatus::tryFrom((string) $record->status);
+
+        $label = match ($status) {
+            AttendanceStatus::OnTime => 'Hadir',
+            AttendanceStatus::Late => "Terlambat ({$record->late_minutes}m)",
+            AttendanceStatus::PendingApproval => $record->reportedLateMinutes() > 0
+                ? "Menunggu Persetujuan (telat {$record->reportedLateMinutes()}m)"
+                : 'Menunggu Persetujuan',
+            null => '-',
+            default => $status->getLabel(),
+        };
+
+        return $record->early_leave_minutes > 0 ? "{$label} · Pulang cepat ({$record->early_leave_minutes}m)" : $label;
     }
 
     public function isGpsRequiredInPolicy(): bool

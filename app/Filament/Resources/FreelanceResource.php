@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\GuardsWorkerRecords;
 use App\Filament\Concerns\OpensWorkerAccounts;
 use App\Filament\Concerns\ScopesToManagedCompanies;
 use App\Filament\Forms\Components\MasterFacePhotoField;
@@ -14,8 +15,6 @@ use App\Services\WorkerAccountService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
@@ -39,6 +38,7 @@ use UnitEnum;
 
 class FreelanceResource extends Resource
 {
+    use GuardsWorkerRecords;
     use OpensWorkerAccounts;
     use ScopesToManagedCompanies;
 
@@ -95,7 +95,8 @@ class FreelanceResource extends Resource
                                     TextInput::make('phone')
                                         ->label('Telepon')
                                         ->tel()
-                                        ->maxLength(50),
+                                        ->maxLength(50)
+                                        ->rules([static::uniqueWorkerPhoneRule()]),
 
                                     TextInput::make('institution')
                                         ->label('Keahlian / Vendor')
@@ -179,7 +180,8 @@ class FreelanceResource extends Resource
 
                                     DatePicker::make('end_date')
                                         ->label('Selesai')
-                                        ->native(false),
+                                        ->native(false)
+                                        ->rules([static::contractEndDateRule()]),
 
                                     Select::make('status')
                                         ->label('Status')
@@ -209,7 +211,9 @@ class FreelanceResource extends Resource
                                     Select::make('user_id')
                                         ->label('Akun User')
                                         ->placeholder('Belum ada akun')
-                                        ->options(fn (?Freelancer $record): array => static::assignableUserOptions() + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->options(fn (?Freelancer $record, Get $get): array => static::assignableUserOptions($get('company_id')) + ($record?->user ? [$record->user->getKey() => $record->user->name] : []))
+                                        ->helperText('Hanya akun yang belum terhubung ke karyawan, magang, atau freelance lain.')
+                                        ->rules([static::linkableAccountRule()])
                                         ->searchable()
                                         ->nullable()
                                         ->hidden(fn (Get $get, string $operation): bool => $operation === 'create' && (bool) $get('create_account')),
@@ -230,6 +234,7 @@ class FreelanceResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query): Builder => static::withWorkHistoryFlag($query))
             ->columns([
                 TextColumn::make('freelancer_number')
                     ->label('ID / No. Freelance')
@@ -351,11 +356,11 @@ class FreelanceResource extends Resource
                     ->modalContent(fn (Freelancer $record) => view('filament.modals.print-freelance', ['record' => $record])),
 
                 EditAction::make(),
-                DeleteAction::make(),
+                static::workerDeleteAction(),
             ])
             ->bulkActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    static::workerDeleteBulkAction(),
                 ]),
             ]);
     }
@@ -372,7 +377,7 @@ class FreelanceResource extends Resource
                 ->label('Akhiri Kontrak')
                 ->icon('heroicon-o-arrow-right-start-on-rectangle')
                 ->color('danger')
-                ->visible(fn (Freelancer $record): bool => app(WorkerAccountService::class)->isActive($record))
+                ->visible(fn (Freelancer $record): bool => ! app(WorkerAccountService::class)->hasEnded($record))
                 ->requiresConfirmation()
                 ->modalHeading(fn (Freelancer $record): string => "Akhiri kontrak {$record->full_name}?")
                 ->modalDescription('Akun dinonaktifkan dan jadwal setelah hari ini dihapus. Bisa diaktifkan lagi kapan saja.')
@@ -387,13 +392,20 @@ class FreelanceResource extends Resource
                 ->label('Aktifkan Lagi')
                 ->icon('heroicon-o-arrow-path')
                 ->color('success')
-                ->visible(fn (Freelancer $record): bool => ! app(WorkerAccountService::class)->isActive($record))
+                ->visible(fn (Freelancer $record): bool => app(WorkerAccountService::class)->hasEnded($record))
                 ->requiresConfirmation()
                 ->modalHeading(fn (Freelancer $record): string => "Aktifkan lagi {$record->full_name}?")
                 ->modalDescription('Status kembali Aktif dan akun yang sama bisa dipakai lagi.')
                 ->modalSubmitActionLabel('Aktifkan')
                 ->successNotificationTitle('Freelancer aktif lagi')
                 ->action(function (Freelancer $record, Action $action): void {
+                    // Someone else may have been given this number while the contract was closed.
+                    if (app(WorkerAccountService::class)->phoneIsTaken($record->phone, $record)) {
+                        Notification::make()->title('Belum bisa diaktifkan')->body(WorkerAccountService::PHONE_TAKEN_MESSAGE.' Ubah nomor HP-nya dulu.')->danger()->send();
+
+                        return;
+                    }
+
                     app(WorkerAccountService::class)->reactivate($record);
                     $action->success();
                 }),

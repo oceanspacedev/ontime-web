@@ -6,7 +6,8 @@ import { Linking, Switch } from 'react-native';
 
 import { Button, Choice, EmptyState, ErrorBanner, Field, Group, LoadingView, Notice, Row, Screen } from '@/components/ui';
 import { useClientAdminSaved } from '@/hooks/useClientAdminSaved';
-import { ApiError, clientAdminApi, type ClientDivision, type ClientLocation, errorMessage, type LocationInput } from '@/lib/api';
+import { clientAdminApi, type ClientDivision, type ClientLocation, errorMessage, type LocationInput } from '@/lib/api';
+import { unshownErrorMessage } from '@/lib/errors';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { formatDistance, openMaps } from '@/lib/geo';
 import { queryKeys } from '@/lib/queryClient';
@@ -208,7 +209,15 @@ function LocationForm({ companyId, location, divisions, policyRadius }: Location
     }
   };
 
-  const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
+  const generalError = unshownErrorMessage(submit.error, [
+    'latitude',
+    'longitude',
+    'name',
+    'address',
+    'radius_meters',
+    'is_active',
+    ...(divisions.length > 0 ? ['division_id'] : []),
+  ]);
   const gpsError = gps.error instanceof GpsError ? gps.error : null;
   const previewLat = parseCoordinate(latitude);
   const previewLng = parseCoordinate(longitude);
@@ -279,6 +288,7 @@ function LocationForm({ companyId, location, divisions, policyRadius }: Location
           right={<Switch value={isActive} onValueChange={setIsActive} trackColor={{ true: colors.primary }} accessibilityLabel="Lokasi aktif" />}
         />
       </Group>
+      {errors.is_active ? <Notice tone="danger" message={errors.is_active} /> : null}
     </Screen>
   );
 }

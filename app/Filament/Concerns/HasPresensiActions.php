@@ -12,6 +12,7 @@ use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceCheckResult;
 use App\Services\Attendance\AttendanceRuleException;
 use App\Services\AttendanceCheckService;
+use App\Services\OffScheduleCheckInService;
 use App\Services\WorkScheduleService;
 use App\Support\SelfieUploadToken;
 use Filament\Notifications\Notification;
@@ -26,6 +27,12 @@ use Livewire\Attributes\Renderless;
  */
 trait HasPresensiActions
 {
+    /** "Masuk di luar jadwal": the id of the company shift the worker covers (required for such a check-in). */
+    public ?string $offScheduleShiftId = null;
+
+    /** "Masuk di luar jadwal": the colleague replaced, as "employee:12", or null. */
+    public ?string $offScheduleReplaces = null;
+
     public function getTodayAttendanceProperty(): ?Attendance
     {
         $user = auth()->user();
@@ -68,6 +75,19 @@ trait HasPresensiActions
         $service = app(WorkScheduleService::class);
 
         return $service->resolve($profile, now(), $service->currentSegment($user, $profile, now())['segment']);
+    }
+
+    /**
+     * What a check-in today outside the schedule offers (shifts to cover, colleagues to replace), or null
+     * when the worker has no profile. See {@see OffScheduleCheckInService::options()}.
+     *
+     * @return array{date: string, is_off_schedule: bool, off_schedule_reason: string|null, shifts: list<array<string, mixed>>, colleagues: list<array<string, mixed>>}|null
+     */
+    public function getCoverOptionsProperty(): ?array
+    {
+        $profile = $this->getLinkedProfile();
+
+        return $profile ? app(OffScheduleCheckInService::class)->options($profile, today()) : null;
     }
 
     public function getCompanyPolicyProperty(): ?CompanyPolicy
@@ -156,6 +176,8 @@ trait HasPresensiActions
                 throw new AttendanceRuleException('Sesi Anda telah berakhir. Silakan login kembali.', 401);
             }
 
+            $this->ensureValidCoordinates($lat, $lng);
+
             try {
                 $photoPath = filled($photoToken) ? SelfieUploadToken::resolve($photoToken, $user) : null;
                 $resolvedPaths = array_filter([$photoPath]);
@@ -173,6 +195,8 @@ trait HasPresensiActions
                 photoPath: $photoPath,
                 livenessChallengeId: filled($livenessChallengeId) ? $livenessChallengeId : null,
                 livenessFramePaths: $framePaths,
+                coverShiftId: $isCheckIn && ctype_digit((string) $this->offScheduleShiftId) ? (int) $this->offScheduleShiftId : null,
+                replacesWorker: $isCheckIn && filled($this->offScheduleReplaces) ? $this->offScheduleReplaces : null,
             );
 
             $result = $isCheckIn ? $service->checkIn($user, $input) : $service->checkOut($user, $input);
@@ -227,9 +251,26 @@ trait HasPresensiActions
         return $paths;
     }
 
+    /**
+     * Refuse coordinates outside the GPS domain, with the same rule and message as the API
+     * (CheckInRequest: latitude -90..90, longitude -180..180).
+     *
+     * @throws AttendanceRuleException
+     */
+    private function ensureValidCoordinates(?float $lat, ?float $lng): void
+    {
+        foreach (['latitude' => [$lat, 90.0], 'longitude' => [$lng, 180.0]] as $field => [$value, $limit]) {
+            if ($value !== null && (! is_finite($value) || abs($value) > $limit)) {
+                throw new AttendanceRuleException('Lokasi GPS tidak valid. Perbarui lokasi lalu coba lagi.', 422, $field);
+            }
+        }
+    }
+
     private function attendanceErrorTitle(string $actionLabel, AttendanceRuleException $exception): string
     {
         return match (true) {
+            $exception->getMessage() === AttendanceCheckService::ON_LEAVE_MESSAGE => 'Sedang Cuti / Izin',
+            $exception->getMessage() === AttendanceCheckService::OPEN_OVERNIGHT_MESSAGE => 'Shift Semalam Belum Selesai',
             $exception->status === 409 => "Sudah {$actionLabel}",
             $exception->status === 503 => 'Layanan Wajah Tidak Tersedia',
             $exception->field === 'liveness_frames' => 'Verifikasi Liveness Gagal',

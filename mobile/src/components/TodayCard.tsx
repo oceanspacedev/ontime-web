@@ -6,6 +6,7 @@ import { Badge, Button, Group, Notice, Text } from '@/components/ui';
 import type { Access } from '@/lib/access';
 import { type Attendance, attendanceApi, type TodayAttendance } from '@/lib/api';
 import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatTime } from '@/lib/format';
+import { unclosedNotice } from '@/lib/today';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface Props {
@@ -42,9 +43,13 @@ export function TodayCard({ today, access }: Props) {
   const selfieMode = attendanceApi.selfieModeOf(policy);
   const needsMasterFace = (selfieMode === 'face' || selfieMode === 'liveness') && !access.masterFacePhoto;
   const done = today.has_checked_in && today.has_checked_out;
+  /** An approved leave covers today: the server refuses check-in, so none is offered. */
+  const onLeave = today.is_on_leave === true && !today.has_checked_in;
   const schedule = today.schedule ?? null;
   const workStart = schedule?.start_time ?? policy?.work_start_time ?? null;
   const workEnd = schedule?.end_time ?? policy?.work_end_time ?? null;
+  /** An earlier shift never checked out: fixed by a correction, while today's check-in stays offered. */
+  const unclosed = unclosedNotice(today.unclosed_previous, today.date);
 
   return (
     <Group title={TODAY_GROUP_TITLE} padded cardStyle={styles.card}>
@@ -79,10 +84,13 @@ export function TodayCard({ today, access }: Props) {
           ) : null}
         </View>
         {attendance ? (
-          <Badge
-            label={attendance.late_minutes ? `Telat ${attendance.late_minutes} mnt` : attendanceStatusLabel(attendance.status)}
-            tone={attendanceStatusTone(attendance.status)}
-          />
+          <View style={styles.badges}>
+            <Badge
+              label={attendance.late_minutes ? `Telat ${attendance.late_minutes} mnt` : attendanceStatusLabel(attendance.status)}
+              tone={attendanceStatusTone(attendance.status)}
+            />
+            {attendance.early_leave_minutes ? <Badge label={`Pulang cepat ${attendance.early_leave_minutes} mnt`} tone="warning" /> : null}
+          </View>
         ) : null}
       </View>
 
@@ -92,11 +100,27 @@ export function TodayCard({ today, access }: Props) {
         <TimeHalf label="Pulang" value={attendance?.check_out} icon="log-out-outline" />
       </View>
 
+      {unclosed ? (
+        <View style={styles.unclosed}>
+          <Notice tone="warning" icon="time-outline" message={unclosed.message} />
+          {unclosed.canRequestCorrection && access.canRequestCorrection ? (
+            <Button
+              title="Ajukan Koreksi"
+              icon="create-outline"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/request/correction/new', params: { date: today.unclosed_previous?.date ?? '' } })}
+            />
+          ) : null}
+        </View>
+      ) : null}
+
+      {onLeave ? <Notice tone="info" icon="calendar-outline" message="Hari ini Anda cuti atau izin yang sudah disetujui, jadi tidak perlu absen." /> : null}
+
       {attendance?.status === 'pending_approval' ? (
         <Notice tone="warning" message={pendingApprovalMessage(attendance)} />
       ) : null}
 
-      {needsMasterFace ? (
+      {needsMasterFace && !onLeave ? (
         <Notice
           tone="warning"
           icon="scan-outline"
@@ -108,7 +132,7 @@ export function TodayCard({ today, access }: Props) {
         />
       ) : null}
 
-      {done ? null : needsMasterFace ? (
+      {done || onLeave ? null : needsMasterFace ? (
         <Button title="Daftarkan Foto Master Wajah" icon="scan-outline" size="lg" onPress={() => router.push('/attendance/master-face')} />
       ) : !today.has_checked_in ? (
         <Button title="Absen Masuk" icon="log-in-outline" size="lg" onPress={() => router.push({ pathname: '/attendance/check', params: { mode: 'in' } })} />
@@ -144,8 +168,10 @@ function TimeHalf({ label, value, icon }: { label: string; value: string | null 
 
 const useStyles = makeStyles((c) => ({
   card: { gap: spacing.lg },
+  unclosed: { gap: spacing.sm },
   header: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   headerText: { flex: 1, gap: 4 },
+  badges: { alignItems: 'flex-end', gap: 4 },
   date: { fontSize: fontSize.lg, fontWeight: '600', color: c.text },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   schedule: { flexShrink: 1, fontSize: fontSize.sm, color: c.textMuted },

@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\V1\OvertimeRequestApiController;
 use App\Http\Controllers\Api\V1\ReportAndCalendarApiController;
 use App\Http\Controllers\Api\V1\ResignationApiController;
 use App\Http\Controllers\Api\V1\ShieldApiController;
+use App\Http\Controllers\Api\V1\ShiftSwapRequestApiController;
 use App\Http\Controllers\Api\V1\TeamApiController;
 use Illuminate\Support\Facades\Route;
 
@@ -42,45 +43,55 @@ Route::prefix('v1')->group(function () {
 
         // Attendance Presensi
         Route::get('/attendance/today', [AttendanceApiController::class, 'today']);
+        Route::get('/attendance/cover-options', [AttendanceApiController::class, 'coverOptions']);
         Route::post('/attendance/liveness-challenge', [AttendanceApiController::class, 'livenessChallenge']);
         Route::post('/attendance/check-in', [AttendanceApiController::class, 'checkIn']);
         Route::post('/attendance/check-out', [AttendanceApiController::class, 'checkOut']);
         Route::post('/attendance/master-face', [AttendanceApiController::class, 'registerMasterFace']);
         Route::delete('/attendance/master-face', [AttendanceApiController::class, 'deleteMasterFace']);
         Route::get('/attendances', [AttendanceApiController::class, 'index']);
-        Route::get('/attendances/{id}', [AttendanceApiController::class, 'show']);
+        Route::get('/attendances/{id}', [AttendanceApiController::class, 'show'])->where('id', '[0-9]{1,18}');
 
         // Leave Requests
         Route::get('/leave-requests', [LeaveRequestApiController::class, 'index']);
         Route::post('/leave-requests', [LeaveRequestApiController::class, 'store']);
-        Route::get('/leave-requests/{id}', [LeaveRequestApiController::class, 'show']);
-        Route::put('/leave-requests/{id}', [LeaveRequestApiController::class, 'update']);
-        Route::delete('/leave-requests/{id}', [LeaveRequestApiController::class, 'destroy']);
+        Route::get('/leave-requests/{id}', [LeaveRequestApiController::class, 'show'])->where('id', '[0-9]{1,18}');
+        Route::put('/leave-requests/{id}', [LeaveRequestApiController::class, 'update'])->where('id', '[0-9]{1,18}');
+        Route::delete('/leave-requests/{id}', [LeaveRequestApiController::class, 'destroy'])->where('id', '[0-9]{1,18}');
 
         // Overtime Requests
         Route::get('/overtime-requests', [OvertimeRequestApiController::class, 'index']);
         Route::post('/overtime-requests', [OvertimeRequestApiController::class, 'store']);
-        Route::get('/overtime-requests/{id}', [OvertimeRequestApiController::class, 'show']);
-        Route::put('/overtime-requests/{id}', [OvertimeRequestApiController::class, 'update']);
-        Route::delete('/overtime-requests/{id}', [OvertimeRequestApiController::class, 'destroy']);
+        Route::get('/overtime-requests/{id}', [OvertimeRequestApiController::class, 'show'])->where('id', '[0-9]{1,18}');
+        Route::put('/overtime-requests/{id}', [OvertimeRequestApiController::class, 'update'])->where('id', '[0-9]{1,18}');
+        Route::delete('/overtime-requests/{id}', [OvertimeRequestApiController::class, 'destroy'])->where('id', '[0-9]{1,18}');
 
         // Attendance Corrections
         Route::get('/attendance-corrections', [AttendanceCorrectionApiController::class, 'index']);
         Route::post('/attendance-corrections', [AttendanceCorrectionApiController::class, 'store']);
-        Route::get('/attendance-corrections/{id}', [AttendanceCorrectionApiController::class, 'show']);
-        Route::put('/attendance-corrections/{id}', [AttendanceCorrectionApiController::class, 'update']);
-        Route::delete('/attendance-corrections/{id}', [AttendanceCorrectionApiController::class, 'destroy']);
+        Route::get('/attendance-corrections/{id}', [AttendanceCorrectionApiController::class, 'show'])->where('id', '[0-9]{1,18}');
+        Route::put('/attendance-corrections/{id}', [AttendanceCorrectionApiController::class, 'update'])->where('id', '[0-9]{1,18}');
+        Route::delete('/attendance-corrections/{id}', [AttendanceCorrectionApiController::class, 'destroy'])->where('id', '[0-9]{1,18}');
 
         // Resignation Requests
         Route::get('/resignations', [ResignationApiController::class, 'index']);
         Route::post('/resignations', [ResignationApiController::class, 'store']);
-        Route::get('/resignations/{id}', [ResignationApiController::class, 'show']);
-        Route::put('/resignations/{id}', [ResignationApiController::class, 'update']);
-        Route::delete('/resignations/{id}', [ResignationApiController::class, 'destroy']);
+        Route::get('/resignations/{id}', [ResignationApiController::class, 'show'])->where('id', '[0-9]{1,18}');
+        Route::put('/resignations/{id}', [ResignationApiController::class, 'update'])->where('id', '[0-9]{1,18}');
+        Route::delete('/resignations/{id}', [ResignationApiController::class, 'destroy'])->where('id', '[0-9]{1,18}');
+
+        // Tukar Shift (Shift Swap). Ids are limited to 18 digits so they always fit the controllers' int $id (else 404, not 500).
+        Route::get('/shift-swaps', [ShiftSwapRequestApiController::class, 'index']);
+        Route::get('/shift-swaps/colleagues', [ShiftSwapRequestApiController::class, 'colleagues']);
+        Route::post('/shift-swaps', [ShiftSwapRequestApiController::class, 'store']);
+        Route::get('/shift-swaps/{id}', [ShiftSwapRequestApiController::class, 'show'])->where('id', '[0-9]{1,18}');
+        Route::post('/shift-swaps/{id}/accept', [ShiftSwapRequestApiController::class, 'accept'])->where('id', '[0-9]{1,18}');
+        Route::post('/shift-swaps/{id}/decline', [ShiftSwapRequestApiController::class, 'decline'])->where('id', '[0-9]{1,18}');
+        Route::post('/shift-swaps/{id}/cancel', [ShiftSwapRequestApiController::class, 'cancel'])->where('id', '[0-9]{1,18}');
 
         // Approval Actions
         Route::get('/approvals/pending', [ApprovalApiController::class, 'pending']);
-        Route::put('/approvals/{type}/{id}/process', [ApprovalApiController::class, 'process']);
+        Route::put('/approvals/{type}/{id}/process', [ApprovalApiController::class, 'process'])->where('id', '[0-9]{1,18}');
 
         // Team (Koordinator / Admin): roster per outlet, schedules and freelancers
         Route::get('/team/roster', [TeamApiController::class, 'roster']);
@@ -93,70 +104,70 @@ Route::prefix('v1')->group(function () {
         Route::post('/team/schedules/copy', [TeamApiController::class, 'copySchedules']);
         Route::get('/team/freelancers', [TeamApiController::class, 'freelancers']);
         Route::post('/team/freelancers', [TeamApiController::class, 'storeFreelancer']);
-        Route::post('/team/freelancers/{id}/account', [TeamApiController::class, 'createFreelancerAccount'])->whereNumber('id');
-        Route::post('/team/freelancers/{id}/end', [TeamApiController::class, 'endFreelancer'])->whereNumber('id');
-        Route::post('/team/freelancers/{id}/reactivate', [TeamApiController::class, 'reactivateFreelancer'])->whereNumber('id');
+        Route::post('/team/freelancers/{id}/account', [TeamApiController::class, 'createFreelancerAccount'])->where('id', '[0-9]{1,18}');
+        Route::post('/team/freelancers/{id}/end', [TeamApiController::class, 'endFreelancer'])->where('id', '[0-9]{1,18}');
+        Route::post('/team/freelancers/{id}/reactivate', [TeamApiController::class, 'reactivateFreelancer'])->where('id', '[0-9]{1,18}');
 
         // Klien (PIC / Admin): Badan Usaha, kebijakan absensi, lokasi, divisi, akun & akses
         Route::prefix('client')->name('api.v1.client.')->group(function () {
             Route::get('/overview', [ClientAdminApiController::class, 'overview'])->name('overview');
             Route::post('/companies', [ClientAdminApiController::class, 'storeCompany'])->name('companies.store');
-            Route::put('/companies/{id}', [ClientAdminApiController::class, 'updateCompany'])->whereNumber('id')->name('companies.update');
-            Route::get('/companies/{id}/policy', [ClientAdminApiController::class, 'policy'])->whereNumber('id')->name('policy.show');
-            Route::put('/companies/{id}/policy', [ClientAdminApiController::class, 'updatePolicy'])->whereNumber('id')->name('policy.update');
-            Route::get('/companies/{id}/locations', [ClientAdminApiController::class, 'locations'])->whereNumber('id')->name('locations.index');
-            Route::post('/companies/{id}/locations', [ClientAdminApiController::class, 'storeLocation'])->whereNumber('id')->name('locations.store');
-            Route::put('/locations/{id}', [ClientAdminApiController::class, 'updateLocation'])->whereNumber('id')->name('locations.update');
-            Route::get('/companies/{id}/divisions', [ClientAdminApiController::class, 'divisions'])->whereNumber('id')->name('divisions.index');
-            Route::post('/companies/{id}/divisions', [ClientAdminApiController::class, 'storeDivision'])->whereNumber('id')->name('divisions.store');
-            Route::put('/divisions/{id}', [ClientAdminApiController::class, 'updateDivision'])->whereNumber('id')->name('divisions.update');
+            Route::put('/companies/{id}', [ClientAdminApiController::class, 'updateCompany'])->where('id', '[0-9]{1,18}')->name('companies.update');
+            Route::get('/companies/{id}/policy', [ClientAdminApiController::class, 'policy'])->where('id', '[0-9]{1,18}')->name('policy.show');
+            Route::put('/companies/{id}/policy', [ClientAdminApiController::class, 'updatePolicy'])->where('id', '[0-9]{1,18}')->name('policy.update');
+            Route::get('/companies/{id}/locations', [ClientAdminApiController::class, 'locations'])->where('id', '[0-9]{1,18}')->name('locations.index');
+            Route::post('/companies/{id}/locations', [ClientAdminApiController::class, 'storeLocation'])->where('id', '[0-9]{1,18}')->name('locations.store');
+            Route::put('/locations/{id}', [ClientAdminApiController::class, 'updateLocation'])->where('id', '[0-9]{1,18}')->name('locations.update');
+            Route::get('/companies/{id}/divisions', [ClientAdminApiController::class, 'divisions'])->where('id', '[0-9]{1,18}')->name('divisions.index');
+            Route::post('/companies/{id}/divisions', [ClientAdminApiController::class, 'storeDivision'])->where('id', '[0-9]{1,18}')->name('divisions.store');
+            Route::put('/divisions/{id}', [ClientAdminApiController::class, 'updateDivision'])->where('id', '[0-9]{1,18}')->name('divisions.update');
             Route::get('/accounts', [ClientAccountApiController::class, 'index'])->name('accounts.index');
             Route::get('/accounts/options', [ClientAccountApiController::class, 'options'])->name('accounts.options');
             Route::post('/accounts', [ClientAccountApiController::class, 'store'])->middleware('throttle:client-account-credentials')->name('accounts.store');
-            Route::get('/accounts/{id}', [ClientAccountApiController::class, 'show'])->whereNumber('id')->name('accounts.show');
-            Route::put('/accounts/{id}', [ClientAccountApiController::class, 'update'])->whereNumber('id')->name('accounts.update');
-            Route::post('/accounts/{id}/reset-password', [ClientAccountApiController::class, 'resetPassword'])->whereNumber('id')->middleware('throttle:client-account-credentials')->name('accounts.reset-password');
+            Route::get('/accounts/{id}', [ClientAccountApiController::class, 'show'])->where('id', '[0-9]{1,18}')->name('accounts.show');
+            Route::put('/accounts/{id}', [ClientAccountApiController::class, 'update'])->where('id', '[0-9]{1,18}')->name('accounts.update');
+            Route::post('/accounts/{id}/reset-password', [ClientAccountApiController::class, 'resetPassword'])->where('id', '[0-9]{1,18}')->middleware('throttle:client-account-credentials')->name('accounts.reset-password');
         });
 
         // Master Data APIs
         Route::get('/master/companies', [MasterDataApiController::class, 'companies'])->middleware('can:ViewAny:Company');
-        Route::get('/master/companies/{id}', [MasterDataApiController::class, 'showCompany'])->middleware('can:ViewAny:Company');
+        Route::get('/master/companies/{id}', [MasterDataApiController::class, 'showCompany'])->middleware('can:ViewAny:Company')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/company-locations', [MasterDataApiController::class, 'companyLocations'])->middleware('can:ViewAny:CompanyLocation');
-        Route::get('/master/company-locations/{id}', [MasterDataApiController::class, 'showCompanyLocation'])->middleware('can:ViewAny:CompanyLocation');
+        Route::get('/master/company-locations/{id}', [MasterDataApiController::class, 'showCompanyLocation'])->middleware('can:ViewAny:CompanyLocation')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/company-policies', [MasterDataApiController::class, 'companyPolicies'])->middleware('can:ViewAny:CompanyPolicy');
-        Route::get('/master/company-policies/{id}', [MasterDataApiController::class, 'showCompanyPolicy'])->middleware('can:ViewAny:CompanyPolicy');
+        Route::get('/master/company-policies/{id}', [MasterDataApiController::class, 'showCompanyPolicy'])->middleware('can:ViewAny:CompanyPolicy')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/divisions', [MasterDataApiController::class, 'divisions'])->middleware('can:ViewAny:Division');
-        Route::get('/master/divisions/{id}', [MasterDataApiController::class, 'showDivision'])->middleware('can:ViewAny:Division');
+        Route::get('/master/divisions/{id}', [MasterDataApiController::class, 'showDivision'])->middleware('can:ViewAny:Division')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/job-titles', [MasterDataApiController::class, 'jobTitles'])->middleware('can:ViewAny:JobTitle');
-        Route::get('/master/job-titles/{id}', [MasterDataApiController::class, 'showJobTitle'])->middleware('can:ViewAny:JobTitle');
+        Route::get('/master/job-titles/{id}', [MasterDataApiController::class, 'showJobTitle'])->middleware('can:ViewAny:JobTitle')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/job-levels', [MasterDataApiController::class, 'jobLevels'])->middleware('can:ViewAny:JobLevel');
-        Route::get('/master/job-levels/{id}', [MasterDataApiController::class, 'showJobLevel'])->middleware('can:ViewAny:JobLevel');
+        Route::get('/master/job-levels/{id}', [MasterDataApiController::class, 'showJobLevel'])->middleware('can:ViewAny:JobLevel')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/employees', [MasterDataApiController::class, 'employees'])->middleware('can:ViewAny:Employee');
-        Route::get('/master/employees/{id}', [MasterDataApiController::class, 'showEmployee'])->middleware('can:ViewAny:Employee');
+        Route::get('/master/employees/{id}', [MasterDataApiController::class, 'showEmployee'])->middleware('can:ViewAny:Employee')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/interns', [MasterDataApiController::class, 'interns'])->middleware('can:ViewAny:Intern');
-        Route::get('/master/interns/{id}', [MasterDataApiController::class, 'showIntern'])->middleware('can:ViewAny:Intern');
+        Route::get('/master/interns/{id}', [MasterDataApiController::class, 'showIntern'])->middleware('can:ViewAny:Intern')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/freelancers', [MasterDataApiController::class, 'freelancers'])->middleware('can:ViewAny:Freelancer');
-        Route::get('/master/freelancers/{id}', [MasterDataApiController::class, 'showFreelancer'])->middleware('can:ViewAny:Freelancer');
+        Route::get('/master/freelancers/{id}', [MasterDataApiController::class, 'showFreelancer'])->middleware('can:ViewAny:Freelancer')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/holidays', [MasterDataApiController::class, 'holidays'])->middleware('can:ViewAny:Holiday');
-        Route::get('/master/holidays/{id}', [MasterDataApiController::class, 'showHoliday'])->middleware('can:ViewAny:Holiday');
+        Route::get('/master/holidays/{id}', [MasterDataApiController::class, 'showHoliday'])->middleware('can:ViewAny:Holiday')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/approval-flows', [MasterDataApiController::class, 'approvalFlows'])->middleware('can:ViewAny:ApprovalFlow');
-        Route::get('/master/approval-flows/{id}', [MasterDataApiController::class, 'showApprovalFlow'])->middleware('can:ViewAny:ApprovalFlow');
+        Route::get('/master/approval-flows/{id}', [MasterDataApiController::class, 'showApprovalFlow'])->middleware('can:ViewAny:ApprovalFlow')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/approvers', [MasterDataApiController::class, 'approvers'])->middleware('can:ViewAny:Approver');
-        Route::get('/master/approvers/{id}', [MasterDataApiController::class, 'showApprover'])->middleware('can:ViewAny:Approver');
+        Route::get('/master/approvers/{id}', [MasterDataApiController::class, 'showApprover'])->middleware('can:ViewAny:Approver')->where('id', '[0-9]{1,18}');
 
         Route::get('/master/users', [MasterDataApiController::class, 'users'])->middleware('can:ViewAny:User');
-        Route::get('/master/users/{id}', [MasterDataApiController::class, 'showUser'])->middleware('can:ViewAny:User');
+        Route::get('/master/users/{id}', [MasterDataApiController::class, 'showUser'])->middleware('can:ViewAny:User')->where('id', '[0-9]{1,18}');
 
         // Reports & Calendar APIs
         Route::get('/kalender-cuti', [ReportAndCalendarApiController::class, 'kalenderCuti']);
