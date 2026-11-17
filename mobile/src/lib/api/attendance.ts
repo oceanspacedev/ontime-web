@@ -1,6 +1,7 @@
 import { onlineManager } from '@tanstack/react-query';
 
 import { type DevicePosition, LocationUnavailableError, submitLocationError } from '../location';
+import { confirmOnline } from '../networkState';
 import { appendFile, NetworkError, request } from './client';
 import type {
   Attendance,
@@ -202,7 +203,7 @@ export const checkMutationOptions = { networkMode: 'always', retry: false } as c
  * message (before reading GPS or preparing photos), so the worker can retry or close the screen.
  */
 export async function submitCheck(purpose: AttendancePurpose, buildPayload: () => Promise<CheckPayload>): Promise<CheckResponse> {
-  if (!onlineManager.isOnline()) {
+  if (!onlineManager.isOnline() && !(await confirmOnline())) {
     throw new NetworkError('offline');
   }
   const payload = await buildPayload();

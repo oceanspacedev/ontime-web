@@ -1,6 +1,7 @@
 import { onlineManager } from '@tanstack/react-query';
 import { File } from 'expo-file-system';
 
+import { confirmOnline } from '../networkState';
 import type { UploadFile } from './types';
 
 export class ApiError extends Error {
@@ -201,9 +202,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     throw new Error(MISSING_HOST_MESSAGE);
   }
 
-  // A submit while the device is known to be offline fails at once instead of waiting for a fetch
-  // that cannot succeed (React Query sends mutations even offline: see queryClient defaults).
-  if (method !== 'GET' && !onlineManager.isOnline()) {
+  // A submit while the device is offline fails at once instead of waiting for a fetch that cannot
+  // succeed (React Query sends mutations even offline: see queryClient defaults). A stored "offline" is
+  // checked against the device first, since a stale one would block every form while online.
+  if (method !== 'GET' && !onlineManager.isOnline() && !(await confirmOnline())) {
     throw new NetworkError('offline');
   }
 
