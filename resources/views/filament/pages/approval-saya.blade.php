@@ -5,7 +5,8 @@
         $pendingCorrections = $this->pendingCorrections;
         $pendingGeofences = $this->pendingGeofenceAttendances;
         $pendingResignations = $this->pendingResignations;
-        $totalPending = $pendingLeaves->count() + $pendingOvertimes->count() + $pendingCorrections->count() + $pendingGeofences->count() + $pendingResignations->count();
+        $pendingShiftSwaps = $this->pendingShiftSwaps;
+        $totalPending = $pendingLeaves->count() + $pendingOvertimes->count() + $pendingCorrections->count() + $pendingGeofences->count() + $pendingResignations->count() + $pendingShiftSwaps->count();
 
         $getFileUrl = fn (?string $path): ?string => \App\Support\StorageUrl::for($path);
     @endphp
@@ -61,6 +62,9 @@
                                 <div>
                                     <p class="text-sm font-medium text-gray-950 dark:text-white">{{ $workerProfile?->full_name }}</p>
                                     <p class="text-xs text-gray-500 dark:text-gray-400">{{ $workerProfile?->company?->name }} · {{ $workerProfile?->division?->name }}</p>
+                                    @if($offScheduleLabel = $item->offScheduleLabel())
+                                        <x-filament::badge color="warning" class="mt-2 w-fit">{{ $offScheduleLabel }}</x-filament::badge>
+                                    @endif
                                 </div>
                                 <x-filament::badge color="warning">
                                     Tahap {{ $item->current_step }}/{{ $item->approvalSteps->max('step_order') }}
@@ -82,7 +86,12 @@
                                 </div>
                                 <div>
                                     <dt class="text-gray-500 dark:text-gray-400">Catatan / Note</dt>
-                                    <dd class="font-medium text-gray-900 dark:text-gray-100">{{ $item->notes ?: '-' }}</dd>
+                                    <dd class="font-medium text-gray-900 dark:text-gray-100">
+                                        @if($item->is_off_schedule)
+                                            <x-filament::badge color="gray" size="sm" class="mb-1">Di luar jadwal</x-filament::badge>
+                                        @endif
+                                        {{ $item->notes ?: '-' }}
+                                    </dd>
                                 </div>
                             </dl>
 
@@ -324,6 +333,55 @@
                                     {{ ($this->rejectAction)(['type' => 'correction', 'id' => $item->id]) }}
                                     {{ ($this->approveAction)(['type' => 'correction', 'id' => $item->id]) }}
                                 </div>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </x-filament::section>
+        @endif
+
+        {{-- ====================== TUKAR SHIFT ====================== --}}
+        @if($pendingShiftSwaps->isNotEmpty())
+            <x-filament::section class="mb-6">
+                <x-slot name="heading">Tukar Shift ({{ $pendingShiftSwaps->count() }})</x-slot>
+
+                <div class="space-y-3">
+                    @foreach($pendingShiftSwaps as $item)
+                        @php
+                            $workerProfile = $item->getWorkerProfile();
+                            $colleague = $item->counterpartProfile();
+                            $days = (new \App\Http\Resources\Api\V1\ShiftSwapRequestResource($item))->toArray(request())['days'];
+                        @endphp
+                        <div class="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-sm font-medium text-gray-950 dark:text-white">{{ $workerProfile?->full_name }} ⇄ {{ $colleague?->full_name }}</p>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400">{{ $workerProfile?->division?->name ?? '-' }} · {{ $colleague?->division?->name ?? '-' }}</p>
+                                </div>
+                                <x-filament::badge color="info">
+                                    Tahap {{ $item->current_step }}/{{ $item->approvalSteps->max('step_order') }}
+                                </x-filament::badge>
+                            </div>
+
+                            <dl class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3 text-xs">
+                                @foreach($days as $day)
+                                    <div>
+                                        <dt class="text-gray-500 dark:text-gray-400">{{ \Carbon\Carbon::parse($day['date'])->locale('id')->translatedFormat('l, d M Y') }}</dt>
+                                        <dd class="font-medium text-gray-900 dark:text-gray-100">
+                                            {{ $workerProfile?->full_name }}: {{ $day['requester_before'] }} → {{ $day['requester_after'] }}<br>
+                                            {{ $colleague?->full_name }}: {{ $day['counterpart_before'] }} → {{ $day['counterpart_after'] }}
+                                        </dd>
+                                    </div>
+                                @endforeach
+                                <div class="sm:col-span-2">
+                                    <dt class="text-gray-500 dark:text-gray-400">Alasan</dt>
+                                    <dd class="font-medium text-gray-900 dark:text-gray-100">{{ $item->reason ?: '-' }}</dd>
+                                </div>
+                            </dl>
+
+                            <div class="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
+                                {{ ($this->rejectAction)(['type' => 'shift_swap', 'id' => $item->id]) }}
+                                {{ ($this->approveAction)(['type' => 'shift_swap', 'id' => $item->id]) }}
                             </div>
                         </div>
                     @endforeach

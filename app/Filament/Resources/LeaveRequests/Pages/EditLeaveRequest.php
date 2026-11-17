@@ -23,7 +23,8 @@ class EditLeaveRequest extends EditRecord
 
     /**
      * Applies the same rules as filing a new request, so an edit cannot turn a leave into annual
-     * leave for someone without it or stretch it past the remaining quota. Changing only the reason
+     * leave for someone without it, stretch it past the remaining quota, move it outside the
+     * allowed period or onto the days of another leave. Changing only the reason
      * or attachment of an existing annual leave always saves.
      */
     protected function mutateFormDataBeforeSave(array $data): array
@@ -41,8 +42,18 @@ class EditLeaveRequest extends EditRecord
         }
 
         $daysCount = (int) $startDate->diffInDays($endDate) + 1;
+        $datesChanged = $startDate->toDateString() !== $record->start_date->toDateString()
+            || $endDate->toDateString() !== $record->end_date->toDateString();
 
-        $error = app(AnnualLeaveService::class)->updateError($record, $data['leave_type'] ?? null, $daysCount);
+        if ($datesChanged && $errors = LeaveRequest::periodErrors($startDate, $endDate)) {
+            throw ValidationException::withMessages(collect($errors)->mapWithKeys(fn (string $message, string $field): array => ["data.{$field}" => $message])->all());
+        }
+
+        $leaveService = app(AnnualLeaveService::class);
+        $profile = $record->getWorkerProfile();
+
+        $error = $leaveService->updateError($record, $data['leave_type'] ?? null, $daysCount, $startDate, $endDate)
+            ?? ($datesChanged && $profile ? $leaveService->overlapError($profile, $startDate, $endDate, $record->getKey()) : null);
 
         if ($error) {
             throw ValidationException::withMessages(['data.leave_type' => $error]);

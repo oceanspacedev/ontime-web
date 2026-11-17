@@ -78,6 +78,10 @@ class Shift extends Model
             return "Shift {$this->name} masih dipakai di jadwal mendatang. Ubah jadwalnya atau nonaktifkan shift ini.";
         }
 
+        if ($this->schedules()->exists() || Attendance::query()->where('shift_id', $this->getKey())->exists()) {
+            return "Shift {$this->name} sudah dipakai di jadwal atau absensi. Nonaktifkan shift ini agar jam terjadwal di laporan tidak berubah.";
+        }
+
         return null;
     }
 

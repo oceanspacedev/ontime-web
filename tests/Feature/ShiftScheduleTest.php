@@ -119,7 +119,9 @@ class ShiftScheduleTest extends TestCase
         ShiftSchedule::create(['employee_id' => $employee->id, 'date' => today(), 'is_day_off' => true]);
         $this->actingAs($employee->user);
 
-        Livewire::test(AbsenHariIni::class)->call('processCheckIn');
+        // A day-off check-in names the shift it covers; the 07:00 default shift never makes it late.
+        $closing = Shift::create(['company_id' => $this->company->id, 'name' => 'Closing', 'start_time' => '11:00', 'end_time' => '19:00']);
+        Livewire::test(AbsenHariIni::class)->set('offScheduleShiftId', (string) $closing->id)->call('processCheckIn');
 
         $this->assertSame(0, Attendance::where('employee_id', $employee->id)->firstOrFail()->late_minutes);
     }

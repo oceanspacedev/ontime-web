@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -9,10 +9,11 @@ import { ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, Vie
 import { AttendanceModeChips } from '@/components/AttendanceModeChips';
 import { useDeviceInsets } from '@/components/OfflineBanner';
 import { type CapturedShot, type LivenessFrames, LivenessStepCard, LivenessThumbnails } from '@/components/LivenessGuide';
-import { bottomGap, Button, errorIcon, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
+import { bottomGap, Button, Choice, errorIcon, Group, IconButton, type IconName, Notice, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { ApiError, attendanceApi, type AttendancePurpose, type Company, errorMessage, type LivenessStep, type LivenessStepKey, type OutletGeofence, type UploadFile } from '@/lib/api';
+import { ApiError, attendanceApi, type AttendancePurpose, type Company, type CoverOptions, errorMessage, type LivenessStep, type LivenessStepKey, type OutletGeofence, type UploadFile } from '@/lib/api';
+import { isForbidden, isRefusal } from '@/lib/errors';
 import { formatDistance, nearestLocation, type NearestLocation } from '@/lib/geo';
 import { prepareUpload } from '@/lib/image';
 import {
@@ -22,6 +23,8 @@ import {
   LocationDeniedError,
   locationErrorMessage,
   readDevicePosition,
+  type ReadPositionOptions,
+  SUBMIT_LAST_KNOWN_MAX_AGE_MS,
 } from '@/lib/location';
 import { queryKeys } from '@/lib/queryClient';
 import { BRAND_GLOSS, BRAND_GRADIENT, elevation, fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
@@ -41,8 +44,11 @@ interface DeviceLocation {
   nearest: NearestLocation | null;
 }
 
-async function readLocation(company: Company | null, outlet: OutletGeofence | null): Promise<DeviceLocation> {
-  const position = await readDevicePosition();
+/** How long the app must have been in the background before the position is read again on return. */
+const RETURN_REFRESH_MIN_AWAY_MS = 3000;
+
+async function readLocation(company: Company | null, outlet: OutletGeofence | null, options?: ReadPositionOptions): Promise<DeviceLocation> {
+  const position = await readDevicePosition(options);
   return { ...position, nearest: nearestLocation(company, position.latitude, position.longitude, outlet) };
 }
 
@@ -54,10 +60,6 @@ interface FetchedChallenge {
   receivedAt: number;
 }
 
-/** Errors the user cannot fix by sending the same data again: they must retake or change something. */
-function isRuleError(error: unknown): error is ApiError {
-  return error instanceof ApiError && (error.status === 422 || error.status === 409);
-}
 
 /** A 422 about the selfie itself: missing, unreadable or not matching the master face. */
 function isPhotoError(error: unknown): boolean {
@@ -109,33 +111,67 @@ export default function AttendanceCheckScreen() {
   const today = useQuery({
     queryKey: queryKeys.today,
     queryFn: attendanceApi.today,
-    enabled: needsGps,
+    enabled: needsGps || isCheckIn,
   });
   const outlet = (isCheckIn ? today.data?.schedule?.outlet : today.data?.check_out_outlet) ?? null;
 
-  const location = useQuery({
+  // "Masuk di luar jadwal": on a day off (or, for a freelancer, without any shift) the check-in still goes
+  // through but waits for approval; the worker may name the shift covered and the colleague replaced.
+  const isFreelancer = access.profileKind === 'freelancer';
+  const [coverShiftId, setCoverShiftId] = useState<number | null>(null);
+  const [replacesWorker, setReplacesWorker] = useState<string | null>(null);
+  // Read again for the picked shift: a night shift covered after midnight lists the evening's colleagues.
+  const cover = useQuery({
+    queryKey: ['attendance', 'cover-options', coverShiftId],
+    queryFn: () => attendanceApi.coverOptions(coverShiftId),
+    enabled: isCheckIn,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const coverOptions = cover.isError ? null : (cover.data ?? null);
+  const offSchedule = isCheckIn && attendanceApi.isOffScheduleToday(coverOptions, today.data?.schedule, isFreelancer);
+  const offScheduleError = offSchedule ? attendanceApi.offScheduleSelectionError(coverOptions, { coverShiftId, replacesWorker }) : null;
+
+  // Reading GPS needs no internet, so the read never waits for the connection.
+  const locationQuery = {
     queryKey: ['device-location', access.company?.id ?? 0, mode],
     queryFn: () => readLocation(access.company, null),
-    enabled: needsGps,
     staleTime: 0,
     gcTime: 0,
     retry: false,
+    networkMode: 'always',
+  } as const;
+  const location = useQuery({
+    ...locationQuery,
+    enabled: needsGps,
     select: (data) => (outlet ? { ...data, nearest: nearestLocation(access.company, data.latitude, data.longitude, outlet) } : data),
   });
 
-  // Coming back from the location settings: read the position again so the screen recovers by itself.
-  const { isError: locationFailed, refetch: refetchLocation } = location;
+  // Back in the app (from the location settings, or after walking somewhere else): read the position
+  // again so the preview shows where the worker is now, not where the screen was opened. Only after a
+  // real stay in the background: system dialogs (permission, camera) also pause and resume the app for
+  // a moment, and reading again on each of those would loop.
+  const { refetch: refetchLocation } = location;
   useEffect(() => {
     if (!needsGps) {
       return;
     }
+    let leftAt: number | null = null;
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && locationFailed) {
-        void refetchLocation();
+      if (state === 'background') {
+        leftAt = Date.now();
+        return;
+      }
+      if (state === 'active' && leftAt !== null) {
+        const away = Date.now() - leftAt;
+        leftAt = null;
+        if (away >= RETURN_REFRESH_MIN_AWAY_MS) {
+          void refetchLocation({ cancelRefetch: false });
+        }
       }
     });
     return () => subscription.remove();
-  }, [needsGps, locationFailed, refetchLocation]);
+  }, [needsGps, refetchLocation]);
 
   const challenge = useQuery({
     queryKey: ['liveness-challenge', purpose, challengeAttempt],
@@ -176,15 +212,24 @@ export default function AttendanceCheckScreen() {
 
   // isPending only turns true after the next render, so two quick taps could still send two requests.
   const submitInFlight = useRef(false);
-
   const submit = useMutation({
-    mutationFn: async () => {
+    ...attendanceApi.checkMutationOptions,
+    mutationFn: () => attendanceApi.submitCheck(purpose, async () => {
       const payload: attendanceApi.CheckPayload = {};
-      if (needsGps && location.data) {
-        payload.latitude = location.data.latitude;
-        payload.longitude = location.data.longitude;
-        payload.accuracy = location.data.accuracy;
-        payload.isMocked = location.data.mocked;
+      if (needsGps) {
+        // The position shown may be minutes old; read it again so the one sent is where the worker
+        // is now, accepting only a very recent cached fix. A failed read stops the submit.
+        Object.assign(
+          payload,
+          await attendanceApi.freshCheckPosition(
+            () => readLocation(access.company, null, { lastKnownMaxAgeMs: SUBMIT_LAST_KNOWN_MAX_AGE_MS }),
+            (fresh) => queryClient.setQueryData(locationQuery.queryKey, fresh),
+          ),
+        );
+      }
+      if (offSchedule) {
+        payload.coverShiftId = coverShiftId;
+        payload.replacesWorker = replacesWorker;
       }
       const prefix = isCheckIn ? 'check-in' : 'check-out';
       if ((selfieMode === 'photo' || selfieMode === 'face') && shot) {
@@ -206,8 +251,8 @@ export default function AttendanceCheckScreen() {
         payload.livenessChallengeId = active.challenge_id;
         payload.livenessFrames = uploads;
       }
-      return isCheckIn ? attendanceApi.checkIn(payload) : attendanceApi.checkOut(payload);
-    },
+      return payload;
+    }),
     onSuccess: async (response) => {
       await queryClient.invalidateQueries({ queryKey: ['attendance'] });
       await queryClient.invalidateQueries({ queryKey: ['report'] });
@@ -223,6 +268,16 @@ export default function AttendanceCheckScreen() {
       if (error instanceof ApiError && error.status === 422) {
         // The rules may have changed in the panel since the app last loaded the policy.
         refreshUser.mutate();
+        // The picked shift or colleague is no longer on offer: pick again from fresh options.
+        if (error.errors?.cover_shift_id || error.errors?.replaces_worker) {
+          if (error.errors?.cover_shift_id) {
+            setCoverShiftId(null);
+          }
+          if (error.errors?.replaces_worker) {
+            setReplacesWorker(null);
+          }
+          void cover.refetch();
+        }
       }
       if (isLiveness) {
         // The server uses a challenge once, so every attempt after a failure needs a new one.
@@ -314,7 +369,7 @@ export default function AttendanceCheckScreen() {
   const locationBlocked = needsGps && (!location.data || mockBlocked);
   const photoBlocked = (selfieMode === 'photo' || selfieMode === 'face') && !shot;
   const livenessBlocked = isLiveness && (!challengeData || !livenessComplete);
-  const canSubmit = !missingMasterFace && !locationBlocked && !photoBlocked && !livenessBlocked && !submit.isPending;
+  const canSubmit = !missingMasterFace && !locationBlocked && !photoBlocked && !livenessBlocked && offScheduleError === null && !submit.isPending;
 
   const title = isCheckIn ? 'Absen Masuk' : 'Absen Pulang';
   const cameraUsable = needsCamera && !missingMasterFace && cameraPermission?.granted === true;
@@ -334,7 +389,7 @@ export default function AttendanceCheckScreen() {
       : isPhotoError(submitError)
         ? 'Ambil ulang foto selfie dengan wajah terlihat jelas, lalu kirim lagi.'
         : null;
-  const canRetrySubmit = Boolean(submitError) && !isRuleError(submitError);
+  const canRetrySubmit = Boolean(submitError) && !isRefusal(submitError);
 
   const renderCameraArea = (): ReactNode => {
     if (!needsCamera) {
@@ -402,7 +457,9 @@ export default function AttendanceCheckScreen() {
               <View style={styles.overlayCenter}>
                 <Ionicons name={errorIcon(challenge.error, true)} size={44} color={ON_CAMERA} />
                 <Text style={styles.idleText}>{errorMessage(challenge.error)}</Text>
-                <Button title="Coba lagi" icon="refresh" variant="secondary" onPress={() => restartChallenge(true, null)} />
+                {isForbidden(challenge.error) ? null : (
+                  <Button title="Coba lagi" icon="refresh" variant="secondary" onPress={() => restartChallenge(true, null)} />
+                )}
               </View>
             ) : (
               <View style={styles.overlayCenter}>
@@ -449,6 +506,18 @@ export default function AttendanceCheckScreen() {
             tone={mockBlocked ? 'danger' : 'warning'}
             icon="navigate-circle-outline"
             message={mockBlocked ? MOCK_REJECT_MESSAGE : 'Lokasi palsu (mock location) terdeteksi. Presensi tetap bisa dikirim, tetapi akan menunggu persetujuan atasan.'}
+          />
+        ) : null}
+
+        {offSchedule ? (
+          <OffScheduleSection
+            options={coverOptions}
+            coverShiftId={coverShiftId}
+            replacesWorker={replacesWorker}
+            onCoverShift={setCoverShiftId}
+            onReplaces={setReplacesWorker}
+            error={offScheduleError}
+            disabled={submit.isPending}
           />
         ) : null}
 
@@ -499,6 +568,56 @@ export default function AttendanceCheckScreen() {
         )}
       </View>
     </View>
+  );
+}
+
+const NO_CHOICE = 'none';
+
+/**
+ * "Masuk di luar jadwal": the notice that the check-in waits for approval, the shift covered (required from
+ * every worker) and, optionally, the rostered colleague replaced.
+ */
+function OffScheduleSection({ options, coverShiftId, replacesWorker, onCoverShift, onReplaces, error, disabled }: {
+  options: CoverOptions | null;
+  coverShiftId: number | null;
+  replacesWorker: string | null;
+  onCoverShift: (id: number | null) => void;
+  onReplaces: (key: string | null) => void;
+  error: string | null;
+  disabled: boolean;
+}) {
+  const styles = useStyles();
+  const reason = options?.off_schedule_reason === 'no_schedule'
+    ? 'Anda belum punya jadwal shift hari ini.'
+    : 'Hari ini jadwal Anda libur.';
+  const shiftOptions = (options?.shifts ?? []).map((shift) => ({ value: String(shift.id), label: `${shift.name} ${shift.start_time}–${shift.end_time}` }));
+  const colleagueOptions = [
+    { value: NO_CHOICE, label: 'Tidak ada' },
+    ...(options?.colleagues ?? []).map((colleague) => ({
+      value: colleague.key,
+      label: `${colleague.name}${colleague.shift ? ` · ${colleague.shift.start_time}` : ''}${colleague.outlet ? ` · ${colleague.outlet.name}` : ''}${colleague.has_checked_in ? ' (sudah absen)' : ''}`,
+    })),
+  ];
+
+  return (
+    <Group title="Masuk di luar jadwal" padded>
+      <View style={styles.offSchedule} pointerEvents={disabled ? 'none' : 'auto'}>
+        <Notice tone="warning" icon="calendar-outline" message={`${reason} Absen masuk tetap bisa dikirim sebagai pengganti darurat, tetapi menunggu persetujuan atasan.`} />
+        {options && options.shifts.length > 0 ? (
+          <View style={styles.offScheduleField}>
+            <Text style={styles.offScheduleLabel}>Shift yang digantikan (wajib)</Text>
+            <Choice options={shiftOptions} value={coverShiftId === null ? null : String(coverShiftId)} onChange={(value) => onCoverShift(Number(value))} />
+          </View>
+        ) : null}
+        {options && options.colleagues.length > 0 ? (
+          <View style={styles.offScheduleField}>
+            <Text style={styles.offScheduleLabel}>Menggantikan siapa (opsional)</Text>
+            <Choice options={colleagueOptions} value={replacesWorker ?? NO_CHOICE} onChange={(value) => onReplaces(value === NO_CHOICE ? null : value)} />
+          </View>
+        ) : null}
+        {error ? <Text style={styles.offScheduleError}>{error}</Text> : null}
+      </View>
+    </Group>
   );
 }
 
@@ -748,4 +867,9 @@ const useStyles = makeStyles((c, dark) => ({
   },
 
   actions: { gap: spacing.sm },
+
+  offSchedule: { gap: spacing.md },
+  offScheduleField: { gap: spacing.sm },
+  offScheduleLabel: { fontSize: fontSize.sm, color: c.textMuted, fontWeight: '600' },
+  offScheduleError: { fontSize: fontSize.sm, color: c.danger, fontWeight: '500' },
 }));

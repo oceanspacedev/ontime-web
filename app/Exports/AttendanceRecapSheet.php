@@ -2,10 +2,12 @@
 
 namespace App\Exports;
 
+use App\Enums\AttendanceStatus;
 use App\Models\Attendance;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
+use App\Models\OvertimeRequest;
 use Carbon\CarbonInterface;
 use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Model;
@@ -32,7 +34,7 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
 {
     private const WORKER_HEADINGS = ['Nama', 'NIP / ID', 'Tipe', 'Badan Usaha', 'Divisi'];
 
-    private const TOTAL_HEADINGS = ['Hari Masuk', 'Terlambat (kali)', 'Telat (menit)', 'Jumlah Jam'];
+    private const TOTAL_HEADINGS = ['Hari Masuk', 'Terlambat (kali)', 'Telat (menit)', 'Pulang Cepat (menit)', 'Lembur (jam)', 'Jumlah Jam'];
 
     private const DAY_HEADINGS = ['Masuk', 'Pulang', 'Jam'];
 
@@ -91,6 +93,8 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
                 $worker['present_days'],
                 $worker['late_days'],
                 $worker['late_minutes'],
+                $worker['early_leave_minutes'],
+                $worker['overtime_minutes'] / 60,
                 $worker['worked_minutes'] / 60,
             ];
 
@@ -116,7 +120,11 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
      */
     public function columnWidths(): array
     {
-        $widths = ['A' => 28, 'B' => 16, 'C' => 12, 'D' => 24, 'E' => 20, 'F' => 9, 'G' => 11, 'H' => 9, 'I' => 10];
+        $widths = ['A' => 28, 'B' => 16, 'C' => 12, 'D' => 24, 'E' => 20];
+
+        foreach (array_keys(self::TOTAL_HEADINGS) as $offset) {
+            $widths[$this->columnLetter(count(self::WORKER_HEADINGS) + 1 + $offset)] = 10;
+        }
 
         foreach (array_keys($this->dates()) as $dateIndex) {
             foreach (array_keys(self::DAY_HEADINGS) as $offset) {
@@ -193,6 +201,8 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
         $sheet->getStyle("{$firstTotalColumn}{$firstRow}:{$lastColumn}{$lastRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         $sheet->getStyle("{$lastTotalColumn}{$firstRow}:{$lastTotalColumn}{$lastRow}")->getNumberFormat()->setFormatCode(self::HOURS_FORMAT);
         $sheet->getStyle("{$lastTotalColumn}{$firstRow}:{$lastTotalColumn}{$lastRow}")->getFont()->setBold(true);
+        $overtimeColumn = $this->columnLetter(count(self::WORKER_HEADINGS) + 1 + array_search('Lembur (jam)', self::TOTAL_HEADINGS, true));
+        $sheet->getStyle("{$overtimeColumn}{$firstRow}:{$overtimeColumn}{$lastRow}")->getNumberFormat()->setFormatCode(self::HOURS_FORMAT);
 
         foreach ($workers as $index => $worker) {
             $row = $firstRow + $index;
@@ -269,16 +279,24 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
      *     present_days: int,
      *     late_days: int,
      *     late_minutes: int,
+     *     early_leave_minutes: int,
+     *     overtime_minutes: int,
      *     worked_minutes: int,
      *     days: array<string, array{check_in: string, check_out: string|null, worked_minutes: int|null, late_minutes: int, is_present: bool}>,
      * }>
      */
     private function workers(): array
     {
-        return $this->workers ??= $this->records
+        if ($this->workers !== null) {
+            return $this->workers;
+        }
+
+        $overtime = $this->approvedOvertimeMinutes();
+
+        return $this->workers = $this->records
             ->filter(fn (Attendance $attendance): bool => $attendance->getWorkerProfile() !== null && $attendance->date !== null)
             ->groupBy(fn (Attendance $attendance): string => $attendance->getWorkerProfile()::class.':'.$attendance->getWorkerProfile()->getKey())
-            ->map(function (Collection $attendances): array {
+            ->map(function (Collection $attendances) use ($overtime): array {
                 $worker = $attendances->first()->getWorkerProfile();
                 $days = $attendances
                     ->groupBy(fn (Attendance $attendance): string => $attendance->date->toDateString())
@@ -293,6 +311,8 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
                     'present_days' => $days->where('is_present', true)->count(),
                     'late_days' => $days->where('late_minutes', '>', 0)->count(),
                     'late_minutes' => (int) $days->sum('late_minutes'),
+                    'early_leave_minutes' => (int) $attendances->sum('early_leave_minutes'),
+                    'overtime_minutes' => $overtime[$worker::class.':'.$worker->getKey()] ?? 0,
                     'worked_minutes' => (int) $days->sum('worked_minutes'),
                     'days' => $days->all(),
                 ];
@@ -304,18 +324,23 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
 
     /**
      * One worker's day: a single attendance, or one per segment of a split shift (shown on separate lines).
-     * A day without a check-in shows its status (leave, absent, off) in place of the check-in time.
+     * A day without a check-in shows its status (leave, absent, off) in place of the check-in time. A rejected
+     * segment is not worked time: it adds no presence, lateness or hours, and a day with only rejected segments
+     * shows "Ditolak". A pending segment still counts, as in laporan absensi.
      *
      * @param  Collection<int, Attendance>  $attendances
      * @return array{check_in: string, check_out: string|null, worked_minutes: int|null, late_minutes: int, is_present: bool}
      */
     private function summarizeDay(Collection $attendances): array
     {
-        $segments = $attendances->filter(fn (Attendance $attendance): bool => $attendance->check_in !== null)->sortBy('check_in')->values();
+        $segments = $attendances
+            ->filter(fn (Attendance $attendance): bool => $attendance->check_in !== null && $attendance->status !== AttendanceStatus::Rejected)
+            ->sortBy('check_in')
+            ->values();
 
         if ($segments->isEmpty()) {
             return [
-                'check_in' => $attendances->first()->status?->getLabel() ?? '-',
+                'check_in' => ($attendances->firstWhere('status', AttendanceStatus::Rejected) ?? $attendances->first())->status?->getLabel() ?? '-',
                 'check_out' => null,
                 'worked_minutes' => null,
                 'late_minutes' => 0,
@@ -329,9 +354,63 @@ class AttendanceRecapSheet implements FromArray, WithColumnWidths, WithEvents, W
             'check_in' => $segments->map(fn (Attendance $attendance): string => $attendance->check_in->format('H:i'))->implode("\n"),
             'check_out' => $segments->map(fn (Attendance $attendance): string => $attendance->check_out?->format('H:i') ?? '-')->implode("\n"),
             'worked_minutes' => $workedMinutes->isEmpty() ? null : (int) $workedMinutes->sum(),
-            'late_minutes' => (int) $segments->sum('late_minutes'),
+            'late_minutes' => (int) $segments->sum(fn (Attendance $attendance): int => $attendance->reportedLateMinutes()),
             'is_present' => true,
         ];
+    }
+
+    /**
+     * Approved overtime (lembur) of the listed workers in the report's dates, keyed by worker class and id:
+     * the actual duration once filled in, otherwise the approved request.
+     *
+     * @return array<string, int>
+     */
+    private function approvedOvertimeMinutes(): array
+    {
+        $dates = $this->dates();
+
+        if ($dates === []) {
+            return [];
+        }
+
+        $columns = [Employee::class => 'employee_id', Intern::class => 'intern_id', Freelancer::class => 'freelancer_id'];
+        $ids = [];
+
+        foreach ($this->records as $attendance) {
+            if ($worker = $attendance->getWorkerProfile()) {
+                $ids[$columns[$worker::class] ?? 'freelancer_id'][] = $worker->getKey();
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $minutes = [];
+
+        OvertimeRequest::query()
+            ->where('status', 'approved')
+            // A half-open range: the last day still matches where dates are stored with a time (SQLite).
+            ->where('date', '>=', $dates[0]->toDateString())
+            ->where('date', '<', end($dates)->copy()->addDay()->toDateString())
+            ->where(function ($query) use ($ids): void {
+                foreach ($ids as $column => $workerIds) {
+                    $query->orWhereIn($column, array_unique($workerIds));
+                }
+            })
+            ->get(['employee_id', 'intern_id', 'freelancer_id', 'duration_minutes', 'actual_duration_minutes'])
+            ->each(function (OvertimeRequest $overtime) use ($columns, &$minutes): void {
+                foreach ($columns as $class => $column) {
+                    if ($overtime->{$column} !== null) {
+                        $key = $class.':'.$overtime->{$column};
+                        $minutes[$key] = ($minutes[$key] ?? 0) + (int) ($overtime->actual_duration_minutes ?? $overtime->duration_minutes);
+
+                        return;
+                    }
+                }
+            });
+
+        return $minutes;
     }
 
     private function workerNumber(Model $worker): ?string

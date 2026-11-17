@@ -261,6 +261,7 @@ class CompanyResource extends Resource
                                                         ->label('Radius Geofence (Meter)')
                                                         ->numeric()
                                                         ->minValue(1)
+                                                        ->maxValue(CompanyPolicyService::MAX_GEOFENCE_RADIUS_METERS)
                                                         ->placeholder('Opsional (Ikuti kebijakan)')
                                                         ->columnSpan(1),
 
@@ -351,6 +352,7 @@ class CompanyResource extends Resource
                                     ->label('Toleransi Keterlambatan')
                                     ->numeric()
                                     ->minValue(0)
+                                    ->maxValue(CompanyPolicyService::MAX_LATE_TOLERANCE_MINUTES)
                                     ->suffix('menit')
                                     ->required()
                                     ->default(15),
@@ -375,6 +377,7 @@ class CompanyResource extends Resource
                                     ->label('Radius Geofence')
                                     ->numeric()
                                     ->minValue(1)
+                                    ->maxValue(CompanyPolicyService::MAX_GEOFENCE_RADIUS_METERS)
                                     ->suffix('meter')
                                     ->placeholder('100')
                                     ->visible(fn (Get $get) => (bool) $get('require_gps'))
@@ -443,6 +446,7 @@ class CompanyResource extends Resource
                                     ->label('Kuota Cuti Tahunan')
                                     ->numeric()
                                     ->minValue(0)
+                                    ->maxValue(CompanyPolicyService::MAX_ANNUAL_LEAVE_QUOTA)
                                     ->suffix('hari')
                                     ->required()
                                     ->default(12),
@@ -451,6 +455,7 @@ class CompanyResource extends Resource
                                     ->label('Tahap Approval')
                                     ->numeric()
                                     ->minValue(1)
+                                    ->maxValue(CompanyPolicyService::MAX_APPROVAL_STAGES)
                                     ->suffix('tahap')
                                     ->required()
                                     ->default(1),

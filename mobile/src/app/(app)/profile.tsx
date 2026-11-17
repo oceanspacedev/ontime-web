@@ -47,7 +47,6 @@ export default function ProfileScreen() {
   const selfieMode = attendanceApi.selfieModeOf(policy ?? null);
   const needsMasterFace = selfieMode === 'face' || selfieMode === 'liveness';
 
-
   return (
     <Screen title="Profil" onRefresh={() => refreshUser.mutate()}>
       <Group title="Profil Anda">

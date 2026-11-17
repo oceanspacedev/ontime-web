@@ -19,6 +19,16 @@ final class CompanyPolicyService
 
     public const GPS_WITHOUT_LOCATION_MESSAGE = 'Wajib Lokasi GPS membutuhkan Koordinat GPS Utama atau minimal satu cabang aktif.';
 
+    /** A full day: a larger tolerance would quietly switch lateness off for every worker. */
+    public const MAX_LATE_TOLERANCE_MINUTES = 1440;
+
+    public const MAX_ANNUAL_LEAVE_QUOTA = 365;
+
+    public const MAX_APPROVAL_STAGES = 10;
+
+    /** 50 km, for the company policy and for each outlet. */
+    public const MAX_GEOFENCE_RADIUS_METERS = 50000;
+
     /**
      * The policy as the form shows it, with the defaults of a new company where nothing is stored.
      *
@@ -52,15 +62,15 @@ final class CompanyPolicyService
         $usesFaceMatch = 'in:face,liveness';
 
         return [
-            'late_tolerance_minutes' => ['required', 'integer', 'min:0'],
+            'late_tolerance_minutes' => ['required', 'integer', 'min:0', 'max:'.self::MAX_LATE_TOLERANCE_MINUTES],
             'require_gps' => ['required', 'boolean', self::gpsRule($company)],
-            'geofence_radius_meters' => ['nullable', 'required_if_accepted:require_gps', 'integer', 'min:1'],
+            'geofence_radius_meters' => ['nullable', 'required_if_accepted:require_gps', 'integer', 'min:1', 'max:'.self::MAX_GEOFENCE_RADIUS_METERS],
             'mock_location_action' => ['nullable', 'required_if_accepted:require_gps', Rule::in(array_keys(self::mockLocationActionOptions()))],
             'selfie_mode' => ['required', 'string', Rule::in(array_keys(self::selfieModeOptions())), self::livenessRule()],
             'face_match_threshold' => ['nullable', 'required_if:selfie_mode,face,liveness', 'integer', 'min:1', 'max:100'],
             'face_fail_action' => ['nullable', 'required_if:selfie_mode,face,liveness', Rule::in(array_keys(self::faceFailActionOptions()))],
-            'annual_leave_quota' => ['required', 'integer', 'min:0'],
-            'default_approval_stages' => ['required', 'integer', 'min:1'],
+            'annual_leave_quota' => ['required', 'integer', 'min:0', 'max:'.self::MAX_ANNUAL_LEAVE_QUOTA],
+            'default_approval_stages' => ['required', 'integer', 'min:1', 'max:'.self::MAX_APPROVAL_STAGES],
             'work_start_time' => ['sometimes', 'required', 'date_format:H:i'],
             'work_end_time' => ['sometimes', 'required', 'date_format:H:i'],
         ];
@@ -76,8 +86,10 @@ final class CompanyPolicyService
         return [
             'late_tolerance_minutes.required' => 'Toleransi keterlambatan wajib diisi.',
             'late_tolerance_minutes.min' => 'Toleransi keterlambatan tidak boleh negatif.',
+            'late_tolerance_minutes.max' => 'Toleransi keterlambatan maksimal '.self::MAX_LATE_TOLERANCE_MINUTES.' menit.',
             'geofence_radius_meters.required_if_accepted' => 'Radius geofence wajib diisi jika GPS diwajibkan.',
             'geofence_radius_meters.min' => 'Radius geofence minimal 1 meter.',
+            'geofence_radius_meters.max' => 'Radius geofence maksimal '.self::MAX_GEOFENCE_RADIUS_METERS.' meter.',
             'mock_location_action.required_if_accepted' => 'Pilih tindakan jika lokasi palsu terdeteksi.',
             'mock_location_action.in' => 'Tindakan lokasi palsu tidak dikenal.',
             'selfie_mode.required' => 'Pilih verifikasi selfie.',
@@ -89,8 +101,10 @@ final class CompanyPolicyService
             'face_fail_action.in' => 'Tindakan wajah tidak cocok tidak dikenal.',
             'annual_leave_quota.required' => 'Kuota cuti tahunan wajib diisi.',
             'annual_leave_quota.min' => 'Kuota cuti tahunan tidak boleh negatif.',
+            'annual_leave_quota.max' => 'Kuota cuti tahunan maksimal '.self::MAX_ANNUAL_LEAVE_QUOTA.' hari.',
             'default_approval_stages.required' => 'Tahap approval wajib diisi.',
             'default_approval_stages.min' => 'Tahap approval minimal 1.',
+            'default_approval_stages.max' => 'Tahap approval maksimal '.self::MAX_APPROVAL_STAGES.'.',
             'work_start_time.date_format' => 'Jam masuk harus berformat JJ:MM.',
             'work_end_time.date_format' => 'Jam pulang harus berformat JJ:MM.',
         ];

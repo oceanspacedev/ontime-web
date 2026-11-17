@@ -5,24 +5,23 @@ import { Alert, View } from 'react-native';
 
 import { DateTimeField } from '@/components/DateTimeField';
 import { Button, Field, Group, Notice, Screen } from '@/components/ui';
-import { ApiError, errorMessage, requestsApi } from '@/lib/api';
+import { requestsApi } from '@/lib/api';
 import { formatMinutes } from '@/lib/format';
+import { unshownErrorMessage } from '@/lib/errors';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
+import {
+  crossesMidnight as runsPastMidnight,
+  earliestOvertimeDate,
+  latestOvertimeDate,
+  overtimeDateError,
+  overtimeDurationMinutes,
+  overtimeTimeError,
+} from '@/lib/overtime';
 import { queryKeys } from '@/lib/queryClient';
 import { makeStyles, spacing } from '@/theme';
 
-function durationMinutes(start: string | null, end: string | null): number | null {
-  if (!start || !end) {
-    return null;
-  }
-  const [sh, sm] = start.split(':').map(Number);
-  const [eh, em] = end.split(':').map(Number);
-  let minutes = eh * 60 + em - (sh * 60 + sm);
-  if (minutes < 0) {
-    minutes += 24 * 60; // crosses midnight, same rule as the backend
-  }
-  return minutes;
-}
+/** Fields this form shows a server message under; any other 422 key goes to the footer notice. */
+const SHOWN_FIELDS = ['date', 'start_time', 'end_time', 'reason'];
 
 export default function NewOvertimeScreen() {
   const styles = useStyles();
@@ -45,16 +44,20 @@ export default function NewOvertimeScreen() {
 
   const validate = (): boolean => {
     const next: FieldErrors = {};
+    const dateError = overtimeDateError(date);
     if (!date) {
       next.date = requiredMessage('Tanggal');
+    } else if (dateError) {
+      next.date = dateError;
     }
     if (!startTime) {
       next.start_time = requiredMessage('Jam mulai');
     }
+    const timeError = overtimeTimeError(startTime, endTime);
     if (!endTime) {
       next.end_time = requiredMessage('Jam selesai');
-    } else if (startTime === endTime) {
-      next.end_time = 'Jam selesai tidak boleh sama dengan jam mulai.';
+    } else if (timeError) {
+      next.end_time = timeError;
     }
     if (!reason.trim()) {
       next.reason = requiredMessage('Alasan');
@@ -63,9 +66,10 @@ export default function NewOvertimeScreen() {
     return Object.keys(next).length === 0;
   };
 
-  const duration = durationMinutes(startTime, endTime);
-  const crossesMidnight = Boolean(endTime && startTime && endTime < startTime);
-  const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
+  const duration = overtimeDurationMinutes(startTime, endTime);
+  const crossesMidnight = runsPastMidnight(startTime, endTime);
+  const tooLong = overtimeTimeError(startTime, endTime) !== null;
+  const generalError = unshownErrorMessage(submit.error, SHOWN_FIELDS);
 
   return (
     <Screen
@@ -76,7 +80,16 @@ export default function NewOvertimeScreen() {
         </>
       }>
       <Group title="Waktu lembur" padded>
-        <DateTimeField label="Tanggal lembur" mode="date" value={date} onChange={setDate} error={errors.date} />
+        <DateTimeField
+          label="Tanggal lembur"
+          mode="date"
+          value={date}
+          onChange={setDate}
+          error={errors.date}
+          minimumDate={earliestOvertimeDate()}
+          maximumDate={latestOvertimeDate()}
+          hint="Hari ini, paling lama 31 hari ke belakang atau 31 hari ke depan."
+        />
         <View style={styles.row}>
           <View style={styles.flex}>
             <DateTimeField label="Jam mulai" mode="time" value={startTime} onChange={setStartTime} error={errors.start_time} />
@@ -85,8 +98,16 @@ export default function NewOvertimeScreen() {
             <DateTimeField label="Jam selesai" mode="time" value={endTime} onChange={setEndTime} error={errors.end_time} />
           </View>
         </View>
-        {duration !== null && duration > 0 ? (
-          <Notice tone="info" icon="time-outline" message={`Durasi ${formatMinutes(duration)}${crossesMidnight ? ' (melewati tengah malam)' : ''}.`} />
+        {duration !== null ? (
+          <Notice
+            tone={tooLong ? 'danger' : 'info'}
+            icon="time-outline"
+            message={
+              tooLong
+                ? `Durasi ${formatMinutes(duration)}, melebihi batas lembur 12 jam.`
+                : `Durasi ${formatMinutes(duration)}${crossesMidnight ? ' (melewati tengah malam)' : ''}.`
+            }
+          />
         ) : null}
       </Group>
       <Group title="Keterangan" padded>

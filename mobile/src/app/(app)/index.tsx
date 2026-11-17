@@ -1,15 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, type Href } from 'expo-router';
 import { Linking, Pressable, View } from 'react-native';
 
 import { TODAY_GROUP_TITLE, TodayCard } from '@/components/TodayCard';
 import { Avatar, ErrorBanner, Group, IconButton, type IconName, LoadingView, Notice, ProgressBar, QuickAction, Row, Screen, SectionTitle, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
+import { useCurrentDate } from '@/hooks/useCurrentDate';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
-import { approvalsApi, attendanceApi, requestsApi, teamApi } from '@/lib/api';
+import { approvalsApi, attendanceApi, requestsApi, teamApi, type User } from '@/lib/api';
 import { countPending } from '@/lib/approvals';
-import { greeting, toDateString } from '@/lib/format';
+import { greeting } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
 import { useSession } from '@/lib/session';
 import { rosterSummary, teamAttention } from '@/lib/team';
@@ -48,12 +49,24 @@ function toRows(items: MenuItem[]): (MenuItem | null)[][] {
   return rows;
 }
 
+/**
+ * Same rule as GET /kalender-cuti and the Kalender Cuti Tim page: any account with an intern profile
+ * gets a 403, whatever its roles, so the menu item is hidden for it instead of opening a dead end.
+ */
+function canSeeLeaveCalendar(user: Pick<User, 'intern'> | null): boolean {
+  return !user?.intern;
+}
+
 export default function HomeScreen() {
   const styles = useStyles();
   const { colors } = useTheme();
   const user = useSession((state) => state.user);
   const access = useAccess();
   const refreshUser = useRefreshUser();
+  const queryClient = useQueryClient();
+  // A new day while the app stays open (or comes back from the background): today's card is reloaded,
+  // and the team's day follows through its date-keyed query.
+  const todayDate = useCurrentDate(() => void queryClient.invalidateQueries({ queryKey: queryKeys.today }));
 
   const today = useQuery({
     queryKey: queryKeys.today,
@@ -70,7 +83,6 @@ export default function HomeScreen() {
     queryFn: approvalsApi.pending,
     enabled: access.canApprove,
   });
-  const todayDate = toDateString(new Date());
   const team = useQuery({
     queryKey: queryKeys.teamRoster(todayDate),
     queryFn: () => teamApi.roster(todayDate),
@@ -93,7 +105,7 @@ export default function HomeScreen() {
     ...(access.canRequestLeave ? [{ key: 'leave', label: 'Cuti / Izin', icon: 'sunny-outline', href: '/request/leave/new' } as MenuItem] : []),
     ...(access.canRequestOvertime ? [{ key: 'overtime', label: 'Lembur', icon: 'moon-outline', href: '/request/overtime/new' } as MenuItem] : []),
     ...(access.canRequestCorrection ? [{ key: 'correction', label: 'Koreksi', icon: 'create-outline', href: '/request/correction/new' } as MenuItem] : []),
-    ...(access.canSeeLeaveCalendar ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
+    ...(canSeeLeaveCalendar(user) ? [{ key: 'calendar', label: 'Kalender Cuti', icon: 'people-outline', href: '/calendar' } as MenuItem] : []),
     // Team runners have Tim in the bar instead of Riwayat, so Riwayat stays reachable here.
     ...(access.canManageTeam && access.canUseAttendance ? [{ key: 'history', label: 'Riwayat', icon: 'calendar-outline', href: '/history' } as MenuItem] : []),
     ...(access.wasteUrl ? [{ key: 'waste', label: 'Waste', icon: 'trash-outline', href: { external: access.wasteUrl } } as MenuItem] : []),
@@ -148,7 +160,7 @@ export default function HomeScreen() {
         <Group title="Tim hari ini">
           <Row
             icon="people-outline"
-            title={rosterSummary(team.data)}
+            title={rosterSummary(team.data, todayDate)}
             subtitle={teamAttention(team.data)}
             onPress={() => router.push('/team')}
           />

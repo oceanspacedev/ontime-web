@@ -1,6 +1,29 @@
-import { QueryClient } from '@tanstack/react-query';
+import { focusManager, QueryClient } from '@tanstack/react-query';
+import { AppState, type AppStateStatus, Platform } from 'react-native';
 
 import { ApiError, NetworkError } from './api/client';
+
+/**
+ * Whether a change of the app state means the app is in front of the user again. React Native has no
+ * window focus event, so without this an app brought back from the background keeps showing yesterday's
+ * card until pulled to refresh.
+ */
+export function isAppFocused(status: AppStateStatus): boolean {
+  return status === 'active';
+}
+
+/**
+ * Tells React Query when the app comes to the foreground, so stale queries (today's card, the team's day)
+ * refetch on their own. The web build keeps React Query's own window focus handling.
+ */
+export function listenForAppFocus(setFocused: (focused?: boolean) => void): () => void {
+  const subscription = AppState.addEventListener('change', (status) => setFocused(isAppFocused(status)));
+  return () => subscription.remove();
+}
+
+if (Platform.OS !== 'web') {
+  focusManager.setEventListener(listenForAppFocus);
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,6 +39,12 @@ export const queryClient = new QueryClient({
         }
         return failureCount < 2;
       },
+    },
+    // A form sent while offline fails at once with the offline message (request() turns the failed fetch
+    // into a NetworkError) and is never paused and replayed later, after the user left the screen.
+    mutations: {
+      networkMode: 'always',
+      retry: false,
     },
   },
 });

@@ -4,6 +4,7 @@ namespace App\Filament\Resources\LeaveRequests\Pages;
 
 use App\Filament\Concerns\GeneratesApprovalSteps;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
+use App\Models\LeaveRequest;
 use App\Services\AnnualLeaveService;
 use Carbon\Carbon;
 use Filament\Resources\Pages\CreateRecord;
@@ -41,10 +42,17 @@ class CreateLeaveRequest extends CreateRecord
             ]);
         }
 
+        if ($errors = LeaveRequest::periodErrors($startDate, $endDate)) {
+            throw ValidationException::withMessages(collect($errors)->mapWithKeys(fn (string $message, string $field): array => ["data.{$field}" => $message])->all());
+        }
+
         $daysCount = $startDate->diffInDays($endDate) + 1;
+        $leaveService = app(AnnualLeaveService::class);
 
         // Interns, freelancers and employees without annual leave cannot file it; others must fit their quota.
-        if ($error = app(AnnualLeaveService::class)->validationError($workerProfile, $data['leave_type'] ?? null, $daysCount)) {
+        // No leave of any type may share a day with another pending or approved leave.
+        if ($error = $leaveService->validationError($workerProfile, $data['leave_type'] ?? null, $daysCount, startDate: $startDate, endDate: $endDate)
+            ?? $leaveService->overlapError($workerProfile, $startDate, $endDate)) {
             throw ValidationException::withMessages(['data.leave_type' => $error]);
         }
 

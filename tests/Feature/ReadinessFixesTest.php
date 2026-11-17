@@ -10,7 +10,9 @@ use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Resignation;
+use App\Models\Shift;
 use App\Models\User;
+use App\Services\AttendanceCheckService;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -42,9 +44,12 @@ class ReadinessFixesTest extends TestCase
     {
         $employee = $this->createEmployee();
 
+        $night = Shift::create(['company_id' => $employee->company_id, 'name' => 'Malam', 'start_time' => '22:00', 'end_time' => '06:00', 'is_active' => true]);
+
         $this->travelTo(now()->setTime(2, 0));
         $attendance = Attendance::create([
             'employee_id' => $employee->id,
+            'shift_id' => $night->id,
             'date' => today()->subDay(),
             'check_in' => now()->subHours(4),
             'status' => 'on_time',
@@ -58,6 +63,26 @@ class ReadinessFixesTest extends TestCase
 
         $this->assertNotNull($attendance->fresh()->check_out);
         $this->assertSame(1, Attendance::count());
+    }
+
+    public function test_forgotten_check_out_of_yesterdays_day_shift_goes_through_a_correction(): void
+    {
+        $employee = $this->createEmployee();
+
+        $this->travelTo(now()->setTime(1, 0));
+        $attendance = Attendance::create([
+            'employee_id' => $employee->id,
+            'date' => today()->subDay(),
+            'check_in' => now()->subHours(16),
+            'status' => 'on_time',
+            'late_minutes' => 0,
+        ]);
+
+        $this->actingAs($employee->user)->postJson('/api/v1/attendance/check-out')
+            ->assertUnprocessable()
+            ->assertJsonPath('message', AttendanceCheckService::FORGOTTEN_CHECK_OUT_MESSAGE);
+
+        $this->assertNull($attendance->fresh()->check_out);
     }
 
     public function test_check_out_without_open_check_in_is_still_rejected(): void

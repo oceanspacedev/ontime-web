@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\AttendanceLatenessService;
 use App\Services\DataAccessService;
 use App\Traits\ScopesToWorkerVisibility;
 use Illuminate\Database\Eloquent\Builder;
@@ -36,6 +37,18 @@ class ShiftSchedule extends Model
                 $schedule->company_location_id = null;
                 $schedule->section = null;
             }
+        });
+
+        // Attendance already checked in on that date is judged again against the new roster, whichever
+        // path changed it (Atur Jadwal, the team schedule API, a spreadsheet import, an approval).
+        static::saved(function (ShiftSchedule $schedule): void {
+            if ($schedule->wasRecentlyCreated || $schedule->wasChanged(['shift_id', 'is_day_off', 'date', 'employee_id', 'intern_id', 'freelancer_id'])) {
+                app(AttendanceLatenessService::class)->recalculateForSchedule($schedule);
+            }
+        });
+
+        static::deleted(function (ShiftSchedule $schedule): void {
+            app(AttendanceLatenessService::class)->recalculateForSchedule($schedule, deleted: true);
         });
     }
 

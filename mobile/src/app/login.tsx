@@ -22,6 +22,7 @@ export default function LoginScreen() {
   const styles = useStyles();
   const [mode, setMode] = useState<Mode>('password');
   const busy = useIsMutating({ mutationKey: AUTH_MUTATION_KEY }) > 0;
+  const apiError = useSession((state) => state.apiError);
 
   const changeMode = (next: Mode) => {
     if (!busy) {
@@ -40,29 +41,33 @@ export default function LoginScreen() {
           <Text style={styles.subtitle}>Presensi dan pengajuan harian</Text>
         </View>
 
-        <View style={styles.form}>
-          {mode === 'password' ? <PasswordForm /> : null}
-          {mode === 'whatsapp' ? <WhatsAppForm /> : null}
-          {mode === 'emailLink' ? <EmailLinkForm /> : null}
+        {apiError ? (
+          <ErrorBanner message={apiError} />
+        ) : (
+          <View style={styles.form}>
+            {mode === 'password' ? <PasswordForm /> : null}
+            {mode === 'whatsapp' ? <WhatsAppForm /> : null}
+            {mode === 'emailLink' ? <EmailLinkForm /> : null}
 
-          <View style={[styles.alternatives, busy && styles.modeBusy]}>
-            {mode === 'password' ? (
-              <>
-                <View style={styles.dividerRow}>
-                  <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>atau masuk dengan</Text>
-                  <View style={styles.dividerLine} />
-                </View>
-                <View style={styles.alternativeRow}>
-                  <Button title="WhatsApp" variant="whatsapp" icon="logo-whatsapp" style={styles.alternativeButton} onPress={() => changeMode('whatsapp')} />
-                  <Button title="Email" variant="secondary" icon="mail-outline" style={styles.alternativeButton} onPress={() => changeMode('emailLink')} />
-                </View>
-              </>
-            ) : (
-              <Button title="Masuk dengan kata sandi" variant="ghost" size="sm" icon="arrow-back-outline" onPress={() => changeMode('password')} />
-            )}
+            <View style={[styles.alternatives, busy && styles.modeBusy]}>
+              {mode === 'password' ? (
+                <>
+                  <View style={styles.dividerRow}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>atau masuk dengan</Text>
+                    <View style={styles.dividerLine} />
+                  </View>
+                  <View style={styles.alternativeRow}>
+                    <Button title="WhatsApp" variant="whatsapp" icon="logo-whatsapp" style={styles.alternativeButton} onPress={() => changeMode('whatsapp')} />
+                    <Button title="Email" variant="secondary" icon="mail-outline" style={styles.alternativeButton} onPress={() => changeMode('emailLink')} />
+                  </View>
+                </>
+              ) : (
+                <Button title="Masuk dengan kata sandi" variant="ghost" size="sm" icon="arrow-back-outline" onPress={() => changeMode('password')} />
+              )}
+            </View>
           </View>
-        </View>
+        )}
 
       </KeyboardAvoidingView>
     </Screen>

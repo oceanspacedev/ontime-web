@@ -7,13 +7,15 @@ const LEGACY_PUSH_TOKEN_KEY = 'ontime.pushToken';
 
 /** What the server puts in `data` of every push (OneSignal "additional data"). */
 export interface PushData {
-  kind?: 'approval_requested' | 'approval_resolved' | 'attendance_reminder' | 'team_missing' | (string & {});
+  kind?: 'approval_requested' | 'approval_resolved' | 'attendance_reminder' | 'team_missing' | 'shift_swap' | (string & {});
   request_type?: ApprovalType | (string & {});
   request_id?: number | string;
   step_order?: number;
   status?: 'approved' | 'rejected' | (string & {});
-  /** For attendance reminders: which check the reminder is about. */
-  action?: 'check_in' | 'check_out' | (string & {});
+  /** For attendance reminders: which check the reminder is about, or "correction" for an earlier shift never checked out. */
+  action?: 'check_in' | 'check_out' | 'correction' | (string & {});
+  /** For a "correction" reminder: the date (YYYY-MM-DD) of the shift to correct. */
+  date?: string;
 }
 
 export type PushTarget =
@@ -21,6 +23,9 @@ export type PushTarget =
   | { pathname: '/(app)/team' }
   | { pathname: '/(app)' }
   | { pathname: '/attendance/check'; params: { mode: 'in' | 'out' } }
+  | { pathname: '/request/correction/new'; params: { date: string } }
+  | { pathname: '/request/shift-swap' }
+  | { pathname: '/approval/shift-swap/[id]'; params: { id: string } }
   | { pathname: '/approval/[type]/[id]'; params: { type: ApprovalType; id: string } }
   | { pathname: '/request/[type]/[id]'; params: { type: Exclude<ApprovalType, 'geofence'>; id: string } }
   | { pathname: '/attendance/[id]'; params: { id: string } };
@@ -44,6 +49,10 @@ export function pushTarget(data: unknown, canApprove: boolean, canManageTeam = f
     if (payload.action === 'check_out') {
       return { pathname: '/attendance/check', params: { mode: 'out' } };
     }
+    // An earlier shift never checked out: the correction form, on that shift's date.
+    if (payload.action === 'correction' && typeof payload.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payload.date)) {
+      return { pathname: '/request/correction/new', params: { date: payload.date } };
+    }
     return { pathname: '/(app)' };
   }
 
@@ -51,11 +60,24 @@ export function pushTarget(data: unknown, canApprove: boolean, canManageTeam = f
     return canManageTeam ? { pathname: '/(app)/team' } : null;
   }
 
+  // Shift swap updates (requested, accepted, declined, approved, failed, ...) go to the worker's swap list.
+  if (payload.kind === 'shift_swap') {
+    return { pathname: '/request/shift-swap' };
+  }
+
   if (payload.kind === 'approval_requested') {
+    if (payload.request_type === 'shift_swap' && id && canApprove) {
+      return { pathname: '/approval/shift-swap/[id]', params: { id } };
+    }
     if (type && id && canApprove) {
       return { pathname: '/approval/[type]/[id]', params: { type, id } };
     }
     return canApprove ? { pathname: '/(app)/approvals' } : null;
+  }
+
+  // A decided Tukar Shift reaches its requester only as approval_resolved: open the swap list.
+  if (payload.kind === 'approval_resolved' && payload.request_type === 'shift_swap') {
+    return { pathname: '/request/shift-swap' };
   }
 
   if (payload.kind === 'approval_resolved' && type && id) {

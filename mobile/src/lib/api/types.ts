@@ -198,10 +198,23 @@ export interface Attendance {
   liveness_verified?: boolean | null;
   liveness_notes?: string | null;
   late_minutes: number | null;
+  /** Minutes the check-out fell before the scheduled end ("pulang cepat"); 0 or null when not early. Missing on older servers. */
+  early_leave_minutes?: number | null;
   employee: WorkerSummary | null;
   intern: WorkerSummary | null;
   freelancer: WorkerSummary | null;
   user: { name: string; department: string } | null;
+  /** The stage an approver sees; sent back on process so a stage that moved on meanwhile is refused. Missing on older servers. */
+  current_step?: number | null;
+  total_steps?: number | null;
+  /** Why the approver rejected it, shown to the worker. Missing on older servers. */
+  rejection_reason?: string | null;
+  /** Checked in outside the schedule ("Masuk di luar jadwal"). Missing on older servers. */
+  is_off_schedule?: boolean;
+  /** The rostered colleague an off-schedule check-in replaced, if named. Missing on older servers. */
+  replaced_worker?: { key: string; name: string } | null;
+  /** Ready label for approvers and history, e.g. "Masuk di luar jadwal · menggantikan Budi · shift Closing". */
+  off_schedule_label?: string | null;
 }
 
 export type AttendancePurpose = 'check_in' | 'check_out';
@@ -254,6 +267,8 @@ export interface TodaySchedule {
   /** Outlet the worker is scheduled at today; check-in is only accepted there. */
   outlet?: OutletGeofence | null;
   section?: string | null;
+  /** A check-in today is "Masuk di luar jadwal" (day off, or a freelancer without a shift). Missing on older servers. */
+  is_off_schedule?: boolean;
 }
 
 export interface TodayAttendance {
@@ -265,6 +280,18 @@ export interface TodayAttendance {
   schedule?: TodaySchedule | null;
   /** Outlet the open attendance was checked in at; check-out is only accepted there. */
   check_out_outlet?: OutletGeofence | null;
+  /** Today is covered by an approved leave: check-in would be refused, so the app does not offer it. Missing on older servers. */
+  is_on_leave?: boolean;
+  /** Yesterday's shift was checked in but never checked out; the app points to a correction. Missing on older servers. */
+  unclosed_previous?: UnclosedPrevious | null;
+}
+
+export interface UnclosedPrevious {
+  date: string;
+  check_in: string | null;
+  shift: string | null;
+  /** A correction for that date already waits for approval, so no second one is offered. */
+  correction_pending: boolean;
 }
 
 export interface PaginationA {
@@ -354,6 +381,8 @@ export interface PendingApprovals {
   attendance_corrections: AttendanceCorrection[];
   geofence_attendances: Attendance[];
   resignations: Resignation[];
+  /** Tukar Shift requests accepted by the colleague and waiting on the approver's stage. Older servers omit it. */
+  shift_swaps?: ShiftSwapRequest[];
 }
 
 export type ApprovalType = 'leave' | 'overtime' | 'correction' | 'geofence' | 'resignation';
@@ -422,10 +451,13 @@ export interface ClientAdminAccess {
 
 export type WorkerType = 'employee' | 'intern' | 'freelancer';
 
-export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum' | 'nanti' | 'libur';
+/** `cuti`: on approved leave and not checked in, so not counted as missing. */
+/** `jeda`: between the two segments of a split shift (segment 1 done, segment 2 still to come). */
+export type RosterState = 'hadir' | 'terlambat' | 'pulang' | 'menunggu' | 'belum' | 'nanti' | 'libur' | 'cuti' | 'jeda' | 'ditolak';
 
 export interface RosterEntry {
-  schedule_id: number;
+  /** Null for someone listed without a schedule ("Tanpa jadwal", or still on last night's shift). */
+  schedule_id: number | null;
   worker: { type: WorkerType; id: number; company_id: number; number: string; name: string };
   shift: { id: number; name: string; code: string | null; label: string; start_time: string; end_time: string; talenta_code?: string | null; segments?: ShiftSegment[] } | null;
   location_id: number | null;
@@ -438,6 +470,10 @@ export interface RosterEntry {
   late_minutes: number;
   /** One item per segment worked so far (two for a finished split shift). */
   attendances?: { segment: number; check_in: string | null; check_out: string | null; late_minutes: number }[];
+  /** False for a worker lent in from another brand: shown here, but planned by their own brand. */
+  can_edit?: boolean;
+  /** What explains the state: "Jeda · segmen 2 mulai 17:45", "Shift semalam (16 Nov) · belum absen pulang", "Tanpa jadwal". */
+  note?: string | null;
 }
 
 export interface WeekCell {
@@ -455,12 +491,16 @@ export interface TeamWeek {
   start: string;
   end: string;
   days: string[];
-  workers: { worker: RosterEntry['worker']; days: Record<string, WeekCell> }[];
+  /** `can_edit` is false for a worker lent in from another brand. */
+  workers: { worker: RosterEntry['worker']; days: Record<string, WeekCell>; can_edit?: boolean }[];
 }
 
 export interface RosterOutlet {
   location: { id: number; name: string } | null;
-  counts: { scheduled: number } & Record<RosterState, number>;
+  /** Set on groups of people who are not on the day's schedule: checked in without one, or still on last night's shift. */
+  kind?: 'unscheduled' | 'overnight';
+  /** `cuti`, `jeda` and `checked_in` (scheduled people with a check-in of the day) may be missing from an older server. */
+  counts: { scheduled: number; cuti?: number; jeda?: number; checked_in?: number } & Record<Exclude<RosterState, 'cuti' | 'jeda' | 'ditolak'>, number> & { ditolak?: number };
   entries: RosterEntry[];
 }
 
@@ -529,10 +569,15 @@ export interface TeamFreelancer {
   phone: string | null;
   brand: string | null;
   status: string;
+  /** True until the contract has ended, so a contract that has not started yet is still "active". */
   is_active: boolean;
   has_account: boolean;
   start_date: string | null;
   end_date: string | null;
+  has_started?: boolean;
+  contract_state?: 'not_started' | 'active' | 'ended';
+  /** "Belum mulai", "Aktif" or "Berakhir". */
+  contract_state_label?: string;
 }
 
 export interface NewFreelancer {
@@ -560,8 +605,16 @@ export interface TeamRecapRow {
   outlet: string | null;
   scheduled_days: number;
   present_days: number;
+  /** Present days whose check-in still waits for approval (not final for pay). Missing on older servers. */
+  pending_days?: number;
   late_days: number;
   late_minutes: number;
+  /** Days checked out before the scheduled end ("pulang cepat"). Missing on older servers. */
+  early_leave_days?: number;
+  early_leave_minutes?: number;
+  /** Approved overtime (lembur) in the month: requests and hours. Missing on older servers. */
+  overtime_count?: number;
+  overtime_hours?: number;
   absent_days: number;
   off_days: number;
   scheduled_hours: number;
@@ -782,4 +835,127 @@ export interface NewAccountResponse extends SavedResponse<ClientAccount> {
 export interface ResetPasswordResponse {
   message: string;
   credentials: AccountCredentials;
+}
+
+/** Tukar Shift: "swap" trades both workers' schedules on the dates; "give_away" hands the requester's shift to a colleague who is off. */
+export type ShiftSwapType = 'swap' | 'give_away';
+
+export type ShiftSwapStatus =
+  | 'awaiting_colleague'
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'declined'
+  | 'cancelled'
+  | 'expired'
+  | 'failed';
+
+export type WorkerKind = 'employee' | 'intern' | 'freelancer';
+
+export interface ShiftSwapWorker {
+  type: WorkerKind;
+  id: number;
+  full_name: string;
+  division: string | null;
+}
+
+/** What each worker had on a date when the request was made, and what they get after the swap. */
+export interface ShiftSwapDay {
+  date: string;
+  requester_before: string;
+  requester_after: string;
+  counterpart_before: string;
+  counterpart_after: string;
+}
+
+export interface ShiftSwapStep {
+  step_order: number;
+  step_name: string;
+  status: string;
+  notes: string | null;
+  actioned_at: string | null;
+}
+
+export interface ShiftSwapRequest {
+  id: number;
+  type: ShiftSwapType;
+  requester_date: string;
+  counterpart_date: string | null;
+  reason: string | null;
+  status: ShiftSwapStatus;
+  status_label: string;
+  current_step: number | null;
+  rejection_reason: string | null;
+  failure_reason: string | null;
+  counterpart_responded_at: string | null;
+  applied_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  requester: ShiftSwapWorker | null;
+  counterpart: ShiftSwapWorker | null;
+  employee_name: string | null;
+  days: ShiftSwapDay[];
+  is_mine: boolean;
+  is_for_me: boolean;
+  can_respond: boolean;
+  can_cancel: boolean;
+  approval_steps: ShiftSwapStep[];
+}
+
+export interface ShiftSwapList {
+  data: ShiftSwapRequest[];
+  awaiting_my_answer: number;
+  pagination: { current_page: number; last_page: number; total: number };
+}
+
+/** A colleague who can be asked, with their schedule on the chosen date. */
+export interface ShiftSwapColleague {
+  type: WorkerKind;
+  id: number;
+  full_name: string;
+  division: string | null;
+  is_off: boolean;
+  schedule_label: string;
+}
+
+export interface ShiftSwapPayload {
+  type: ShiftSwapType;
+  requester_date: string;
+  counterpart_date?: string | null;
+  colleague_type: WorkerKind;
+  colleague_id: number;
+  reason?: string | null;
+}
+
+/** An active shift of the worker's company that an off-schedule check-in ("Masuk di luar jadwal") can cover. */
+export interface CoverShiftOption {
+  id: number;
+  name: string;
+  code?: string | null;
+  start_time: string;
+  end_time: string;
+  segments?: ShiftSegment[];
+  crosses_midnight?: boolean;
+}
+
+/** A colleague of the same company rostered today, who an off-schedule check-in can replace. */
+export interface CoverColleague {
+  /** "employee:12", "intern:3" or "freelancer:7"; sent back as `replaces_worker`. */
+  key: string;
+  name: string;
+  type: 'employee' | 'intern' | 'freelancer';
+  shift: { id: number; name: string; start_time: string; end_time: string } | null;
+  outlet: { id: number; name: string } | null;
+  has_checked_in: boolean;
+}
+
+/** GET /attendance/cover-options: what the app offers for "Masuk di luar jadwal" today. */
+export interface CoverOptions {
+  date: string;
+  /** A check-in now is outside the worker's schedule and waits for approval. */
+  is_off_schedule: boolean;
+  /** Why: a rostered day off, or (freelancers) no shift at all. */
+  off_schedule_reason: 'day_off' | 'no_schedule' | null;
+  shifts: CoverShiftOption[];
+  colleagues: CoverColleague[];
 }

@@ -8,9 +8,10 @@ use App\Http\Requests\Api\V1\UpdateOvertimeRequest;
 use App\Http\Resources\Api\V1\OvertimeRequestResource;
 use App\Models\OvertimeRequest;
 use App\Services\ApprovalFlowService;
-use Carbon\Carbon;
+use App\Services\OvertimeRequestService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class OvertimeRequestApiController extends Controller
@@ -68,18 +69,17 @@ class OvertimeRequestApiController extends Controller
             return response()->json(['message' => 'Profil pengguna tidak ditemukan.'], 422);
         }
 
-        $startTime = Carbon::parse($request->input('start_time'));
-        $endTime = Carbon::parse($request->input('end_time'));
+        $service = app(OvertimeRequestService::class);
 
-        // Overtime that ends after midnight, same rule as the web form.
-        if ($endTime->lessThanOrEqualTo($startTime)) {
-            $endTime->addDay();
-        }
+        // Always derived from the two times: a past-midnight end moves to the next day, at most 12 hours.
+        $durationMinutes = $service->validatedDuration($request->input('start_time'), $request->input('end_time'));
 
-        $durationMinutes = (int) $startTime->diffInMinutes($endTime);
+        // Saved together with its approval steps, so a missing approval flow leaves nothing behind. The worker
+        // row is locked first, so two submissions sent at the same time cannot both pass the overlap check.
+        $overtimeRequest = DB::transaction(function () use ($employee, $intern, $freelancer, $profile, $request, $durationMinutes, $service): OvertimeRequest {
+            $service->lockWorker($profile);
+            $service->assertNoOverlap($profile, $request->input('date'), $request->input('start_time'), $request->input('end_time'));
 
-        // Saved together with its approval steps, so a missing approval flow leaves nothing behind.
-        $overtimeRequest = DB::transaction(function () use ($employee, $intern, $freelancer, $request, $durationMinutes): OvertimeRequest {
             $overtimeRequest = OvertimeRequest::create([
                 'employee_id' => $employee?->id,
                 'intern_id' => $intern?->id,
@@ -139,24 +139,42 @@ class OvertimeRequestApiController extends Controller
         }
 
         $data = $request->only(['date', 'start_time', 'end_time', 'reason']);
+        $service = app(OvertimeRequestService::class);
 
-        if (isset($data['start_time']) || isset($data['end_time'])) {
-            $start = Carbon::parse($data['start_time'] ?? $overtimeRequest->start_time);
-            $end = Carbon::parse($data['end_time'] ?? $overtimeRequest->end_time);
+        // A time sent alone is combined with the stored other one: equal times or more than 12 hours are refused.
+        $storedDate = $overtimeRequest->date->toDateString();
+        $storedStart = substr((string) $overtimeRequest->start_time, 0, 5);
+        $storedEnd = substr((string) $overtimeRequest->end_time, 0, 5);
+        $date = isset($data['date']) ? Carbon::parse($data['date'])->toDateString() : $storedDate;
+        $startTime = $data['start_time'] ?? $storedStart;
+        $endTime = $data['end_time'] ?? $storedEnd;
+        $dateChanged = $date !== $storedDate;
+        $hoursChanged = $dateChanged || $startTime !== $storedStart || $endTime !== $storedEnd;
 
-            if ($end->lessThanOrEqualTo($start)) {
-                $end->addDay();
-            }
+        // A new date must lie inside the window and the contract; a worker whose status ended edits nothing
+        // (checked again below on the freshly locked worker row).
+        $service->assertWithinContract($profile, $dateChanged ? $date : null, addressesWorker: true);
 
-            $data['duration_minutes'] = (int) $start->diffInMinutes($end);
+        if ($dateChanged) {
+            $service->assertDateWithinWindow($date);
+        }
+
+        // Only a changed date or time is checked again, so the reason of an older request stays editable.
+        if ($hoursChanged) {
+            $data['duration_minutes'] = $service->validatedDuration($startTime, $endTime, isset($data['end_time']) ? 'end_time' : 'start_time');
         }
 
         // Re-checked under a row lock: an approver may have acted while the form was being filled in.
-        $updated = DB::transaction(function () use ($overtimeRequest, $data): bool {
+        $updated = DB::transaction(function () use ($overtimeRequest, $data, $profile, $service, $date, $startTime, $endTime, $dateChanged, $hoursChanged): bool {
+            $service->assertWithinContract($service->lockWorker($profile), $dateChanged ? $date : null, addressesWorker: true);
             $locked = OvertimeRequest::query()->lockForUpdate()->find($overtimeRequest->getKey());
 
             if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
                 return false;
+            }
+
+            if ($hoursChanged) {
+                $service->assertNoOverlap($profile, $date, $startTime, $endTime, $overtimeRequest->getKey());
             }
 
             $overtimeRequest->update($data);
@@ -177,10 +195,14 @@ class OvertimeRequestApiController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        $overtimeRequest = OvertimeRequest::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->findOrFail($id);
+        $overtimeRequest = OvertimeRequest::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->find($id);
 
-        if (! OvertimeRequest::query()->visibleTo($user)->whereKey($overtimeRequest->getKey())->exists()) {
-            return response()->json(['message' => 'Unauthorized access.'], 403);
+        if (! $overtimeRequest) {
+            return response()->json(['message' => 'Pengajuan lembur tidak ditemukan atau sudah dibatalkan.'], 404);
+        }
+
+        if (! ApprovalApiController::canOpen($overtimeRequest, $user)) {
+            return response()->json(['message' => 'Anda tidak memiliki akses ke pengajuan ini.'], 403);
         }
 
         return response()->json([

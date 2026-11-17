@@ -122,8 +122,9 @@ class AppServiceProvider extends ServiceProvider
             $headers,
         );
 
+        // A malformed (non-string) email is left to validation, which answers 422, instead of breaking the key.
         RateLimiter::for('api-login', fn (Request $request): array => [
-            Limit::perMinute(5)->by('api-login:'.mb_strtolower(trim((string) $request->input('email'))).'|'.$request->ip())->response($tooMany),
+            Limit::perMinute(5)->by('api-login:'.(is_string($email = $request->input('email')) ? mb_strtolower(trim($email)) : '').'|'.$request->ip())->response($tooMany),
             Limit::perMinute(20)->by('api-login-ip:'.$request->ip())->response($tooMany),
         ]);
     }

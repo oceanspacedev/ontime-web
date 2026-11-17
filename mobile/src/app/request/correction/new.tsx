@@ -1,20 +1,29 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useMemo, useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { AttachmentField } from '@/components/AttachmentField';
 import { DateTimeField } from '@/components/DateTimeField';
 import { Button, Field, Group, Notice, Screen } from '@/components/ui';
-import { ApiError, errorMessage, requestsApi, type UploadFile } from '@/lib/api';
+import { requestsApi, type UploadFile } from '@/lib/api';
+import { unshownErrorMessage } from '@/lib/errors';
+import { initialCorrectionDate } from '@/lib/correction';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { queryKeys } from '@/lib/queryClient';
 import { makeStyles, spacing } from '@/theme';
 
+/** Fields this form shows a server message under; any other 422 key goes to the footer notice. */
+const SHOWN_FIELDS = ['date', 'corrected_check_in', 'corrected_check_out', 'reason', 'attachment'];
+
+
 export default function NewCorrectionScreen() {
   const styles = useStyles();
   const queryClient = useQueryClient();
-  const [date, setDate] = useState<string | null>(null);
+  const params = useLocalSearchParams<{ date?: string }>();
+  // A correction is for a day that has already happened, so the picker stops at today.
+  const today = useMemo(() => new Date(), []);
+  const [date, setDate] = useState<string | null>(() => initialCorrectionDate(params.date, today));
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [reason, setReason] = useState('');
@@ -52,7 +61,7 @@ export default function NewCorrectionScreen() {
     return Object.keys(next).length === 0;
   };
 
-  const generalError = submit.isError && !(submit.error instanceof ApiError && submit.error.errors) ? errorMessage(submit.error) : null;
+  const generalError = unshownErrorMessage(submit.error, SHOWN_FIELDS);
 
   return (
     <Screen
@@ -64,7 +73,7 @@ export default function NewCorrectionScreen() {
       }>
       <Notice tone="info" message="Ajukan koreksi bila lupa absen atau jam presensi tercatat salah. Setelah disetujui, presensi di tanggal itu diperbarui." />
       <Group title="Presensi" padded>
-        <DateTimeField label="Tanggal presensi" mode="date" value={date} onChange={setDate} error={errors.date} />
+        <DateTimeField label="Tanggal presensi" mode="date" value={date} onChange={setDate} error={errors.date} maximumDate={today} />
         <View style={styles.row}>
           <View style={styles.flex}>
             <DateTimeField label="Jam masuk yang benar" mode="time" value={checkIn} onChange={setCheckIn} error={errors.corrected_check_in} />

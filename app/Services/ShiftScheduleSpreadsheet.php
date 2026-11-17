@@ -231,6 +231,10 @@ class ShiftScheduleSpreadsheet
                     if ($columns === null) {
                         $columns = $this->readHeader($cells);
 
+                        foreach ($columns['unreadable'] as $index => $header) {
+                            $issues[] = "Sheet \"{$sheetName}\" kolom ".($index + 1).": \"{$header}\" bukan tanggal yang valid. Kolom dilewati.";
+                        }
+
                         if ($columns['dates'] === []) {
                             $issues[] = "Sheet \"{$sheetName}\": baris pertama tidak berisi kolom tanggal. Sheet dilewati.";
 
@@ -431,12 +435,15 @@ class ShiftScheduleSpreadsheet
     }
 
     /**
+     * Header cells written like a date that is not a real one (30-02-2026) land in "unreadable", so
+     * the import can report the skipped column instead of dropping its cells silently.
+     *
      * @param  list<string>  $cells
-     * @return array{id: int, type: int|null, dates: array<int, string>}
+     * @return array{id: int, type: int|null, dates: array<int, string>, unreadable: array<int, string>}
      */
     private function readHeader(array $cells): array
     {
-        $columns = ['id' => 0, 'type' => null, 'dates' => []];
+        $columns = ['id' => 0, 'type' => null, 'dates' => [], 'unreadable' => []];
 
         foreach ($cells as $index => $cell) {
             $label = Str::upper(trim($cell));
@@ -447,6 +454,8 @@ class ShiftScheduleSpreadsheet
                 $columns['type'] = $index;
             } elseif ($date = $this->parseHeaderDate($cell)) {
                 $columns['dates'][$index] = $date;
+            } elseif (preg_match('/\d{1,4}\s*[\/.-]\s*\d{1,2}\s*[\/.-]\s*\d{1,4}/', $cell)) {
+                $columns['unreadable'][$index] = trim($cell);
             }
         }
 

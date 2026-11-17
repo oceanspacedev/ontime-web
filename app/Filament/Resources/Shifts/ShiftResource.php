@@ -7,6 +7,7 @@ use App\Filament\Resources\Shifts\Pages\ManageShifts;
 use App\Models\Division;
 use App\Models\Shift;
 use App\Services\DataAccessService;
+use App\Services\ShiftUsageService;
 use BackedEnum;
 use Closure;
 use Filament\Actions\BulkActionGroup;
@@ -17,6 +18,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
@@ -29,8 +31,11 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rules\Unique;
+use Throwable;
 use UnitEnum;
+use WeakMap;
 
 class ShiftResource extends Resource
 {
@@ -49,6 +54,13 @@ class ShiftResource extends Resource
     protected static ?int $navigationSort = 1;
 
     protected static ?string $recordTitleAttribute = 'name';
+
+    /**
+     * ShiftUsageService::hoursLockedReason() per shift object, so the form asks once for its four hour fields.
+     *
+     * @var WeakMap<Shift, string|null>|null
+     */
+    private static ?WeakMap $hoursLockedReasons = null;
 
     /**
      * Company admins manage every shift; a Koordinator manages the shifts of their brands.
@@ -121,17 +133,21 @@ class ShiftResource extends Resource
                 TimePicker::make('start_time')
                     ->label('Jam Masuk')
                     ->seconds(false)
+                    ->disabled(fn (?Shift $record): bool => static::hoursLockedReason($record) !== null)
+                    ->helperText(fn (?Shift $record): ?string => static::hoursLockedReason($record))
                     ->required(),
 
                 TimePicker::make('end_time')
                     ->label('Jam Pulang')
                     ->seconds(false)
+                    ->disabled(fn (?Shift $record): bool => static::hoursLockedReason($record) !== null)
                     ->helperText('Boleh lewat tengah malam.')
                     ->required(),
 
                 TimePicker::make('second_start_time')
                     ->label('Jam Masuk Segmen 2')
                     ->seconds(false)
+                    ->disabled(fn (?Shift $record): bool => static::hoursLockedReason($record) !== null)
                     ->helperText('Khusus split shift: kosongkan bila shift hanya satu segmen.')
                     ->requiredWith('second_end_time')
                     ->rule(fn (Get $get): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get): void {
@@ -145,6 +161,7 @@ class ShiftResource extends Resource
                 TimePicker::make('second_end_time')
                     ->label('Jam Pulang Segmen 2')
                     ->seconds(false)
+                    ->disabled(fn (?Shift $record): bool => static::hoursLockedReason($record) !== null)
                     ->requiredWith('second_start_time'),
 
                 TextInput::make('late_tolerance_minutes')
@@ -220,13 +237,62 @@ class ShiftResource extends Resource
                 EditAction::make()
                     ->slideOver()
                     ->modalWidth(Width::Medium),
-                DeleteAction::make(),
+                DeleteAction::make()
+                    ->disabled(fn (Shift $record): bool => app(ShiftUsageService::class)->deletionBlockedReason($record) !== null)
+                    ->tooltip(fn (Shift $record): ?string => app(ShiftUsageService::class)->deletionBlockedReason($record))
+                    ->before(function (DeleteAction $action, Shift $record): void {
+                        $reason = app(ShiftUsageService::class)->deletionBlockedReason($record);
+
+                        if ($reason === null) {
+                            return;
+                        }
+
+                        Notification::make()->title('Shift tidak dapat dihapus')->body($reason)->danger()->send();
+                        $action->cancel();
+                    }),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    DeleteBulkAction::make()
+                        ->using(function (DeleteBulkAction $action, Collection $records): void {
+                            $records->each(function (Shift $shift) use ($action): void {
+                                if (app(ShiftUsageService::class)->deletionBlockedReason($shift) !== null) {
+                                    $action->reportBulkProcessingFailure(
+                                        'in_use',
+                                        fn (int $count): string => "{$count} shift tidak dihapus karena sudah dipakai pekerja, jadwal, atau absensi. Nonaktifkan shift tersebut.",
+                                    );
+
+                                    return;
+                                }
+
+                                try {
+                                    $shift->delete() || $action->reportBulkProcessingFailure();
+                                } catch (Throwable $exception) {
+                                    $action->reportBulkProcessingFailure();
+                                    report($exception);
+                                }
+                            });
+                        }),
                 ]),
             ]);
+    }
+
+    /**
+     * Why the hours of the shift being edited are locked (ShiftUsageService), or null for a new or unused shift.
+     */
+    public static function hoursLockedReason(?Shift $record): ?string
+    {
+        if (! $record?->exists) {
+            return null;
+        }
+
+        self::$hoursLockedReasons ??= new WeakMap;
+
+        if (! self::$hoursLockedReasons->offsetExists($record)) {
+            self::$hoursLockedReasons[$record] = app(ShiftUsageService::class)->hoursLockedReason($record);
+        }
+
+        return self::$hoursLockedReasons[$record];
     }
 
     /**

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\DataScope;
 use App\Enums\SystemRole;
 use App\Models\Company;
+use App\Models\CompanyLocation;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\Freelancer;
@@ -268,6 +269,42 @@ final class DataAccessService
                         }));
                 }
             }
+        });
+    }
+
+    /**
+     * Worker records (attendance, schedules) by where they happened as well as by whose they are: the records
+     * of workers in the user's scope, plus the records at an outlet of a company or division in that scope. A
+     * worker moved to another company or brand later keeps their past days in the old one's reports.
+     *
+     * @param  list<string>  $relations
+     */
+    public static function scopeWorkerOrOutletRecords(Builder $query, User $user, array $relations, string $locationColumn = 'company_location_id'): Builder
+    {
+        $filter = self::workerFilter($user);
+
+        if ($filter === null) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $visible) use ($user, $filter, $relations, $locationColumn): void {
+            $visible->where(fn (Builder $own) => self::scopeWorkerRecords($own, $user, $relations));
+
+            if ($filter['companies'] === [] && $filter['divisions'] === []) {
+                return;
+            }
+
+            $visible->orWhereIn($visible->qualifyColumn($locationColumn), CompanyLocation::query()
+                ->select('id')
+                ->where(function (Builder $inScope) use ($filter): void {
+                    if ($filter['companies'] !== []) {
+                        $inScope->orWhereIn('company_id', $filter['companies']);
+                    }
+
+                    if ($filter['divisions'] !== []) {
+                        $inScope->orWhereIn('division_id', $filter['divisions']);
+                    }
+                }));
         });
     }
 

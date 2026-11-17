@@ -101,6 +101,9 @@ describe('recapLine', () => {
   it('sums up a month in one line', () => {
     expect(recapLine(row)).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam');
     expect(recapLine({ ...row, absent_days: 0, late_days: 0, worked_hours: 160 })).toBe('Masuk 18/20 · 160 jam');
+    expect(recapLine({ ...row, early_leave_days: 1, overtime_hours: 6.5 })).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 1× pulang cepat · 152,5 jam · lembur 6,5 jam');
+    expect(recapLine({ ...row, pending_days: 2 })).toBe('Masuk 18/20 · 2 tidak hadir · 2 menunggu persetujuan · 3× telat · 152,5 jam');
+    expect(recapLine({ ...row, early_leave_days: 0, overtime_hours: 0 })).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam');
   });
 });
 
@@ -113,9 +116,27 @@ describe('pushTarget', () => {
     expect(pushTarget({ kind: 'attendance_reminder', action: 'check_out' }, false)).toEqual({ pathname: '/attendance/check', params: { mode: 'out' } });
   });
 
+  it('opens the correction form on the shift date from a forgotten check-out reminder', () => {
+    expect(pushTarget({ kind: 'attendance_reminder', action: 'correction', date: '2026-11-16' }, false)).toEqual({
+      pathname: '/request/correction/new',
+      params: { date: '2026-11-16' },
+    });
+    expect(pushTarget({ kind: 'attendance_reminder', action: 'correction' }, false)).toEqual({ pathname: '/(app)' });
+    expect(pushTarget({ kind: 'attendance_reminder', action: 'correction', date: 'kemarin' }, false)).toEqual({ pathname: '/(app)' });
+  });
+
   it('opens the Tim tab for coordinators only', () => {
     expect(pushTarget({ kind: 'team_missing' }, true, true)).toEqual({ pathname: '/(app)/team' });
     expect(pushTarget({ kind: 'team_missing' }, true, false)).toBeNull();
+  });
+
+  it('opens the swap list from a shift swap update and the swap approval for approvers', () => {
+    expect(pushTarget({ kind: 'shift_swap', event: 'accepted', request_type: 'shift_swap', request_id: 7 }, false)).toEqual({ pathname: '/request/shift-swap' });
+    expect(pushTarget({ kind: 'approval_requested', request_type: 'shift_swap', request_id: 7 }, true)).toEqual({
+      pathname: '/approval/shift-swap/[id]',
+      params: { id: '7' },
+    });
+    expect(pushTarget({ kind: 'approval_requested', request_type: 'shift_swap', request_id: 7 }, false)).toBeNull();
   });
 });
 

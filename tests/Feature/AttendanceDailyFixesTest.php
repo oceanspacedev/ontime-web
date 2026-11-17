@@ -369,6 +369,9 @@ class AttendanceDailyFixesTest extends TestCase
             ->assertJsonPath('message', 'Selesaikan absen pulang shift semalam dulu.');
 
         $this->postJson('/api/v1/attendance/check-out')->assertOk()->assertJsonPath('attendance.id', $row->id);
+
+        // Today's check-in opens an hour before the company hours (08:00).
+        $this->travelTo(Carbon::parse('2026-11-17 07:30:00'));
         $this->postJson('/api/v1/attendance/check-in')->assertOk()->assertJsonPath('attendance.date', '2026-11-17');
         $this->assertSame(2, Attendance::query()->where('employee_id', $employee->id)->count());
     }

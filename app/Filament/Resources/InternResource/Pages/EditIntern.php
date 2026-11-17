@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\InternResource\Pages;
 
 use App\Filament\Resources\InternResource;
+use App\Services\WorkerAccountService;
 use Filament\Actions;
 use Filament\Resources\Pages\EditRecord;
 
@@ -22,7 +23,20 @@ class EditIntern extends EditRecord
                 ->modalHeading("Buat Akun User untuk {$this->record->full_name}")
                 ->modalDescription('Kata sandi dibuat otomatis lalu dikirim ke WhatsApp bersama link unduh aplikasi.')
                 ->action(fn () => InternResource::openAccount($this->record)),
-            Actions\DeleteAction::make(),
+            InternResource::workerDeleteAction(),
         ];
+    }
+
+    /**
+     * Ending the contract here (an ended status, or an end date already past) switches the account off and
+     * signs it out like the end-contract action; taking the worker back on switches it on again.
+     */
+    protected function afterSave(): void
+    {
+        if (! $this->record->wasChanged(['status', 'end_date'])) {
+            return;
+        }
+
+        app(WorkerAccountService::class)->syncContractStatus($this->record, $this->record->getPrevious()['status'] ?? $this->record->status);
     }
 }

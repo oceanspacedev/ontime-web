@@ -2,12 +2,25 @@ import type { AttendanceStatus, RequestStatus } from './api/types';
 
 const LOCALE = 'id-ID';
 
+/**
+ * The server's timezone. Attendance is judged on its wall clock and shift hours arrive as bare server-local
+ * times, so ISO datetimes (serialized in UTC) are shown in this zone, never the device's own.
+ */
+export const SERVER_TIME_ZONE = 'Asia/Jakarta';
+
+const PLAIN_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Server timezone for an ISO datetime; a plain date is already a calendar day and is not shifted. */
+function zoneOptions(value: string): Intl.DateTimeFormatOptions {
+  return PLAIN_DATE.test(value) ? {} : { timeZone: SERVER_TIME_ZONE };
+}
+
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) {
     return null;
   }
   // Plain dates (YYYY-MM-DD) are local calendar days, never shifted by timezone.
-  const plain = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const plain = PLAIN_DATE.exec(value);
   if (plain) {
     return new Date(Number(plain[1]), Number(plain[2]) - 1, Number(plain[3]));
   }
@@ -31,13 +44,14 @@ export function formatDate(value: string | null | undefined, style: 'long' | 'sh
   if (!date) {
     return '-';
   }
+  const zone = zoneOptions(value as string);
   if (style === 'short') {
-    return date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
+    return date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric', ...zone });
   }
   if (style === 'weekday') {
-    return date.toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    return date.toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', ...zone });
   }
-  return date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' });
+  return date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric', ...zone });
 }
 
 export function formatDateRange(start: string | null | undefined, end: string | null | undefined): string {
@@ -60,7 +74,7 @@ export function formatTime(value: string | null | undefined): string {
   if (!date) {
     return value;
   }
-  return date.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
+  return date.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false, ...zoneOptions(value) }).replace('.', ':');
 }
 
 export function formatDateTime(value: string | null | undefined): string {

@@ -12,5 +12,6 @@ Schedule::command('horizon:snapshot')->everyFiveMinutes();
 Schedule::command('sanctum:prune-idle')->daily();
 Schedule::command('workers:close-expired-contracts')->dailyAt('00:15');
 Schedule::command('employees:apply-resignations')->dailyAt('00:20');
+Schedule::command('shift-swaps:expire')->dailyAt('00:05');
 Schedule::command('approvals:remind-stalled')->dailyAt('08:00');
 Schedule::command('attendance:send-reminders')->everyFiveMinutes()->withoutOverlapping();

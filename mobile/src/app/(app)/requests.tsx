@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { type AnyRequest, REQUEST_KIND_LABEL, type RequestKind, RequestRow } from '@/components/RequestRow';
-import { Button, Choice, EmptyState, ErrorBanner, Group, LoadingView, Notice, ProgressBar, Screen, Segmented, Text } from '@/components/ui';
+import { Button, Choice, EmptyState, ErrorBanner, Group, LoadingView, Notice, ProgressBar, Row, Screen, Segmented, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { type QuotaSummary, requestsApi } from '@/lib/api';
 import { queryKeys } from '@/lib/queryClient';
@@ -66,6 +66,17 @@ export default function RequestsScreen() {
       {quota && access.hasAnnualLeave && quota.eligible !== false ? <LeaveQuota quota={quota} /> : null}
 
       <Button title={`Ajukan ${REQUEST_KIND_LABEL[activeKind]}`} icon="add" size="lg" onPress={() => router.push(NEW_ROUTE[activeKind])} />
+
+      {access.canUseAttendance ? (
+        <Group>
+          <Row
+            title="Tukar Shift"
+            subtitle="Tukar jadwal dengan rekan atau serahkan shift Anda"
+            icon="swap-horizontal"
+            onPress={() => router.push('/request/shift-swap' as Href)}
+          />
+        </Group>
+      ) : null}
 
       {active.isPending ? (
         <LoadingView />

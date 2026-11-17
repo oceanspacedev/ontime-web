@@ -14,6 +14,8 @@ interface Props {
   onChange: (value: string) => void;
   error?: string | null;
   minimumDate?: Date;
+  /** Latest date the picker offers (date mode). */
+  maximumDate?: Date;
   hint?: string;
 }
 
@@ -36,7 +38,7 @@ function parseValue(mode: 'date' | 'time', value: string | null): Date {
  * Date or time input that works the same on both platforms: Android opens the system dialog,
  * iOS shows the spinner in a bottom sheet with cancel and done buttons.
  */
-export function DateTimeField({ label, mode, value, onChange, error, minimumDate, hint }: Props) {
+export function DateTimeField({ label, mode, value, onChange, error, minimumDate, maximumDate, hint }: Props) {
   const styles = useStyles();
   const { colors, dark } = useTheme();
   const [open, setOpen] = useState(false);
@@ -80,7 +82,7 @@ export function DateTimeField({ label, mode, value, onChange, error, minimumDate
         hint={hint}
       />
       {open && Platform.OS === 'android' ? (
-        <DateTimePicker value={draft} mode={mode} is24Hour onChange={handleChange} minimumDate={minimumDate} />
+        <DateTimePicker value={draft} mode={mode} is24Hour onChange={handleChange} minimumDate={minimumDate} maximumDate={maximumDate} />
       ) : null}
       {Platform.OS === 'ios' ? (
         <Sheet visible={open} onClose={close} title={label}>
@@ -91,6 +93,7 @@ export function DateTimeField({ label, mode, value, onChange, error, minimumDate
             locale="id-ID"
             onChange={handleChange}
             minimumDate={minimumDate}
+            maximumDate={maximumDate}
             themeVariant={dark ? 'dark' : 'light'}
             textColor={colors.text}
             accentColor={colors.primary}

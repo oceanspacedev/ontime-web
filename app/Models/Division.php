@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class Division extends Model
@@ -175,10 +176,26 @@ class Division extends Model
         return $this->hasMany(Freelancer::class);
     }
 
+    /**
+     * Deleting a division would silently reparent its sub-divisions to the top level and cascade
+     * away the data access and approval flows granted on it, so any of these dependencies blocks it.
+     */
     public function deletionBlockedReason(): ?string
     {
         if ($this->employees()->exists() || $this->interns()->exists() || $this->freelancers()->exists()) {
             return "Divisi {$this->name} masih memiliki karyawan, magang, atau freelancer. Pindahkan mereka ke divisi lain sebelum menghapus.";
+        }
+
+        if ($this->children()->exists()) {
+            return "Divisi {$this->name} masih memiliki sub-divisi. Pindahkan atau hapus sub-divisinya terlebih dahulu.";
+        }
+
+        if (DB::table('division_user')->where('division_id', $this->id)->exists()) {
+            return "Divisi {$this->name} masih dipakai sebagai akses data akun pengguna. Ubah akses data akun tersebut sebelum menghapus.";
+        }
+
+        if (ApprovalFlow::query()->where('division_id', $this->id)->exists()) {
+            return "Divisi {$this->name} masih memiliki alur persetujuan khusus. Hapus alur persetujuan tersebut sebelum menghapus divisi.";
         }
 
         return null;

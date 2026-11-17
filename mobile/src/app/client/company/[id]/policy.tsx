@@ -18,6 +18,7 @@ import {
   type SelfieModeOption,
 } from '@/lib/api';
 import { useClientAdminSaved } from '@/hooks/useClientAdminSaved';
+import { unshownErrorMessage } from '@/lib/errors';
 import { type FieldErrors, fieldErrorsFrom, requiredMessage } from '@/lib/forms';
 import { queryKeys } from '@/lib/queryClient';
 import { fontSize, makeStyles, radius, spacing, useTheme } from '@/theme';
@@ -40,6 +41,26 @@ function modeLabelFor(requireGps: boolean, selfieMode: PolicySelfieMode): string
 
 function usesFaceMatch(mode: PolicySelfieMode): boolean {
   return mode === 'face' || mode === 'liveness';
+}
+
+/** Policy fields the form always shows, so a server message for them sits next to the field. */
+const ALWAYS_SHOWN_FIELDS = [
+  'work_start_time',
+  'work_end_time',
+  'late_tolerance_minutes',
+  'require_gps',
+  'selfie_mode',
+  'annual_leave_quota',
+  'default_approval_stages',
+];
+
+/**
+ * The number sent for a field that only shows in some modes. A hidden field sends the stored value:
+ * the server checks every value it gets, hidden or not, so a 0 typed before switching the mode off
+ * would block the save with no field on screen to mark. The server keeps the stored value anyway.
+ */
+function policyNumber(shown: boolean, typed: string, stored: number): number {
+  return shown ? Number(typed || stored) : stored;
 }
 
 /** Digits only, so number fields never hold a stray comma or minus sign. */
@@ -173,11 +194,10 @@ function PolicyEditor({ companyId, response }: { companyId: number; response: Cl
       work_end_time: workEnd,
       late_tolerance_minutes: Number(lateTolerance),
       require_gps: requireGps,
-      // Hidden fields keep their last value, the same way the panel sends them.
-      geofence_radius_meters: Number(geofenceRadius || initial.geofence_radius_meters),
+      geofence_radius_meters: policyNumber(requireGps, geofenceRadius, initial.geofence_radius_meters),
       mock_location_action: mockAction,
       selfie_mode: selfieMode,
-      face_match_threshold: Number(faceThreshold || initial.face_match_threshold),
+      face_match_threshold: policyNumber(faceMatch, faceThreshold, initial.face_match_threshold),
       face_fail_action: faceFailAction,
       annual_leave_quota: Number(leaveQuota),
       default_approval_stages: Number(approvalStages),
@@ -191,8 +211,13 @@ function PolicyEditor({ companyId, response }: { companyId: number; response: Cl
   };
 
   const hasFieldErrors = save.error instanceof ApiError && save.error.errors;
-  const generalError = save.isError && !hasFieldErrors ? errorMessage(save.error) : null;
-  const errorSummary = save.isError && hasFieldErrors ? 'Periksa lagi isian yang ditandai.' : null;
+  // A message for a field that is hidden right now would mark nothing, so it is shown in the footer.
+  const generalError = unshownErrorMessage(save.error, [
+    ...ALWAYS_SHOWN_FIELDS,
+    ...(requireGps ? ['geofence_radius_meters', 'mock_location_action'] : []),
+    ...(faceMatch ? ['face_match_threshold', 'face_fail_action'] : []),
+  ]);
+  const errorSummary = save.isError && hasFieldErrors && !generalError ? 'Periksa lagi isian yang ditandai.' : null;
 
   const addLocation = () => router.push({ pathname: '/client/company/[id]/location', params: { id: String(companyId) } });
   const editCompany = () => router.push({ pathname: '/client/company/[id]/edit', params: { id: String(companyId) } });

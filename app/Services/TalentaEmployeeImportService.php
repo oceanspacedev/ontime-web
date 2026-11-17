@@ -211,6 +211,15 @@ class TalentaEmployeeImportService
             $attributes['join_date'] = $this->parseDate($row['join_date']);
         }
 
+        // Same rule as the panel: a number another active worker or account holds would lock both out of OTP login.
+        $candidate = $employee ? (clone $employee)->fill($attributes) : new Employee(['nip' => $nip] + $attributes);
+
+        if (app(WorkerAccountService::class)->phoneConflicts($candidate)) {
+            $this->skip("{$label}: ".WorkerAccountService::PHONE_TAKEN_MESSAGE);
+
+            return null;
+        }
+
         if (! $employee) {
             $this->summary['created']++;
 

@@ -5,11 +5,14 @@ namespace App\Filament\Imports\Concerns;
 use App\Models\Company;
 use App\Models\Division;
 use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Shift;
 use App\Models\User;
 use App\Services\DataAccessService;
+use App\Services\WorkerAccountService;
 use Carbon\Carbon;
 use Filament\Actions\Imports\Exceptions\RowImportFailedException;
 use Illuminate\Database\Eloquent\Builder;
@@ -260,6 +263,17 @@ trait ResolvesWorkerPlacement
         }
 
         return $division;
+    }
+
+    /**
+     * Fail the row when it would give the worker a number another active worker or account holds (same
+     * rule as the panel form), so two rows sharing a number never become two active workers.
+     */
+    protected function guardWorkerPhone(Employee|Intern|Freelancer $worker): void
+    {
+        if (app(WorkerAccountService::class)->phoneConflicts($worker)) {
+            $this->failRow(WorkerAccountService::PHONE_TAKEN_MESSAGE);
+        }
     }
 
     public static function castDate(mixed $state): mixed

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\ResignationResource;
 use App\Models\Resignation;
 use App\Services\ApprovalFlowService;
+use App\Services\WorkerAccountService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -36,11 +37,7 @@ class ResignationApiController extends Controller
             return response()->json(['message' => 'Profil Karyawan tidak ditemukan.'], 422);
         }
 
-        $existing = Resignation::where('employee_id', $employee->id)
-            ->whereIn('status', ['pending', 'approved'])
-            ->first();
-
-        if ($existing) {
+        if (app(WorkerAccountService::class)->hasOpenResignation($employee)) {
             return response()->json(['message' => 'Anda sudah memiliki pengajuan pengunduran diri yang sedang diproses atau telah disetujui.'], 422);
         }
 
@@ -81,7 +78,7 @@ class ResignationApiController extends Controller
             return response()->json(['message' => 'Pengajuan pengunduran diri tidak ditemukan.'], 404);
         }
 
-        if (! Resignation::query()->visibleTo($request->user())->whereKey($resignation->getKey())->exists()) {
+        if (! ApprovalApiController::canOpen($resignation, $request->user())) {
             return response()->json(['message' => 'Anda tidak memiliki akses ke pengajuan ini.'], 403);
         }
 

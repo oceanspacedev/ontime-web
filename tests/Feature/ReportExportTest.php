@@ -125,15 +125,15 @@ class ReportExportTest extends TestCase
         $sheet = $this->exportToSpreadsheet('2026-11-01', '2026-11-04')->getSheetByName('Rekap');
 
         $this->assertSame(['Nama', 'NIP / ID', 'Tipe', 'Badan Usaha', 'Divisi', 'Total'], $this->rowValues($sheet, 1, 'A', 'F'));
-        $this->assertSame(['Hari Masuk', 'Terlambat (kali)', 'Telat (menit)', 'Jumlah Jam'], $this->rowValues($sheet, 2, 'F', 'I'));
+        $this->assertSame(['Hari Masuk', 'Terlambat (kali)', 'Telat (menit)', 'Pulang Cepat (menit)', 'Lembur (jam)', 'Jumlah Jam'], $this->rowValues($sheet, 2, 'F', 'K'));
 
         // One group of three columns per day of the selected range, including days nobody worked.
-        $this->assertSame('Min, 01 Nov 2026', $sheet->getCell('J1')->getValue());
-        $this->assertSame('Sen, 02 Nov 2026', $sheet->getCell('M1')->getValue());
-        $this->assertSame('Rab, 04 Nov 2026', $sheet->getCell('S1')->getValue());
-        $this->assertSame(['Masuk', 'Pulang', 'Jam'], $this->rowValues($sheet, 2, 'M', 'O'));
-        $this->assertNull($sheet->getCell('V1')->getValue());
-        $this->assertArrayHasKey('M1:O1', $sheet->getMergeCells());
+        $this->assertSame('Min, 01 Nov 2026', $sheet->getCell('L1')->getValue());
+        $this->assertSame('Sen, 02 Nov 2026', $sheet->getCell('O1')->getValue());
+        $this->assertSame('Rab, 04 Nov 2026', $sheet->getCell('U1')->getValue());
+        $this->assertSame(['Masuk', 'Pulang', 'Jam'], $this->rowValues($sheet, 2, 'O', 'Q'));
+        $this->assertNull($sheet->getCell('X1')->getValue());
+        $this->assertArrayHasKey('O1:Q1', $sheet->getMergeCells());
 
         // One row per worker, sorted by company.
         $this->assertSame(['Karyawan PT Alpha', 'NIPALPHA', 'Karyawan', 'PT Alpha', 'Divisi ALPHA'], $this->rowValues($sheet, 3, 'A', 'E'));
@@ -142,25 +142,25 @@ class ReportExportTest extends TestCase
 
         // Totals: two days present, one of them late, 8.5 hours worked.
         $this->assertSame([2, 1, 20], $this->rowValues($sheet, 3, 'F', 'H'));
-        $this->assertEqualsWithDelta(8.5, $sheet->getCell('I3')->getValue(), 0.001);
-        $this->assertSame('0.00', $sheet->getStyle('I3')->getNumberFormat()->getFormatCode());
+        $this->assertEqualsWithDelta(8.5, $sheet->getCell('K3')->getValue(), 0.001);
+        $this->assertSame('0.00', $sheet->getStyle('K3')->getNumberFormat()->getFormatCode());
 
-        $this->assertSame([null, null, null], $this->rowValues($sheet, 3, 'J', 'L'));
-        $this->assertSame(['08:00', '16:30'], $this->rowValues($sheet, 3, 'M', 'N'));
-        $this->assertEqualsWithDelta(8.5, $sheet->getCell('O3')->getValue(), 0.001);
+        $this->assertSame([null, null, null], $this->rowValues($sheet, 3, 'L', 'N'));
+        $this->assertSame(['08:00', '16:30'], $this->rowValues($sheet, 3, 'O', 'P'));
+        $this->assertEqualsWithDelta(8.5, $sheet->getCell('Q3')->getValue(), 0.001);
 
         // No check-out yet: the hours stay empty and the late check-in is highlighted.
-        $this->assertSame(['08:20', '-', null], $this->rowValues($sheet, 3, 'P', 'R'));
-        $this->assertSame('FDE68A', $sheet->getStyle('P3')->getFill()->getStartColor()->getRGB());
-        $this->assertNotSame('FDE68A', $sheet->getStyle('M3')->getFill()->getStartColor()->getRGB());
+        $this->assertSame(['08:20', '-', null], $this->rowValues($sheet, 3, 'R', 'T'));
+        $this->assertSame('FDE68A', $sheet->getStyle('R3')->getFill()->getStartColor()->getRGB());
+        $this->assertNotSame('FDE68A', $sheet->getStyle('O3')->getFill()->getStartColor()->getRGB());
 
         // A day without a check-in shows its status across the day's columns.
-        $this->assertSame('Cuti / Izin', $sheet->getCell('S3')->getValue());
-        $this->assertArrayHasKey('S3:U3', $sheet->getMergeCells());
+        $this->assertSame('Cuti / Izin', $sheet->getCell('U3')->getValue());
+        $this->assertArrayHasKey('U3:W3', $sheet->getMergeCells());
 
         $this->assertSame([1, 0, 0], $this->rowValues($sheet, 4, 'F', 'H'));
-        $this->assertEqualsWithDelta(8.0, $sheet->getCell('I4')->getValue(), 0.001);
-        $this->assertSame(['09:00', '17:00'], $this->rowValues($sheet, 4, 'P', 'Q'));
+        $this->assertEqualsWithDelta(8.0, $sheet->getCell('K4')->getValue(), 0.001);
+        $this->assertSame(['09:00', '17:00'], $this->rowValues($sheet, 4, 'R', 'S'));
     }
 
     public function test_export_recap_sheet_adds_up_the_segments_of_a_split_shift(): void
@@ -173,10 +173,10 @@ class ReportExportTest extends TestCase
 
         $sheet = $this->exportToSpreadsheet('2026-11-02', '2026-11-02')->getSheetByName('Rekap');
 
-        $this->assertSame(["07:45\n17:45", "13:00\n22:00"], $this->rowValues($sheet, 3, 'J', 'K'));
-        $this->assertEqualsWithDelta(9.5, $sheet->getCell('L3')->getValue(), 0.001);
+        $this->assertSame(["07:45\n17:45", "13:00\n22:00"], $this->rowValues($sheet, 3, 'L', 'M'));
+        $this->assertEqualsWithDelta(9.5, $sheet->getCell('N3')->getValue(), 0.001);
         $this->assertSame([1, 1, 5], $this->rowValues($sheet, 3, 'F', 'H'));
-        $this->assertEqualsWithDelta(9.5, $sheet->getCell('I3')->getValue(), 0.001);
+        $this->assertEqualsWithDelta(9.5, $sheet->getCell('K3')->getValue(), 0.001);
         $this->assertNull($sheet->getCell('A4')->getValue());
     }
 
@@ -201,7 +201,8 @@ class ReportExportTest extends TestCase
         $sheet = $this->exportToSpreadsheet('2026-11-01', '2026-11-04')->getSheetByName('Detail');
 
         $this->assertSame(['Tanggal', 'Jam Check In', 'Jam Check Out', 'Jumlah Jam', 'Foto Check-In'], $this->rowValues($sheet, 1, 'F', 'J'));
-        $this->assertSame('Keterangan / Notes', $sheet->getCell('P1')->getValue());
+        $this->assertSame('Menit Pulang Cepat', $sheet->getCell('P1')->getValue());
+        $this->assertSame('Keterangan / Notes', $sheet->getCell('Q1')->getValue());
 
         // Newest first, as on the page.
         $this->assertSame(['03/11/2026', '08:20:00', '-', '-'], $this->rowValues($sheet, 2, 'F', 'I'));
@@ -231,9 +232,9 @@ class ReportExportTest extends TestCase
             [$recap] = $export->sheets();
             $rows = $recap->array();
 
-            // Seven days of three columns after the nine worker and total columns, and only November's attendance.
-            return count($rows[0]) === 9 + 7 * 3
-                && $rows[0][9] === 'Min, 01 Nov 2026'
+            // Seven days of three columns after the eleven worker and total columns, and only November's attendance.
+            return count($rows[0]) === 11 + 7 * 3
+                && $rows[0][11] === 'Min, 01 Nov 2026'
                 && $rows[2][0] === 'Karyawan PT Alpha'
                 && $rows[2][5] === 1;
         });

@@ -84,7 +84,8 @@ class AccountDataAccessDelegationTest extends TestCase
         $this->assertFalse(ScopesToManagedCompanies::canManageAccount($otherCompany));
 
         $linkable = ScopesToManagedCompanies::assignableUserOptions();
-        $this->assertArrayHasKey($inReach->id, $linkable);
+        // In reach, but already linked to an employee: one account checks in as one worker only.
+        $this->assertArrayNotHasKey($inReach->id, $linkable);
         $this->assertArrayNotHasKey($broader->id, $linkable);
         $this->assertArrayNotHasKey($everything->id, $linkable);
         $this->assertArrayNotHasKey($otherCompany->id, $linkable);

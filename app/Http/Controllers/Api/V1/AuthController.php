@@ -20,11 +20,13 @@ class AuthController extends Controller
 {
     private const INACTIVE_MESSAGE = 'Akun Anda tidak aktif. Hubungi admin untuk mengaktifkannya kembali.';
 
+    private const FAILED_LOGIN_MESSAGE = 'Email atau kata sandi salah.';
+
     public function login(LoginRequest $request): JsonResponse
     {
         if (! Auth::attempt($request->only('email', 'password'))) {
             return response()->json([
-                'message' => 'Credentials do not match our records.',
+                'message' => self::FAILED_LOGIN_MESSAGE,
             ], 401);
         }
 

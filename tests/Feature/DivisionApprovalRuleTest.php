@@ -191,7 +191,8 @@ class DivisionApprovalRuleTest extends TestCase
             ->assertHasNoFormErrors();
 
         $this->assertSame(['Koordinator'], ApprovalFlow::where('division_id', $this->jchicken->id)->pluck('approver_role')->all());
-        $this->assertSame(5, ApprovalFlow::companyWide()->where('company_id', $this->company->id)->count());
+        // One stage per request type, Tukar Shift included (saving used to drop it).
+        $this->assertSame(6, ApprovalFlow::companyWide()->where('company_id', $this->company->id)->count());
     }
 
     public function test_the_warning_checks_who_reaches_the_division(): void

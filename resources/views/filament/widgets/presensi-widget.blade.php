@@ -75,6 +75,10 @@
                                     <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
                                         Menunggu Persetujuan
                                     </span>
+                                @elseif($attendance->status === \App\Enums\AttendanceStatus::Rejected)
+                                    <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-200 border border-red-200 dark:border-red-800">
+                                        Ditolak
+                                    </span>
                                 @elseif($attendance->status === \App\Enums\AttendanceStatus::Late)
                                     <span class="inline-block px-2 py-0.5 text-[10px] sm:text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
                                         Terlambat ({{ $attendance->late_minutes }}m)

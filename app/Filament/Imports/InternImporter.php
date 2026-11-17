@@ -135,6 +135,7 @@ class InternImporter extends Importer
         }
 
         $this->record->status ??= 'active';
+        $this->guardWorkerPhone($this->record);
     }
 
     public static function getCompletedNotificationBody(Import $import): string
