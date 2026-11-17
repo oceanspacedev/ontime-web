@@ -136,7 +136,7 @@ class ApiEndpointsExtensionTest extends TestCase
         $response = $this->deleteJson('/api/v1/attendance/master-face');
 
         $response->assertStatus(200)
-            ->assertJsonPath('message', 'Foto Master Wajah berhasil dihapus.');
+            ->assertJsonPath('message', 'Foto profil berhasil dihapus.');
 
         $this->assertNull($this->employee->fresh()->master_face_photo);
     }

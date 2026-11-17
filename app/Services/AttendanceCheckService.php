@@ -998,7 +998,7 @@ class AttendanceCheckService
 
         if (blank($profile->master_face_photo)) {
             throw new AttendanceRuleException(
-                'Foto Master Wajah belum didaftarkan. Silakan daftarkan Foto Master Wajah Anda terlebih dahulu.',
+                'Foto profil belum dipasang. Pasang foto profil berisi wajah Anda di menu Profil terlebih dahulu, karena foto itu dipakai untuk verifikasi wajah.',
                 422,
                 'photo',
             );

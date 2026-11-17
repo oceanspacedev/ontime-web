@@ -1,11 +1,11 @@
 import { onlineManager } from '@tanstack/react-query';
-import * as Network from 'expo-network';
 import { StatusBar } from 'expo-status-bar';
-import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useState, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import { type EdgeInsets, SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/ui';
+import { listenForNetwork } from '@/lib/deviceNetwork';
 import { fontSize, spacing } from '@/theme';
 
 /** Deep red that stays readable with white text in both color schemes. */
@@ -13,23 +13,17 @@ const OFFLINE_RED = '#A10A0A';
 
 export const OFFLINE_MESSAGE = 'Periksa koneksi internet Anda dan coba lagi';
 
-function isOfflineState(state: Network.NetworkState): boolean {
-  return state.isConnected === false || state.isInternetReachable === false;
-}
-
-// React Query pauses requests while offline and refetches when the connection is back.
-onlineManager.setEventListener((setOnline) => {
-  void Network.getNetworkStateAsync()
-    .then((state) => setOnline(!isOfflineState(state)))
-    .catch(() => {});
-  const subscription = Network.addNetworkStateListener((state) => setOnline(!isOfflineState(state)));
-  return () => subscription.remove();
-});
+// React Query pauses queries while offline and refetches when the connection is back. The submit
+// guards and the bar below read the same value, so a refresh (see listenForNetwork) fixes all of them.
+onlineManager.setEventListener(listenForNetwork);
 
 /** Whether the device has no connection or no internet. Unknown counts as online. */
 export function useIsOffline(): boolean {
-  const state = Network.useNetworkState();
-  return isOfflineState(state);
+  const online = useSyncExternalStore(
+    (onChange) => onlineManager.subscribe(onChange),
+    () => onlineManager.isOnline(),
+  );
+  return !online;
 }
 
 const DeviceInsetsContext = createContext<EdgeInsets | null>(null);

@@ -110,7 +110,7 @@ class AttendancePolicyEnforcementTest extends TestCase
         $this->actingAs($employee->user->fresh())
             ->postJson('/api/v1/attendance/check-in', ['photo' => UploadedFile::fake()->image('selfie.jpg', 100, 100)])
             ->assertStatus(422)
-            ->assertJsonPath('message', fn (string $message) => str_contains($message, 'Foto Master Wajah belum didaftarkan'));
+            ->assertJsonPath('message', fn (string $message) => str_contains($message, 'Foto profil belum dipasang'));
 
         $this->assertDatabaseCount('attendances', 0);
     }
