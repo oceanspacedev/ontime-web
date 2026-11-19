@@ -110,15 +110,17 @@ class DailyPerformanceTest extends TestCase
 
         $rows = app(TeamRecapService::class)->recap($this->admin, Carbon::parse('2026-11-01'));
 
-        $this->assertCount(2, $rows);
-        [$outlet, $dayOff] = $rows;
-        $this->assertSame(['worker', 'outlet', 'scheduled_days', 'present_days', 'pending_days', 'late_days', 'late_minutes', 'early_leave_days', 'early_leave_minutes', 'absent_days', 'off_days', 'scheduled_hours', 'worked_hours', 'overtime_count', 'overtime_hours'], array_keys($outlet));
+        // The day off is on the line of the home outlet since the ledger, not on a second line without an outlet.
+        $this->assertCount(1, $rows);
+        [$outlet] = $rows;
+        $legacyKeys = ['worker', 'outlet', 'scheduled_days', 'present_days', 'pending_days', 'late_days', 'late_minutes', 'early_leave_days', 'early_leave_minutes', 'absent_days', 'off_days', 'scheduled_hours', 'worked_hours', 'overtime_count', 'overtime_hours'];
+        $this->assertSame($legacyKeys, array_slice(array_keys($outlet), 0, count($legacyKeys)), 'The keys the released app reads come first and in their order; newer ones follow.');
+        $outlet = array_intersect_key($outlet, array_flip($legacyKeys));
         $this->assertSame(['type' => 'freelancer', 'id' => $bayu->id, 'number' => (string) $bayu->freelancer_number, 'name' => 'Bayu Adillah', 'company' => 'PT Franchise', 'division' => 'JCHICKEN'], $outlet['worker']);
         $this->assertSame(
-            ['outlet' => 'JChicken Ciledug', 'scheduled_days' => 3, 'present_days' => 1, 'pending_days' => 0, 'late_days' => 1, 'late_minutes' => 15, 'early_leave_days' => 1, 'early_leave_minutes' => 300, 'absent_days' => 1, 'off_days' => 0, 'scheduled_hours' => 27.0, 'worked_hours' => 7.83, 'overtime_count' => 0, 'overtime_hours' => 0.0],
+            ['outlet' => 'JChicken Ciledug', 'scheduled_days' => 3, 'present_days' => 1, 'pending_days' => 0, 'late_days' => 1, 'late_minutes' => 15, 'early_leave_days' => 1, 'early_leave_minutes' => 300, 'absent_days' => 1, 'off_days' => 1, 'scheduled_hours' => 27.0, 'worked_hours' => 7.83, 'overtime_count' => 0, 'overtime_hours' => 0.0],
             array_diff_key($outlet, ['worker' => true]),
         );
-        $this->assertSame([null, 1], [$dayOff['outlet'], $dayOff['off_days']]);
     }
 
     public function test_team_recap_falls_back_to_the_attendance_outlet_when_the_schedule_has_none(): void
@@ -201,7 +203,7 @@ class DailyPerformanceTest extends TestCase
         // Present: Bayu Mon + Tue. Absent: Bayu's absent row and Sari's rejected check-in (rejected is not
         // present, ATT-057), plus the weekdays each worker has nothing: Bayu Thu + Fri, Sari Mon + Tue + Fri
         // (Thu is her leave).
-        $this->assertSame(['total_present' => 2, 'total_late' => 1, 'total_leave' => 1, 'total_absent' => 7], $response->json('summary'));
+        $this->assertSame(['total_present' => 2, 'total_late' => 1, 'total_leave' => 1, 'total_absent' => 7], array_intersect_key($response->json('summary'), array_flip(['total_present', 'total_late', 'total_leave', 'total_absent'])));
         $this->assertSame(5, $response->json('pagination.total'));
 
         $this->getJson('/api/v1/laporan-absensi?start_date=2026-11-02&end_date=2026-11-06&company_id='.($this->company->id + 999))
@@ -310,16 +312,22 @@ class DailyPerformanceTest extends TestCase
         $this->schedule($bayu, '2026-11-15', $this->jchickenOutlet);
         Sanctum::actingAs($this->admin);
 
+        // The keys the released app reads, in their order; keys added later (D1: summary, outlet_name, locked,
+        // day_schedules, more, ...) are additions and are left out of the comparison.
+        $legacy = fn (array $keys, array $read): array => array_values(array_intersect($keys, $read));
+
         $roster = $this->getJson('/api/v1/team/roster?date=2026-11-15')->assertOk()->json();
-        $this->assertSame(['date', 'outlets'], array_keys($roster));
+        $this->assertSame(['date', 'outlets'], $legacy(array_keys($roster), ['date', 'outlets']));
         $this->assertSame(['location', 'counts', 'entries'], array_keys($roster['outlets'][0]));
-        $this->assertSame(['schedule_id', 'worker', 'shift', 'location_id', 'borrowed_from', 'section', 'state', 'check_in', 'check_out', 'late_minutes', 'segments', 'attendances', 'can_edit'], array_keys($roster['outlets'][0]['entries'][0]));
+        $entryKeys = ['schedule_id', 'worker', 'shift', 'location_id', 'borrowed_from', 'section', 'state', 'check_in', 'check_out', 'late_minutes', 'segments', 'attendances', 'can_edit'];
+        $this->assertSame($entryKeys, $legacy(array_keys($roster['outlets'][0]['entries'][0]), $entryKeys));
 
         // The 15th is a Sunday, the last day of its week.
         $week = $this->getJson('/api/v1/team/week?date=2026-11-15')->assertOk()->json();
         $this->assertSame(['start', 'end', 'days', 'workers'], array_keys($week));
         $this->assertSame(['2026-11-09', '2026-11-15'], [$week['start'], $week['end']]);
-        $this->assertSame(['schedule_id', 'is_day_off', 'shift', 'location_id', 'outlet', 'section', 'borrowed_from'], array_keys($week['workers'][0]['days']['2026-11-15']));
+        $cellKeys = ['schedule_id', 'is_day_off', 'shift', 'location_id', 'outlet', 'section', 'borrowed_from'];
+        $this->assertSame($cellKeys, $legacy(array_keys($week['workers'][0]['days']['2026-11-15']), $cellKeys));
     }
 
     public function test_week_query_count_does_not_grow_with_the_number_of_workers(): void

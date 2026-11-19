@@ -30,6 +30,11 @@ export interface CorrectionPayload {
   corrected_check_out?: string | null;
   reason: string;
   attachment?: UploadFile | null;
+  /** The attendance corrected, on a date with several; without it the server infers it from the times. */
+  attendance_id?: number | null;
+  schedule_id?: number | null;
+  /** The corrected check-out falls on the next day (a shift past midnight). Only sent when true. */
+  check_out_next_day?: boolean;
 }
 
 export interface ResignationPayload {
@@ -50,6 +55,23 @@ function toForm(fields: Record<string, string | null | undefined>, attachment?: 
     appendFile(form, 'attachment', attachment);
   }
   return form;
+}
+
+/**
+ * The correction as multipart: the fields older servers know are sent as before; the session picked and the
+ * next-day check-out are only added when set.
+ */
+export function buildCorrectionForm(payload: CorrectionPayload): FormData {
+  const { attachment, attendance_id, schedule_id, check_out_next_day, ...fields } = payload;
+  return toForm(
+    {
+      ...fields,
+      attendance_id: attendance_id ? String(attendance_id) : undefined,
+      schedule_id: schedule_id ? String(schedule_id) : undefined,
+      check_out_next_day: check_out_next_day ? '1' : undefined,
+    },
+    attachment,
+  );
 }
 
 export const leave = {
@@ -78,10 +100,9 @@ export const correction = {
   list: (page = 1) => request<Paginated<AttendanceCorrection>>('/attendance-corrections', { query: { page } }),
   show: async (id: number) => (await request<{ data: AttendanceCorrection }>(`/attendance-corrections/${id}`)).data,
   create: (payload: CorrectionPayload) => {
-    const { attachment, ...fields } = payload;
     return request<{ message: string; data: AttendanceCorrection }>('/attendance-corrections', {
       method: 'POST',
-      form: toForm(fields, attachment),
+      form: buildCorrectionForm(payload),
       timeoutMs: 90000,
     });
   },

@@ -86,7 +86,11 @@ class QaTeamApiTest extends TestCase
 
         app(WorkerAccountService::class)->endContract($this->bayu->fresh());
 
+        $createdThroughModel = 0;
         $deletedThroughModel = 0;
+        ShiftSchedule::created(function () use (&$createdThroughModel): void {
+            $createdThroughModel++;
+        });
         ShiftSchedule::deleted(function () use (&$deletedThroughModel): void {
             $deletedThroughModel++;
         });
@@ -100,7 +104,7 @@ class QaTeamApiTest extends TestCase
         $this->assertFalse(ShiftSchedule::query()->where('freelancer_id', $this->bayu->id)->where('date', '>=', '2026-11-30')->exists());
         $this->assertTrue(ShiftSchedule::query()->where('freelancer_id', $this->sari->id)->whereDate('date', '2026-11-30')->exists());
         $this->assertSame(3, ShiftSchedule::query()->where('freelancer_id', $this->bayu->id)->count());
-        $this->assertSame(3, $deletedThroughModel, 'Copies outside the contract are removed through the model, so the lateness hook runs.');
+        $this->assertSame([1, 0], [$createdThroughModel, $deletedThroughModel], 'Days outside the contract are never written, so there is nothing to remove afterwards.');
     }
 
     public function test_scheduling_outside_the_contract_is_refused_with_a_reason(): void

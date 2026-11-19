@@ -14,6 +14,7 @@ use App\Models\JobLevel;
 use App\Models\JobTitle;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Models\ShiftScheduleChange;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\ApprovalFlowService;
@@ -163,6 +164,9 @@ class OffScheduleCheckInTest extends TestCase
         $this->assertSame($this->morning->id, $row->shift_id);
     }
 
+    /**
+     * A fixed-hours company (uses_shift_roster off); a company on shift rosters: RosterCompanyUnscheduledTest.
+     */
     public function test_employee_without_a_dated_schedule_keeps_the_default_shift(): void
     {
         $employee = $this->employee('Andi', $this->morning);
@@ -345,6 +349,26 @@ class OffScheduleCheckInTest extends TestCase
             'Masuk di luar jadwal · menggantikan Budi · shift Pagi',
             json_encode($response->json(), JSON_UNESCAPED_UNICODE),
         );
+    }
+
+    public function test_cover_approval_logs_its_roster_writes_with_the_source_cover(): void
+    {
+        $budi = $this->employee('Budi');
+        $budiSchedule = ShiftSchedule::create(['employee_id' => $budi->id, 'date' => self::MONDAY, 'shift_id' => $this->morning->id, 'company_location_id' => $this->outlet->id]);
+        $freelancer = $this->freelancer('Citra');
+        $this->at('08:05:00');
+        $this->checkIn($freelancer->user, ['cover_shift_id' => $this->morning->id, 'replaces_worker' => 'employee:'.$budi->id])->assertOk();
+
+        $this->approve($this->rowOf('freelancer_id', $freelancer->id));
+
+        $citraSchedule = ShiftSchedule::query()->where('freelancer_id', $freelancer->id)->sole();
+        $this->assertSame($citraSchedule->id, $this->rowOf('freelancer_id', $freelancer->id)->shift_schedule_id);
+        $this->assertTrue($budiSchedule->fresh()->is_day_off);
+
+        $changes = ShiftScheduleChange::query()->where('source', 'cover')->orderBy('id')->get();
+        $this->assertSame([[$citraSchedule->id, 'created'], [$budiSchedule->id, 'updated']], $changes->map(fn (ShiftScheduleChange $change): array => [$change->shift_schedule_id, $change->action])->all());
+        $this->assertSame($this->morning->id, $changes[1]->before['shift_id']);
+        $this->assertTrue($changes[1]->after['is_day_off']);
     }
 
     public function test_approval_turns_the_day_off_into_the_cover_shift_for_an_employee(): void
@@ -534,15 +558,17 @@ class OffScheduleCheckInTest extends TestCase
         $row = $this->rowOf('freelancer_id', $freelancer->id);
         $this->assertSame(30, $row->check_in_late_minutes);
 
-        // The PIC rosters the freelancer for 09:00 meanwhile: the check-in is judged against it.
+        // The PIC rosters the freelancer for 09:00 meanwhile: D4, the check-in stays judged against the
+        // cover shift it was made for, and the roster change does not touch it.
         ShiftSchedule::create(['freelancer_id' => $freelancer->id, 'date' => self::MONDAY, 'shift_id' => $evening->id]);
-        $this->assertSame(0, $row->fresh()->check_in_late_minutes);
-        $this->assertSame($evening->id, $row->fresh()->shift_id);
+        $this->assertSame(30, $row->fresh()->check_in_late_minutes);
+        $this->assertSame($this->morning->id, $row->fresh()->shift_id);
 
         $this->approve($row);
 
         $this->assertSame($evening->id, ShiftSchedule::query()->where('freelancer_id', $freelancer->id)->sole()->shift_id);
-        $this->assertSame(AttendanceStatus::OnTime, $row->fresh()->status);
+        $this->assertSame(AttendanceStatus::Late, $row->fresh()->status);
+        $this->assertSame(30, $row->fresh()->late_minutes);
     }
 
     public function test_second_approval_round_of_the_same_row_is_harmless(): void

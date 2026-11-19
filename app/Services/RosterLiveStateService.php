@@ -8,7 +8,9 @@ use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
+use App\Models\LeaveRequest;
 use App\Models\Shift;
+use App\Models\ShiftSchedule;
 use App\Models\User;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -27,14 +29,14 @@ final class RosterLiveStateService
     /** Between the two segments of a split shift: checked in and out of segment 1, segment 2 still to come. */
     public const STATE_BREAK = 'jeda';
 
+    /** Roster state of a scheduled worker on approved leave who has not checked in. */
+    public const STATE_LEAVE = 'cuti';
+
     /** Group of people who checked in on the day without a schedule. */
     public const KIND_UNSCHEDULED = 'unscheduled';
 
     /** Group of people still on last night's shift who have no schedule today. */
     public const KIND_OVERNIGHT = 'overnight';
-
-    /** Same window as AttendanceCheckService: an overnight row stays open this long after its check-in. */
-    private const OVERNIGHT_OPEN_HOURS = 20;
 
     /** Hours after last night's planned end during which an open row still means the person is working. */
     private const OVERNIGHT_GRACE_HOURS = 4;
@@ -44,6 +46,144 @@ final class RosterLiveStateService
 
     /** @var array<string, class-string<Employee|Intern|Freelancer>> */
     private const WORKER_MODELS = ['employee' => Employee::class, 'intern' => Intern::class, 'freelancer' => Freelancer::class];
+
+    public function __construct(private readonly OutletRosterService $roster) {}
+
+    /**
+     * The coordinator's day as the app and the panel show it: the dated roster
+     * ({@see OutletRosterService::roster()}) with edit and leave flags, the live state on top, and a summary
+     * of distinct people.
+     *
+     * @param  array{company_id?: int|null, division_id?: int|null, location_id?: int|null}  $filters
+     * @return array{outlets: list<array<string, mixed>>, summary: array{people_scheduled: int, people_checked_in: int}}
+     */
+    public function roster(User $user, CarbonInterface $date, array $filters = []): array
+    {
+        $outlets = $this->roster->roster($user, $date, $filters);
+        $entries = collect($outlets)->flatMap(fn (array $outlet): array => $outlet['entries']);
+        $editable = $this->editableWorkers($user, $entries->pluck('worker'));
+        $onLeave = $this->workersOnLeave($entries->pluck('worker'), $date);
+        $outlets = array_map(fn (array $outlet): array => $this->withLeaveAndEditFlags($outlet, $editable, $onLeave), $outlets);
+        $outlets = $this->apply($user, $date, $outlets, $filters);
+
+        return ['outlets' => $outlets, 'summary' => $this->summary($outlets)];
+    }
+
+    /**
+     * Distinct people of the day: everyone with at least one schedule they are expected to work (no day off,
+     * no leave), and of those everyone who checked in to at least one of them (or is still on last night's
+     * shift). Someone working at two outlets counts once.
+     *
+     * @param  list<array<string, mixed>>  $outlets
+     * @return array{people_scheduled: int, people_checked_in: int}
+     */
+    public function summary(array $outlets): array
+    {
+        $scheduled = [];
+        $checkedIn = [];
+
+        foreach ($outlets as $outlet) {
+            foreach ($outlet['entries'] as $entry) {
+                $key = $this->workerKey($entry['worker']);
+
+                if (! isset($outlet['kind']) && ! in_array($entry['state'], [OutletRosterService::STATE_DAY_OFF, self::STATE_LEAVE], true)) {
+                    $scheduled[$key] = true;
+                }
+
+                if ($this->countsAsCheckedIn($entry)) {
+                    $checkedIn[$key] = true;
+                }
+            }
+        }
+
+        return [
+            'people_scheduled' => count($scheduled),
+            'people_checked_in' => count(array_intersect_key($checkedIn, $scheduled)),
+        ];
+    }
+
+    /**
+     * Keys ("freelancer:12") of the listed workers whose schedule the user may change. Workers lent in
+     * from another brand are only shown; their own brand plans them.
+     *
+     * @param  Collection<int, array{type: string, id: int}>  $workers
+     * @return array<string, true>
+     */
+    public function editableWorkers(User $user, Collection $workers): array
+    {
+        $editable = [];
+
+        foreach ($workers->groupBy('type') as $type => $ofType) {
+            self::WORKER_MODELS[$type]::query()
+                ->whereKey($ofType->pluck('id')->unique()->all())
+                ->get()
+                ->filter(fn ($worker): bool => $user->canManageWorker($worker))
+                ->each(function ($worker) use ($type, &$editable): void {
+                    $editable["{$type}:{$worker->getKey()}"] = true;
+                });
+        }
+
+        return $editable;
+    }
+
+    /**
+     * Keys of the listed workers on approved leave that day (an approved request, or the leave row it wrote).
+     *
+     * @param  Collection<int, array{type: string, id: int}>  $workers
+     * @return array<string, true>
+     */
+    private function workersOnLeave(Collection $workers, CarbonInterface $date): array
+    {
+        $onLeave = [];
+        $day = $date->toDateString();
+
+        foreach ($workers->groupBy('type') as $type => $ofType) {
+            $ids = $ofType->pluck('id')->unique()->all();
+            $column = "{$type}_id";
+
+            LeaveRequest::query()
+                ->where('status', 'approved')
+                ->whereIn($column, $ids)
+                ->whereDate('start_date', '<=', $day)
+                ->whereDate('end_date', '>=', $day)
+                ->pluck($column)
+                ->merge(Attendance::query()->whereIn($column, $ids)->whereDate('date', $day)->where('status', AttendanceStatus::Leave)->pluck($column))
+                ->each(function ($id) use ($type, &$onLeave): void {
+                    $onLeave["{$type}:{$id}"] = true;
+                });
+        }
+
+        return $onLeave;
+    }
+
+    /**
+     * Marks each entry editable or not and shows a worker on approved leave who has not checked in as
+     * "cuti" instead of "belum absen", on every schedule of that day, so the outlet's counts and the home
+     * card stay right.
+     *
+     * @param  array{location: mixed, counts: array<string, int>, entries: list<array<string, mixed>>}  $outlet
+     * @param  array<string, true>  $editable
+     * @param  array<string, true>  $onLeave
+     * @return array<string, mixed>
+     */
+    private function withLeaveAndEditFlags(array $outlet, array $editable, array $onLeave): array
+    {
+        $outlet['counts'][self::STATE_LEAVE] = 0;
+
+        foreach ($outlet['entries'] as $index => $entry) {
+            $key = $this->workerKey($entry['worker']);
+            $outlet['entries'][$index]['can_edit'] = isset($editable[$key]);
+
+            if (isset($onLeave[$key]) && in_array($entry['state'], [OutletRosterService::STATE_MISSING, OutletRosterService::STATE_UPCOMING], true)) {
+                $outlet['entries'][$index]['state'] = self::STATE_LEAVE;
+                $outlet['counts'][$entry['state']]--;
+                $outlet['counts'][self::STATE_LEAVE]++;
+                $outlet['counts']['scheduled']--;
+            }
+        }
+
+        return $outlet;
+    }
 
     /**
      * @param  list<array{location: mixed, counts: array<string, int>, entries: list<array<string, mixed>>}>  $outlets  The roster, leave and edit flags applied.
@@ -55,6 +195,7 @@ final class RosterLiveStateService
         $date = Carbon::parse($date)->startOfDay();
         $isToday = $date->isSameDay(today());
         $overnight = $isToday ? $this->openOvernightRows($user, $date, $filters) : collect();
+        $earliest = $this->earliestEntries($outlets);
         $listed = [];
         $offToday = [];
 
@@ -62,12 +203,13 @@ final class RosterLiveStateService
             foreach ($outlet['entries'] as $entryIndex => $entry) {
                 $key = $this->workerKey($entry['worker']);
                 $entry = $this->withSplitBreak($entry, $date, $isToday);
-                $row = $overnight[$key] ?? null;
+                // Last night's open row concerns the person's first schedule of today only.
+                $row = ($earliest[$key] ?? null) === "{$outletIndex}:{$entryIndex}" ? ($overnight[$key] ?? null) : null;
 
                 if ($row !== null && $entry['check_in'] === null) {
                     $onShift = $this->isStillOnOvernightShift($row);
 
-                    if ($onShift && in_array($entry['state'], [OutletRosterService::STATE_DAY_OFF, 'cuti'], true)) {
+                    if ($onShift && in_array($entry['state'], [OutletRosterService::STATE_DAY_OFF, self::STATE_LEAVE], true)) {
                         // Off today but still on last night's shift: listed with last night's people, not as "Libur".
                         $offToday[$key] = $entry['state'];
                         unset($outlets[$outletIndex]['entries'][$entryIndex]);
@@ -102,7 +244,10 @@ final class RosterLiveStateService
         }
 
         $carriedOver = $overnight
-            ->reject(fn (Attendance $row, string $key): bool => isset($listed[$key]) || isset($unscheduled[$key]))
+            ->reject(fn (Attendance $row, string $key): bool => isset($listed[$key]) || isset($unscheduled[$key]));
+        AttendanceFigures::preload($carriedOver->values());
+
+        $carriedOver = $carriedOver
             ->map(fn (Attendance $row, string $key): array => $this->withOffTodayNote(
                 $this->withOvernightRow($this->entryFor($user, $row), $row),
                 $offToday[$key] ?? null,
@@ -118,6 +263,32 @@ final class RosterLiveStateService
     }
 
     /**
+     * Where each person's earliest schedule of the day is listed ("outlet index:entry index"), by key.
+     *
+     * @param  list<array{entries: list<array<string, mixed>>}>  $outlets
+     * @return array<string, string>
+     */
+    private function earliestEntries(array $outlets): array
+    {
+        $earliest = [];
+        $starts = [];
+
+        foreach ($outlets as $outletIndex => $outlet) {
+            foreach ($outlet['entries'] as $entryIndex => $entry) {
+                $key = $this->workerKey($entry['worker']);
+                $start = ($entry['shift']['start_time'] ?? '99:99').'|'.sprintf('%010d', (int) ($entry['schedule_id'] ?? 0));
+
+                if (! isset($starts[$key]) || $start < $starts[$key]) {
+                    $starts[$key] = $start;
+                    $earliest[$key] = "{$outletIndex}:{$entryIndex}";
+                }
+            }
+        }
+
+        return $earliest;
+    }
+
+    /**
      * Segment 1 of a split shift is done and segment 2 has not been checked in: before segment 2 starts
      * the person is on a break (and counts as checked in), after it they are missing segment 2.
      *
@@ -129,7 +300,8 @@ final class RosterLiveStateService
         $segments = $entry['segments'] ?? [];
         $rows = $entry['attendances'] ?? [];
 
-        if (count($segments) < 2 || count($rows) !== 1 || ($rows[0]['check_out'] ?? null) === null || ! in_array($entry['state'], self::NOT_STARTED, true)) {
+        // Only segment 1 worked leaves segment 2 to come; a row of segment 2 alone is that segment done.
+        if (count($segments) < 2 || count($rows) !== 1 || (int) ($rows[0]['segment'] ?? 1) !== 1 || ($rows[0]['check_out'] ?? null) === null || ! in_array($entry['state'], self::NOT_STARTED, true)) {
             return $entry;
         }
 
@@ -185,7 +357,7 @@ final class RosterLiveStateService
     private function withOffTodayNote(array $entry, ?string $stateToday): array
     {
         if ($stateToday !== null) {
-            $entry['note'] .= $stateToday === 'cuti' ? ' · hari ini cuti' : ' · hari ini libur';
+            $entry['note'] .= $stateToday === self::STATE_LEAVE ? ' · hari ini cuti' : ' · hari ini libur';
         }
 
         return $entry;
@@ -203,26 +375,19 @@ final class RosterLiveStateService
     }
 
     /**
-     * When the row's shift (or, without a shift, the company hours) ends: the morning after the row's date.
+     * When the row's scheduled hours end: its schedule snapshot, else its shift or the company hours
+     * ({@see SessionResolver::windowOf()}). For last night's row this is late yesterday or this morning.
      */
     private function plannedEnd(Attendance $row): ?Carbon
     {
-        $shift = $row->shift;
-        $end = match (true) {
-            $shift !== null && (int) $row->segment === 2 && $shift->hasSecondSegment() => $shift->second_end_time,
-            $shift !== null => $shift->end_time,
-            default => $this->worker($row)?->company?->policy?->work_end_time,
-        };
+        $end = app(SessionResolver::class)->windowOf($row)['end'] ?? null;
 
-        if (! $end) {
-            return null;
-        }
-
-        return Carbon::parse($row->date)->addDay()->setTimeFromTimeString(substr((string) $end, 0, 5));
+        return $end ? Carbon::instance($end) : null;
     }
 
     /**
-     * Yesterday's rows of a shift crossing midnight, checked in recently and still open, keyed "type:id".
+     * Yesterday's open rows that can still be checked out live (a night shift, or a closing shift that ended
+     * late in the evening, see {@see AttendanceCheckService::isLiveClosable()}), keyed "type:id".
      *
      * @param  array{company_id?: int|null, division_id?: int|null, location_id?: int|null}  $filters
      * @return Collection<string, Attendance>
@@ -233,12 +398,11 @@ final class RosterLiveStateService
             ->whereDate('date', $date->copy()->subDay()->toDateString())
             ->whereNotNull('check_in')
             ->whereNull('check_out')
-            ->where('check_in', '>=', now()->subHours(self::OVERNIGHT_OPEN_HOURS))
             ->where('status', '!=', AttendanceStatus::Rejected)
             ->with(['shift', 'location', ...$this->workerEagerLoads()])
             ->orderBy('segment')
             ->get()
-            ->filter(fn (Attendance $row): bool => $this->worker($row) !== null && $this->crossesMidnight($row))
+            ->filter(fn (Attendance $row): bool => $this->worker($row) !== null && app(AttendanceCheckService::class)->isLiveClosable($row))
             ->keyBy(fn (Attendance $row): string => $this->keyOf($row));
     }
 
@@ -251,14 +415,24 @@ final class RosterLiveStateService
      */
     private function unscheduledEntries(User $user, Carbon $date, array $filters, array $listed): array
     {
-        return $this->visibleAttendances($user, $filters)
+        $rows = $this->visibleAttendances($user, $filters)
             ->whereDate('date', $date->toDateString())
             ->whereNotNull('check_in')
             ->where('status', '!=', AttendanceStatus::Rejected)
             ->with(['shift', 'location', ...$this->workerEagerLoads()])
+            ->orderBy('schedule_sequence')
             ->orderBy('segment')
             ->get()
-            ->filter(fn (Attendance $row): bool => $this->worker($row) !== null && ! isset($listed[$this->keyOf($row)]))
+            ->filter(fn (Attendance $row): bool => $this->worker($row) !== null);
+        // The figures (overtime, missing check-out) of the whole group are read at once.
+        AttendanceFigures::preload($rows);
+        $scheduleRows = $this->scheduleRowCounts($rows->filter(fn (Attendance $row): bool => isset($listed[$this->keyOf($row)]) && $row->shift_schedule_id === null), $date);
+
+        // A listed person's row belongs to one of their entries when it is linked to a schedule, or (rows from
+        // before the link existed) when they have only one schedule that day; any other row is "Tanpa jadwal".
+        return $rows
+            ->filter(fn (Attendance $row): bool => ! isset($listed[$this->keyOf($row)])
+                || ($row->shift_schedule_id === null && ($scheduleRows[$this->keyOf($row)] ?? 0) !== 1))
             ->groupBy(fn (Attendance $row): string => $this->keyOf($row))
             ->map(function (Collection $rows) use ($user): array {
                 /** @var Attendance $last */
@@ -272,13 +446,60 @@ final class RosterLiveStateService
                     'check_out' => $row->check_out?->format('H:i'),
                     'late_minutes' => (int) $row->late_minutes,
                 ])->values()->all();
-                // Off the dated roster: on their default shift, or with no schedule at all.
-                $entry['note'] = $this->worker($last)?->shift_id ? 'Shift default' : 'Tanpa jadwal';
+                $entry['note'] = $this->unscheduledNote($last);
 
                 return $entry;
             })
             ->sortBy(fn (array $entry): string => $entry['worker']['name'])
             ->all();
+    }
+
+    /**
+     * Why a person off the dated roster is listed: on their default shift, or with no schedule at all. In a
+     * company that uses shift rosters a blank day is not scheduled, so only a check-in kept on the default
+     * shift (a fixed-hours worker) reads "Shift default".
+     */
+    private function unscheduledNote(Attendance $row): string
+    {
+        $worker = $this->worker($row);
+
+        if ($worker?->loadMissing('company.policy')->company?->policy?->uses_shift_roster) {
+            return $row->sched_source === 'default' ? 'Shift default' : 'Tanpa jadwal';
+        }
+
+        return $worker?->shift_id ? 'Shift default' : 'Tanpa jadwal';
+    }
+
+    /**
+     * How many schedule rows the workers of the attendance rows have on the date, keyed "type:id".
+     *
+     * @param  Collection<int, Attendance>  $rows
+     * @return array<string, int>
+     */
+    private function scheduleRowCounts(Collection $rows, Carbon $date): array
+    {
+        $counts = [];
+
+        foreach (array_keys(self::WORKER_MODELS) as $type) {
+            $ids = $rows->pluck("{$type}_id")->filter()->unique()->values();
+
+            if ($ids->isEmpty()) {
+                continue;
+            }
+
+            ShiftSchedule::query()
+                ->whereIn("{$type}_id", $ids)
+                ->whereDate('date', $date->toDateString())
+                ->selectRaw("{$type}_id as worker_id, count(*) as total")
+                ->groupBy("{$type}_id")
+                ->toBase()
+                ->get()
+                ->each(function (object $row) use ($type, &$counts): void {
+                    $counts["{$type}:{$row->worker_id}"] = (int) $row->total;
+                });
+        }
+
+        return $counts;
     }
 
     /**
@@ -339,6 +560,7 @@ final class RosterLiveStateService
             default => $worker->freelancer_number,
         };
         $shift = $row->shift;
+        $figures = $row->status === AttendanceStatus::Rejected ? null : AttendanceFigures::forAttendance($row);
 
         return [
             'schedule_id' => null,
@@ -354,6 +576,11 @@ final class RosterLiveStateService
             'segments' => $shift?->segments() ?? [],
             'attendances' => [],
             'can_edit' => $user->canManageWorker($worker),
+            'outlet_name' => $row->location?->name,
+            'overtime_minutes' => $figures['overtime_minutes'] ?? 0,
+            'locked' => false,
+            'schedule_count' => 0,
+            'is_missing_check_out' => (bool) ($figures['is_missing_check_out'] ?? false),
         ];
     }
 
@@ -381,35 +608,11 @@ final class RosterLiveStateService
     {
         return match (true) {
             $row->status === AttendanceStatus::Rejected => OutletRosterService::STATE_REJECTED,
-            $row->check_out !== null => OutletRosterService::STATE_DONE,
             $row->status === AttendanceStatus::PendingApproval => OutletRosterService::STATE_WAITING,
+            $row->check_out !== null => OutletRosterService::STATE_DONE,
             $row->status === AttendanceStatus::Late => OutletRosterService::STATE_LATE,
             default => OutletRosterService::STATE_PRESENT,
         };
-    }
-
-    /**
-     * The row's shift ends the next day; without a shift, the worker's company hours do.
-     */
-    private function crossesMidnight(Attendance $row): bool
-    {
-        $shift = $row->shift;
-
-        if ($shift) {
-            if ((int) $row->segment === 2 && $shift->hasSecondSegment()) {
-                return substr((string) $shift->second_end_time, 0, 5) <= substr((string) $shift->second_start_time, 0, 5);
-            }
-
-            return $shift->crossesMidnight();
-        }
-
-        $policy = $this->worker($row)?->company?->policy;
-
-        if (! $policy?->work_start_time || ! $policy->work_end_time) {
-            return false;
-        }
-
-        return substr((string) $policy->work_end_time, 0, 5) <= substr((string) $policy->work_start_time, 0, 5);
     }
 
     /**
@@ -423,26 +626,37 @@ final class RosterLiveStateService
      */
     private function counts(array $entries): array
     {
-        $counts = array_fill_keys([...array_keys(OutletRosterService::STATE_LABELS), self::STATE_BREAK, 'cuti'], 0);
+        $counts = array_fill_keys([...array_keys(OutletRosterService::STATE_LABELS), self::STATE_BREAK, self::STATE_LEAVE], 0);
         $scheduled = 0;
         $checkedIn = 0;
 
         foreach ($entries as $entry) {
             $counts[$entry['state']] = ($counts[$entry['state']] ?? 0) + 1;
 
-            if (in_array($entry['state'], [OutletRosterService::STATE_DAY_OFF, 'cuti'], true)) {
+            if (in_array($entry['state'], [OutletRosterService::STATE_DAY_OFF, self::STATE_LEAVE], true)) {
                 continue;
             }
 
             $scheduled++;
 
-            // A refused attendance is not a presence: it does not count as checked in.
-            if ($entry['check_in'] !== null && ! in_array($entry['state'], [...self::NOT_STARTED, OutletRosterService::STATE_REJECTED], true)) {
+            if ($this->countsAsCheckedIn($entry)) {
                 $checkedIn++;
             }
         }
 
         return ['scheduled' => $scheduled, 'checked_in' => $checkedIn] + $counts;
+    }
+
+    /**
+     * An entry of someone at work or done: a check-in and a state other than "belum"/"nanti". A refused
+     * attendance is not a presence, and a day off or leave is not a scheduled day.
+     *
+     * @param  array<string, mixed>  $entry
+     */
+    private function countsAsCheckedIn(array $entry): bool
+    {
+        return $entry['check_in'] !== null
+            && ! in_array($entry['state'], [...self::NOT_STARTED, OutletRosterService::STATE_REJECTED, OutletRosterService::STATE_DAY_OFF, self::STATE_LEAVE], true);
     }
 
     /**

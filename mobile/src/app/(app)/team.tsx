@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { DaySwitcher } from '@/components/DaySwitcher';
-import { ScheduleSheet, type ScheduleTarget } from '@/components/ScheduleSheet';
+import { ScheduleSheet, type ScheduleSlot, type ScheduleTarget } from '@/components/ScheduleSheet';
 import { TeamFreelancerList } from '@/components/TeamFreelancerList';
 import { TeamRecapView } from '@/components/TeamRecapView';
 import { WeekGrid } from '@/components/WeekGrid';
@@ -13,7 +13,7 @@ import { useCurrentDate } from '@/hooks/useCurrentDate';
 import { errorMessage, teamApi, type RosterEntry, type TeamFreelancer } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
-import { BORROWED_READ_ONLY, canEditSchedule, followToday, outletTitle, rosterBadge, rosterEntryKey, rosterSubtitle, rosterSummary, shiftDate } from '@/lib/team';
+import { BORROWED_READ_ONLY, canEditSchedule, entrySupportsMultipleSchedules, followToday, outletTitle, rosterBadge, rosterEntryKey, rosterLine, rosterSubtitle, rosterSummary, shiftDate } from '@/lib/team';
 
 type TeamView = 'schedule' | 'week' | 'freelancers' | 'recap';
 
@@ -43,18 +43,51 @@ export default function TeamScreen() {
   /** A worker lent in from another brand is only shown; tapping explains who plans them. */
   const editEntry = (entry: RosterEntry) => (canEditSchedule(entry) ? openEntry(entry) : Alert.alert(entry.worker.name, BORROWED_READ_ONLY));
 
-  const openEntry = (entry: RosterEntry) =>
+  /** The worker's scheduled entries of the shown day (several on a day with more than one schedule). */
+  const entriesOf = (type: RosterEntry['worker']['type'], id: number): RosterEntry[] =>
+    roster.data?.outlets.flatMap((outlet) => outlet.entries).filter((item) => item.worker.type === type && item.worker.id === id && item.schedule_id !== null) ?? [];
+
+  const slotOf = (entry: RosterEntry): ScheduleSlot => ({
+    schedule_id: entry.schedule_id,
+    shift_id: entry.shift?.id ?? null,
+    location_id: entry.location_id,
+    section: entry.section,
+    is_day_off: entry.state === 'libur',
+    locked: entry.locked,
+    label: [rosterLine(entry), entry.outlet_name].filter(Boolean).join(' · '),
+  });
+
+  /** Edits exactly the tapped schedule; the worker's other schedules of the day stay one tap away. */
+  const openEntry = (entry: RosterEntry, siblings: RosterEntry[] = entriesOf(entry.worker.type, entry.worker.id)) =>
     setTarget({
       worker: { type: entry.worker.type, id: entry.worker.id, name: entry.worker.name, company_id: entry.worker.company_id },
       date,
-      current: { shift_id: entry.shift?.id ?? null, location_id: entry.location_id, section: entry.section, is_day_off: entry.state === 'libur' },
+      current: slotOf(entry),
+      // Someone listed without a schedule (checked in off the roster) has no rows to list.
+      schedules: entry.schedule_id !== null && siblings.length > 0 ? siblings.map(slotOf) : undefined,
+      // A newer server says how many schedules the worker has that day; an unscheduled entry has none to add to.
+      supportsMulti: entrySupportsMultipleSchedules(entry),
     });
 
-  /** Opens the freelancer's day: their schedule when they have one, otherwise their brand's outlet. */
+  /** Opens the freelancer's day: their schedules when they have any, otherwise their brand's outlet. */
   const scheduleFreelancer = (freelancer: TeamFreelancer) => {
-    const entry = roster.data?.outlets.flatMap((outlet) => outlet.entries).find((item) => item.worker.type === 'freelancer' && item.worker.id === freelancer.id);
-    if (entry) {
-      editEntry(entry);
+    const entries = entriesOf('freelancer', freelancer.id);
+    if (entries.length === 1) {
+      editEntry(entries[0]);
+      return;
+    }
+    if (entries.length > 1) {
+      if (!entries.every(canEditSchedule)) {
+        Alert.alert(freelancer.name, BORROWED_READ_ONLY);
+        return;
+      }
+      // Several schedules: the sheet lists them first.
+      setTarget({
+        worker: { type: 'freelancer', id: freelancer.id, name: freelancer.name, company_id: freelancer.company_id },
+        date,
+        schedules: entries.map(slotOf),
+        supportsMulti: true,
+      });
       return;
     }
     const brandOutlets = options.data?.companies.find((company) => company.id === freelancer.company_id)?.outlets.filter((outlet) => outlet.brand === freelancer.brand) ?? [];

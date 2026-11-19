@@ -58,8 +58,6 @@ class StoreLeaveRequest extends FormRequest
 
                 $startDate = Carbon::parse($this->input('start_date'));
                 $endDate = Carbon::parse($this->input('end_date'));
-                $daysCount = (int) $startDate->diffInDays($endDate) + 1;
-
                 foreach (LeaveRequest::periodErrors($startDate, $endDate) as $field => $message) {
                     $validator->errors()->add($field, $message);
 
@@ -67,6 +65,13 @@ class StoreLeaveRequest extends FormRequest
                 }
 
                 $leaveService = app(AnnualLeaveService::class);
+                $daysCount = count($leaveService->chargedDates($profile, $startDate, $endDate));
+
+                if ($daysCount === 0) {
+                    $validator->errors()->add('start_date', AnnualLeaveService::NO_WORKDAY_MESSAGE.'.');
+
+                    return;
+                }
 
                 if ($error = $leaveService->validationError($profile, $this->input('leave_type'), $daysCount, startDate: $startDate, endDate: $endDate)
                     ?? $leaveService->overlapError($profile, $startDate, $endDate)) {

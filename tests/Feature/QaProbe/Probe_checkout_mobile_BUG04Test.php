@@ -21,8 +21,9 @@ use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 /**
- * BUG-04: a 15:00-23:00 shift whose check-out was forgotten. Decided: at 01:00 the next day the
- * forgot_check_out push and the Today card both say "Kemarin belum absen pulang" and point to a
+ * BUG-04: a 15:00-23:00 shift whose check-out was forgotten. At 01:00 the next day the shift is still
+ * inside its check-out window (scheduled end + 6 h, until 05:00): the forgot_check_out push and the Today
+ * card both offer its check-out. Past the window both say "Kemarin belum absen pulang" and point to a
  * correction; today's check-in stays allowed, but only from 60 minutes before today's shift.
  */
 class Probe_checkout_mobile_BUG04Test extends TestCase
@@ -64,15 +65,24 @@ class Probe_checkout_mobile_BUG04Test extends TestCase
         Sanctum::actingAs($employee->user);
         $this->postJson('/api/v1/attendance/check-in', [])->assertSuccessful();
 
-        // 01:00 the next day: the forgot_check_out push (end 23:00 + 120 min) asks for a correction.
+        // 01:00 the next day: the forgot_check_out push (end 23:00 + 120 min) still offers the check-out,
+        // because a shift ending 23:00 can be checked out live until 05:00.
         $this->travelTo(Carbon::parse('2026-11-17 01:00'));
         config(['services.onesignal.app_id' => 'app-id', 'services.onesignal.rest_api_key' => 'rest-key']);
         $sent = app(AttendanceReminderService::class)->sendDue(now());
         $this->assertSame(1, $sent[AttendanceReminderService::FORGOT_CHECK_OUT]);
-        Notification::assertSentTo($employee->user, AttendanceReminderNotification::class, fn (AttendanceReminderNotification $notification): bool => $notification->title === 'Kemarin belum absen pulang'
-            && $notification->data['action'] === 'correction');
+        Notification::assertSentTo($employee->user, AttendanceReminderNotification::class, fn (AttendanceReminderNotification $notification): bool => $notification->title === 'Anda belum absen pulang'
+            && $notification->data['action'] === 'check_out');
 
-        // The Today card agrees with that push: a notice about yesterday, and today's check-in stays allowed.
+        // The Today card agrees with that push: yesterday's row is offered for check-out, no notice.
+        $this->getJson('/api/v1/attendance/today')
+            ->assertOk()
+            ->assertJsonPath('has_checked_in', true)
+            ->assertJsonPath('attendance.date', '2026-11-16')
+            ->assertJsonPath('unclosed_previous', null);
+
+        // Past the window (05:00) the card shows the notice about yesterday instead.
+        $this->travelTo(Carbon::parse('2026-11-17 05:01'));
         $this->getJson('/api/v1/attendance/today')
             ->assertOk()
             ->assertJsonPath('has_checked_in', false)
@@ -80,7 +90,7 @@ class Probe_checkout_mobile_BUG04Test extends TestCase
             ->assertJsonPath('unclosed_previous.check_in', '15:00')
             ->assertJsonPath('unclosed_previous.correction_pending', false);
 
-        // A check-in at 01:00 for today's 15:00 shift is refused (check-in opens 14:00), so nothing is recorded on time.
+        // A check-in now for today's 15:00 shift is refused (check-in opens 14:00), so nothing is recorded on time.
         $this->postJson('/api/v1/attendance/check-in', [])->assertStatus(422);
         $this->assertNull(Attendance::where('employee_id', $employee->id)->whereDate('date', '2026-11-17')->first());
     }

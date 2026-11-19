@@ -7,6 +7,11 @@ use App\Filament\Resources\AttendanceCorrections\Pages\CreateAttendanceCorrectio
 use App\Filament\Resources\AttendanceCorrections\Pages\EditAttendanceCorrection;
 use App\Filament\Resources\AttendanceCorrections\Pages\ListAttendanceCorrections;
 use App\Models\AttendanceCorrection;
+use App\Models\CompanyLocation;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
+use App\Models\Shift;
 use App\Services\ApprovalFlowService;
 use App\Services\DataAccessService;
 use App\Services\FileNamingService;
@@ -18,12 +23,14 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TimePicker;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -114,7 +121,7 @@ class AttendanceCorrectionResource extends Resource
                                 ->displayFormat('H:i')
                                 ->format('H:i')
                                 ->seconds(false)
-                                ->requiredWithout('corrected_check_out')
+                                ->requiredWithout(fn (Get $get, ?AttendanceCorrection $record): array => static::timeRequiredWithout('corrected_check_out', $get, $record))
                                 ->validationMessages(['required_without' => 'Isi jam masuk atau jam pulang yang benar.']),
 
                             TimePicker::make('corrected_check_out')
@@ -123,8 +130,21 @@ class AttendanceCorrectionResource extends Resource
                                 ->displayFormat('H:i')
                                 ->format('H:i')
                                 ->seconds(false)
-                                ->requiredWithout('corrected_check_in')
+                                ->requiredWithout(fn (Get $get, ?AttendanceCorrection $record): array => static::timeRequiredWithout('corrected_check_in', $get, $record))
                                 ->validationMessages(['required_without' => 'Isi jam masuk atau jam pulang yang benar.']),
+
+                            Select::make('corrected_shift_id')
+                                ->label('Shift yang Sebenarnya Berlaku (Opsional)')
+                                ->helperText('Isi bila jadwal Anda hari itu tidak sesuai dengan shift yang dijalani.')
+                                ->options(fn (?AttendanceCorrection $record): array => static::shiftOptions($record))
+                                ->searchable()
+                                ->nullable(),
+
+                            Select::make('corrected_company_location_id')
+                                ->label('Outlet yang Sebenarnya (Opsional)')
+                                ->options(fn (?AttendanceCorrection $record): array => static::outletOptions($record))
+                                ->searchable()
+                                ->nullable(),
 
                             FileUpload::make('attachment')
                                 ->label('Bukti Pendukung / Lampiran (Opsional)')
@@ -178,6 +198,18 @@ class AttendanceCorrectionResource extends Resource
                     ->label('Usulan Out')
                     ->time('H:i')
                     ->placeholder('-'),
+
+                TextColumn::make('origin')
+                    ->label('Asal')
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => $state === AttendanceCorrection::ORIGIN_ADMIN ? 'Edit admin' : 'Pengajuan')
+                    ->color(fn (?string $state): string => $state === AttendanceCorrection::ORIGIN_ADMIN ? 'gray' : 'info')
+                    ->toggleable(),
+
+                TextColumn::make('correctedShift.name')
+                    ->label('Usulan Shift')
+                    ->placeholder('-')
+                    ->toggleable(),
 
                 BadgeColumn::make('status')
                     ->label('Status Request')
@@ -292,6 +324,69 @@ class AttendanceCorrectionResource extends Resource
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    /**
+     * The other time, whose absence makes a time picker required; none when the correction carries the
+     * shift or the outlet, so a correction of the schedule alone needs no time, as over the API. An
+     * admin's record of an edit or deletion keeps the times it was written with (a deletion has none),
+     * so it needs none either.
+     *
+     * @return list<string>
+     */
+    public static function timeRequiredWithout(string $otherTime, Get $get, ?AttendanceCorrection $record): array
+    {
+        if ($record?->isAdminRecord() || filled($get('corrected_shift_id')) || filled($get('corrected_company_location_id'))) {
+            return [];
+        }
+
+        return [$otherTime];
+    }
+
+    public static function shiftOptions(?AttendanceCorrection $record): array
+    {
+        $worker = $record?->getWorkerProfile() ?? static::ownProfile();
+
+        if (! $worker) {
+            return [];
+        }
+
+        return Shift::query()->active()->where('company_id', $worker->company_id)->orderBy('start_time')->get()
+            ->mapWithKeys(fn (Shift $shift): array => [$shift->id => trim("{$shift->name} (".substr((string) $shift->start_time, 0, 5).' - '.substr((string) $shift->end_time, 0, 5).')')])
+            ->all();
+    }
+
+    /**
+     * The active outlets a correction of the worker may name: the worker's company and the other
+     * companies of the same client, as a cover check-in may name.
+     *
+     * @return array<int, string>
+     */
+    public static function outletOptions(?AttendanceCorrection $record): array
+    {
+        $worker = $record?->getWorkerProfile() ?? static::ownProfile();
+
+        if (! $worker) {
+            return [];
+        }
+
+        $tenantId = $worker->loadMissing('company')->company?->tenant_id;
+
+        return CompanyLocation::query()
+            ->where('is_active', true)
+            ->where(fn (Builder $query) => $query
+                ->where('company_id', $worker->company_id)
+                ->when($tenantId !== null, fn (Builder $sameClient) => $sameClient->orWhereHas('company', fn (Builder $company) => $company->where('tenant_id', $tenantId))))
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->all();
+    }
+
+    private static function ownProfile(): Employee|Intern|Freelancer|null
+    {
+        $user = auth()->user();
+
+        return $user?->employee ?? $user?->intern ?? $user?->freelancer;
     }
 
     public static function getPages(): array

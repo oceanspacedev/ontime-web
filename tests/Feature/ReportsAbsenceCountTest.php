@@ -163,9 +163,11 @@ class ReportsAbsenceCountTest extends TestCase
      */
     private function summary(string $from, string $until): array
     {
-        return $this->getJson("/api/v1/laporan-absensi?start_date={$from}&end_date={$until}")
-            ->assertOk()
-            ->json('summary');
+        // The four figures this class pins; the summary has more keys since the ledger (see OldClientContractTest).
+        return array_intersect_key(
+            $this->getJson("/api/v1/laporan-absensi?start_date={$from}&end_date={$until}")->assertOk()->json('summary'),
+            array_flip(['total_present', 'total_late', 'total_leave', 'total_absent']),
+        );
     }
 
     private function shift(): Shift

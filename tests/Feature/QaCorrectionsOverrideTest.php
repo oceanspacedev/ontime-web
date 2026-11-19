@@ -85,13 +85,26 @@ class QaCorrectionsOverrideTest extends TestCase
         $this->assertSame(2, Attendance::where('employee_id', $employee->id)->count());
     }
 
-    public function test_check_out_only_correction_without_an_open_segment_still_follows_the_break_midpoint(): void
+    /**
+     * WP12 (owner sign-off): a check-out alone without any check-in of the day creates no row (refused);
+     * a correction with the check-in still follows the break midpoint to the second part.
+     */
+    public function test_correction_without_an_open_segment_still_follows_the_break_midpoint(): void
     {
         [, $employee] = $this->makeWorker();
         $split = Shift::create(['company_id' => $this->company->id, 'name' => 'Split', 'code' => 'S', 'start_time' => '07:45', 'end_time' => '13:00', 'second_start_time' => '17:45', 'second_end_time' => '22:00', 'late_tolerance_minutes' => 0]);
         ShiftSchedule::create(['employee_id' => $employee->id, 'date' => self::D, 'shift_id' => $split->id]);
 
-        AttendanceCorrection::create(['employee_id' => $employee->id, 'date' => self::D, 'corrected_check_out' => '22:00', 'reason' => 'Lupa absen', 'status' => 'pending'])->applyCorrection();
+        try {
+            AttendanceCorrection::create(['employee_id' => $employee->id, 'date' => self::D, 'corrected_check_out' => '22:00', 'reason' => 'Lupa absen', 'status' => 'pending'])->applyCorrection();
+            $this->fail('A check-out alone must not create a row without a check-in.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('Isi juga jam masuk', $exception->errors()['approve'][0]);
+        }
+
+        $this->assertSame(0, Attendance::where('employee_id', $employee->id)->count());
+
+        AttendanceCorrection::create(['employee_id' => $employee->id, 'date' => self::D, 'corrected_check_in' => '17:45', 'corrected_check_out' => '22:00', 'reason' => 'Lupa absen', 'status' => 'pending'])->applyCorrection();
 
         $this->assertSame(2, Attendance::where('employee_id', $employee->id)->sole()->segment);
     }

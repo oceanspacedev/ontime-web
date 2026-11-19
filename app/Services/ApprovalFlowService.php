@@ -539,10 +539,15 @@ class ApprovalFlowService
             ? ($requestModel->getWorkerProfile()?->full_name ?? 'Pengguna')
             : ($requestModel->employee?->full_name ?? 'Pengguna');
 
+        // A round about the check-out only says so: rejecting it voids the check-out, not the check-in.
+        $body = $requestModel instanceof Attendance && $requestModel->pending_punch === Attendance::PUNCH_CHECK_OUT
+            ? "Absen pulang {$workerName} menunggu persetujuan Anda. Absen masuknya sudah tercatat; menolak hanya membatalkan absen pulang."
+            : "Pengajuan {$requestType} dari {$workerName} menunggu persetujuan Anda.";
+
         foreach ($this->getUsersAuthorizedForCurrentStep($requestModel) as $approverUser) {
             Notification::make()
                 ->title('Pengajuan Baru Membutuhkan Persetujuan Anda')
-                ->body("Pengajuan {$requestType} dari {$workerName} menunggu persetujuan Anda.")
+                ->body($body)
                 ->icon('heroicon-o-bell')
                 ->color('warning')
                 ->sendToDatabase($approverUser);
@@ -674,6 +679,12 @@ class ApprovalFlowService
                 $this->assertLeaveCanBeApproved($request);
             }
 
+            // Overtime is work: it is not approved onto a date an approved leave of the worker is charged for.
+            if ($request instanceof OvertimeRequest && $isFinalApproval && ($worker = $request->getWorkerProfile())
+                && $error = OvertimeRequestService::leaveDateError($worker, $request->date)) {
+                throw ValidationException::withMessages(['approve' => $error]);
+            }
+
             // A Tukar Shift is only approved when it can be applied: the schedules are re-checked under row
             // locks and swapped here. One that can no longer be applied ends as failed (or expired) instead of
             // waiting for an approval that can never succeed; the approver is told why once that is saved.
@@ -762,8 +773,11 @@ class ApprovalFlowService
      *
      * - annual leave: the worker must still be entitled, the request may not overlap another pending
      *   or approved leave, and it must fit the quota of each year it touches;
-     * - any leave: no leave day may already hold a check-in (any segment, also one waiting for
+     * - any leave: no charged leave day may already hold a check-in (any segment, also one waiting for
      *   geofence approval). The approver rejects the leave, or the worker changes the dates.
+     *
+     * The charged dates are recounted from the roster first and stored with days_count
+     * ({@see AnnualLeaveService::chargedDates()}); a period without a single working day is refused.
      *
      * Must be called inside a transaction.
      *
@@ -776,6 +790,18 @@ class ApprovalFlowService
         if ($profile) {
             $profile->newQuery()->withoutGlobalScopes()->whereKey($profile->getKey())->lockForUpdate()->first();
         }
+
+        // The days are recounted from the roster as it stands now and frozen: days_count, the leave rows and
+        // every report use this list from here on. The quota below is checked with the recount.
+        $chargedDates = app(AnnualLeaveService::class)->chargedDates($profile, $leave->start_date, $leave->end_date);
+
+        if ($chargedDates === []) {
+            throw ValidationException::withMessages([
+                'approve' => AnnualLeaveService::NO_WORKDAY_MESSAGE.' menurut jadwal saat ini. Tolak pengajuan ini.',
+            ]);
+        }
+
+        $leave->forceFill(['charged_dates' => $chargedDates, 'days_count' => count($chargedDates)])->save();
 
         if ($error = app(AnnualLeaveService::class)->approvalError($leave, lockRows: true)) {
             throw ValidationException::withMessages(['approve' => $error]);
@@ -791,6 +817,9 @@ class ApprovalFlowService
                 'approve' => "{$name} sudah melakukan presensi pada tanggal {$dates}. Tolak pengajuan ini, atau minta pekerja mengubah tanggal cuti/izinnya.",
             ]);
         }
+
+        // Overtime and leave never count on the same day: an overtime approved first holds its date.
+        $leave->refuseApprovedOvertimeOn($chargedDates);
     }
 
     /**

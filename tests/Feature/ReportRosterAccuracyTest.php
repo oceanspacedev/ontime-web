@@ -71,6 +71,7 @@ class ReportRosterAccuracyTest extends TestCase
     public function test_api_counts_only_rostered_no_shows_for_a_weekend_worker(): void
     {
         $weekend = $this->freelancer('Akhir Pekan');
+        $this->rosteredBefore($weekend);
         $this->schedule($weekend, '2026-11-07');
         $this->schedule($weekend, '2026-11-08');
 
@@ -78,6 +79,9 @@ class ReportRosterAccuracyTest extends TestCase
         $this->assertSame(2, $this->recapRow($weekend)['absent_days']);
     }
 
+    /**
+     * A fixed-hours company (uses_shift_roster off); a company on shift rosters: RosterCompanyUnscheduledTest.
+     */
     public function test_api_keeps_the_policy_week_for_a_worker_without_any_roster(): void
     {
         $this->freelancer('Tanpa Jadwal');
@@ -89,6 +93,7 @@ class ReportRosterAccuracyTest extends TestCase
     public function test_api_mixes_rostered_and_unrostered_workers_without_leaking_between_them(): void
     {
         $rostered = $this->freelancer('Berjadwal');
+        $this->rosteredBefore($rostered);
         $this->freelancer('Tanpa Jadwal');
         $this->schedule($rostered, '2026-11-03');
         ShiftSchedule::create(['freelancer_id' => $rostered->id, 'date' => '2026-11-04', 'is_day_off' => true]);
@@ -100,21 +105,23 @@ class ReportRosterAccuracyTest extends TestCase
     public function test_a_worker_is_rostered_from_their_first_schedule_onward_whatever_the_range(): void
     {
         $worker = $this->freelancer('Jadwal Mulai Tengah Bulan');
-        // No roster Mon 2 - Fri 6 (policy week); rostered from Tue 10, so from Mon 9 on only Tue 10 is a working day.
+        // No roster Mon 2 - Mon 9 (policy week, the Monday before the first row included); rostered from Tue 10 on,
+        // where only Tue 10 is a working day.
         $this->schedule($worker, '2026-11-10');
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-11', 'is_day_off' => true]);
         $this->schedule($worker, '2026-11-20');
 
         // The same worker-days give the same no-shows whatever the range (Fri 20 is still ahead).
         $this->assertSame(5, $this->summary('2026-11-02', '2026-11-06')['total_absent']);
-        $this->assertSame(5 + 1, $this->summary('2026-11-02', '2026-11-14')['total_absent']);
-        $this->assertSame(5 + 1, $this->summary('2026-11-02', '2026-11-30')['total_absent']);
-        $this->assertSame(1, $this->summary('2026-11-09', '2026-11-30')['total_absent']);
+        $this->assertSame(5 + 1 + 1, $this->summary('2026-11-02', '2026-11-14')['total_absent']);
+        $this->assertSame(5 + 1 + 1, $this->summary('2026-11-02', '2026-11-30')['total_absent']);
+        $this->assertSame(1 + 1, $this->summary('2026-11-09', '2026-11-30')['total_absent']);
     }
 
     public function test_api_does_not_count_a_rejected_check_in_on_a_rostered_day_off_as_absent(): void
     {
         $worker = $this->freelancer('Ditolak Saat Libur');
+        $this->rosteredBefore($worker);
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'is_day_off' => true]);
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 08:00:00', 'status' => 'rejected', 'late_minutes' => 0]);
 
@@ -135,6 +142,7 @@ class ReportRosterAccuracyTest extends TestCase
     public function test_api_counts_a_rejected_check_in_on_a_rostered_working_day_once(): void
     {
         $worker = $this->freelancer('Ditolak Saat Kerja');
+        $this->rosteredBefore($worker);
         $this->schedule($worker, '2026-11-06');
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 08:00:00', 'status' => 'rejected', 'late_minutes' => 0]);
 
@@ -146,6 +154,7 @@ class ReportRosterAccuracyTest extends TestCase
     {
         Holiday::create(['name' => 'Libur Nasional', 'date' => '2026-11-10', 'is_national' => true]);
         $rostered = $this->freelancer('Berjadwal');
+        $this->rosteredBefore($rostered);
         $this->freelancer('Tanpa Jadwal');
         // A shift on the holiday makes it a working day; a shift today is not a no-show yet.
         $this->schedule($rostered, '2026-11-10');
@@ -172,6 +181,7 @@ class ReportRosterAccuracyTest extends TestCase
     public function test_a_worked_day_off_is_present_and_not_also_off(): void
     {
         $worker = $this->freelancer('Masuk Saat Libur');
+        $this->rosteredBefore($worker);
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'is_day_off' => true]);
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-07', 'is_day_off' => true]);
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 08:00:00', 'check_out' => '2026-11-06 12:00:00', 'status' => 'on_time', 'late_minutes' => 0]);
@@ -187,6 +197,7 @@ class ReportRosterAccuracyTest extends TestCase
     public function test_a_rejected_check_in_on_a_day_off_stays_a_day_off(): void
     {
         $worker = $this->freelancer('Ditolak Saat Libur');
+        $this->rosteredBefore($worker);
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'is_day_off' => true]);
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 08:00:00', 'status' => 'rejected', 'late_minutes' => 0]);
 
@@ -327,9 +338,11 @@ class ReportRosterAccuracyTest extends TestCase
      */
     private function summary(string $from, string $until): array
     {
-        return $this->getJson("/api/v1/laporan-absensi?start_date={$from}&end_date={$until}")
-            ->assertOk()
-            ->json('summary');
+        // The four figures this class pins; the summary has more keys since the ledger (see OldClientContractTest).
+        return array_intersect_key(
+            $this->getJson("/api/v1/laporan-absensi?start_date={$from}&end_date={$until}")->assertOk()->json('summary'),
+            array_flip(['total_present', 'total_late', 'total_leave', 'total_absent']),
+        );
     }
 
     /**
@@ -361,5 +374,15 @@ class ReportRosterAccuracyTest extends TestCase
     private function schedule(Freelancer $worker, string $date, ?Shift $shift = null): ShiftSchedule
     {
         return ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => $date, 'shift_id' => ($shift ?? $this->morning)->id, 'company_location_id' => $this->outlet->id]);
+    }
+
+    /**
+     * A worker on a roster since October (a day off on Monday 26 October, outside every range and the
+     * November recap): fixed hours end from the date of the first roster row, so the weekdays of November
+     * read the roster only.
+     */
+    private function rosteredBefore(Freelancer $worker): void
+    {
+        ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-10-26', 'is_day_off' => true]);
     }
 }

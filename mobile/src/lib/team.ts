@@ -96,12 +96,13 @@ function checkedIn(outlet: RosterOutlet): number {
 
 /**
  * "3 dari 8 orang sudah absen" for today and earlier, "8 orang terjadwal" for later days, followed by
- * who else is there: "· 1 di luar roster", "· 1 dari shift semalam".
+ * who else is there: "· 1 di luar roster", "· 1 dari shift semalam". A newer server counts distinct people
+ * in `summary`, so someone on two outlets counts once; older servers only send the per-outlet counts.
  */
 export function rosterSummary(roster: TeamRoster, today: string = toDateString(new Date())): string {
   const scheduled = roster.outlets.filter((outlet) => !outlet.kind);
-  const people = scheduled.reduce((sum, outlet) => sum + outlet.counts.scheduled, 0);
-  const present = scheduled.reduce((sum, outlet) => sum + checkedIn(outlet), 0);
+  const people = roster.summary?.people_scheduled ?? scheduled.reduce((sum, outlet) => sum + outlet.counts.scheduled, 0);
+  const present = roster.summary?.people_checked_in ?? scheduled.reduce((sum, outlet) => sum + checkedIn(outlet), 0);
   const extra = (kind: RosterOutlet['kind']) => roster.outlets.filter((outlet) => outlet.kind === kind).reduce((sum, outlet) => sum + outlet.entries.length, 0);
   const others = [extra('unscheduled') > 0 ? `${extra('unscheduled')} di luar roster` : null, extra('overnight') > 0 ? `${extra('overnight')} dari shift semalam` : null].filter(
     (part): part is string => part !== null,
@@ -148,7 +149,10 @@ export function teamAttention(roster: TeamRoster): string | undefined {
   return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
-/** "Masuk 18/20 · 2 tidak hadir · 3× telat · 1× pulang cepat · 152,5 jam · lembur 6 jam". */
+/**
+ * "Masuk 18/20 · 2 tidak hadir · 3× telat · 1× pulang cepat · 152,5 jam · lembur 6 jam · 2 hari cuti ·
+ * 1× belum absen pulang". Leave and missed check-outs are missing on older servers.
+ */
 export function recapLine(row: TeamRecapRow): string {
   const hours = row.worked_hours.toLocaleString('id-ID', { maximumFractionDigits: 2 });
   const overtimeHours = row.overtime_hours ?? 0;
@@ -160,6 +164,8 @@ export function recapLine(row: TeamRecapRow): string {
     (row.early_leave_days ?? 0) > 0 ? `${row.early_leave_days}× pulang cepat` : null,
     `${hours} jam`,
     overtimeHours > 0 ? `lembur ${overtimeHours.toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam` : null,
+    (row.leave_days ?? 0) > 0 ? `${row.leave_days} hari cuti` : null,
+    (row.missing_check_out_days ?? 0) > 0 ? `${row.missing_check_out_days}× belum absen pulang` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -172,13 +178,51 @@ export function weekStart(date: string): string {
   return shiftDate(date, day === 0 ? -6 : 1 - day);
 }
 
-/** What one cell of the weekly grid says: the shift code ("SP"), "OFF", or "–" when nothing is scheduled. */
-export function weekCellText(cell: Pick<WeekCell, 'is_day_off' | 'shift'> | undefined): string {
-  if (!cell) {
-    return '–';
-  }
+/** One schedule's code in the grid: the shift code ("SP"), its name without a code, "OFF", or "–". */
+function cellCode(cell: Pick<WeekCell, 'is_day_off' | 'shift'>): string {
   if (cell.is_day_off) {
     return 'OFF';
   }
   return cell.shift ? cell.shift.code || cell.shift.name : '–';
+}
+
+/**
+ * What one cell of the weekly grid says: the shift code ("SP"), "OFF", or "–" when nothing is scheduled.
+ * A day with several schedules (newer servers send them all in `day_schedules`) joins the codes: "P+M".
+ */
+export function weekCellText(cell: Pick<WeekCell, 'is_day_off' | 'shift'> | undefined, schedules?: Pick<WeekCell, 'is_day_off' | 'shift'>[]): string {
+  if (schedules && schedules.length > 1) {
+    return schedules.map(cellCode).join('+');
+  }
+  if (!cell) {
+    return '–';
+  }
+  return cellCode(cell);
+}
+
+/** Every schedule of a worker's date: the server's full list when it sends one, else the single cell. */
+export function daySchedules(row: { days: Record<string, WeekCell>; day_schedules?: Record<string, WeekCell[]> }, date: string): WeekCell[] {
+  const listed = row.day_schedules?.[date];
+  if (listed && listed.length > 0) {
+    return listed;
+  }
+  const cell = row.days[date];
+  return cell ? [cell] : [];
+}
+
+/** The small marks under a cell: "cuti" on a leave date, "terkunci" when a schedule already has attendance. */
+export function weekCellMarks(schedules: Pick<WeekCell, 'locked' | 'on_leave'>[]): { onLeave: boolean; locked: boolean } {
+  return {
+    onLeave: schedules.some((cell) => cell.on_leave === true),
+    locked: schedules.some((cell) => cell.locked === true),
+  };
+}
+
+/**
+ * Whether the schedule sheet may offer "Tambah jadwal" for this roster entry: only a newer server (it sends
+ * schedule_count) and only for a real schedule row. Someone listed "Tanpa jadwal" or still on last night's
+ * shift has schedule_id null and schedule_count 0, and their day is set with "Simpan" alone.
+ */
+export function entrySupportsMultipleSchedules(entry: Pick<RosterEntry, 'schedule_id' | 'schedule_count'>): boolean {
+  return entry.schedule_id !== null && entry.schedule_count !== undefined && entry.schedule_count >= 1;
 }

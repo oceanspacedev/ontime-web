@@ -21,6 +21,32 @@ class UpdateAttendanceCorrectionRequest extends FormRequest
             'corrected_check_out' => ['nullable', 'date_format:'.AttendanceCorrection::TIME_INPUT_FORMATS],
             'reason' => ['sometimes', 'required', 'string', 'max:1000'],
             'attachment' => ['nullable', 'file', 'mimes:jpeg,png,jpg,pdf,doc,docx', 'max:5120'],
+            ...StoreAttendanceCorrectionRequest::targetRules(),
+        ];
+    }
+
+    /**
+     * The checked draft, whose resolved target and corrected fields the controller saves.
+     */
+    private ?AttendanceCorrection $draft = null;
+
+    /**
+     * The fields the controller saves besides those sent: the target kept or resolved again for the
+     * changed correction ({@see AttendanceCorrection::resolveTargetOnUpdate()}) and the schedule corrected.
+     *
+     * @return array<string, mixed>
+     */
+    public function correctionAttributes(): array
+    {
+        if (! $this->draft) {
+            return [];
+        }
+
+        return [
+            ...$this->draft->targetAttributes(),
+            'check_out_next_day' => (bool) $this->draft->check_out_next_day,
+            'corrected_shift_id' => $this->draft->corrected_shift_id,
+            'corrected_company_location_id' => $this->draft->corrected_company_location_id,
         ];
     }
 
@@ -39,6 +65,7 @@ class UpdateAttendanceCorrectionRequest extends FormRequest
             'attachment.file' => 'Lampiran harus berupa berkas.',
             'attachment.mimes' => 'Lampiran harus berformat JPG, PNG, PDF, atau Word.',
             'attachment.max' => 'Lampiran maksimal berukuran 5 MB.',
+            ...StoreAttendanceCorrectionRequest::targetMessages(),
         ];
     }
 
@@ -61,8 +88,10 @@ class UpdateAttendanceCorrectionRequest extends FormRequest
 
                 $checkIn = $this->exists('corrected_check_in') ? $this->input('corrected_check_in') : $correction->corrected_check_in;
                 $checkOut = $this->exists('corrected_check_out') ? $this->input('corrected_check_out') : $correction->corrected_check_out;
+                $shiftId = $this->exists('corrected_shift_id') ? $this->input('corrected_shift_id') : $correction->corrected_shift_id;
+                $locationId = $this->exists('corrected_company_location_id') ? $this->input('corrected_company_location_id') : $correction->corrected_company_location_id;
 
-                if (blank($checkIn) && blank($checkOut)) {
+                if (blank($checkIn) && blank($checkOut) && blank($shiftId) && blank($locationId)) {
                     $validator->errors()->add('corrected_check_in', 'Isi jam masuk atau jam pulang yang benar.');
 
                     return;
@@ -78,11 +107,25 @@ class UpdateAttendanceCorrectionRequest extends FormRequest
                 // Keys present in the request are taken as sent, an explicit null included: the
                 // controller clears that time, so the draft must be checked without it too. Keys
                 // left out keep the stored value, exactly as the controller saves them.
-                $draft->fill($this->only(['date', 'corrected_check_in', 'corrected_check_out']));
+                $draft->fill($this->only(['date', 'corrected_check_in', 'corrected_check_out', 'corrected_shift_id', 'corrected_company_location_id']));
 
-                foreach ($draft->submissionErrors() as $field => $message) {
+                // A check-out sent again is placed by the rule again, unless the client says it is the next day.
+                if ($this->exists('check_out_next_day') || $this->exists('corrected_check_out')) {
+                    $draft->check_out_next_day = $this->boolean('check_out_next_day');
+                }
+
+                $errors = $draft->resolveTargetOnUpdate(
+                    $correction,
+                    $this->filled('attendance_id') ? (int) $this->input('attendance_id') : null,
+                    $this->filled('schedule_id') ? (int) $this->input('schedule_id') : null,
+                    $this->filled('segment') ? (int) $this->input('segment') : null,
+                );
+
+                foreach ($errors ?: $draft->submissionErrors() as $field => $message) {
                     $validator->errors()->add($field, $message);
                 }
+
+                $this->draft = $draft;
             },
         ];
     }
@@ -105,6 +148,9 @@ class UpdateAttendanceCorrectionRequest extends FormRequest
             return null;
         }
 
-        return $query->find($this->route('id'));
+        $correction = $query->find($this->route('id'));
+
+        // A correction an admin filed is refused by the controller; it is not checked as the worker's.
+        return $correction?->origin === AttendanceCorrection::ORIGIN_ADMIN ? null : $correction;
     }
 }

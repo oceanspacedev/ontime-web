@@ -18,6 +18,7 @@ use App\Services\ApprovalFlowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -135,19 +136,26 @@ class AttendanceLateSnapshotEditTest extends TestCase
         $this->assertSame(30, $attendance->fresh()->late_minutes);
     }
 
-    public function test_a_roster_edited_while_the_check_in_waits_judges_the_snapshot_again(): void
+    public function test_a_roster_edit_while_the_check_in_waits_is_refused_and_the_verdict_stands(): void
     {
         $attendance = $this->pendingCheckInWithSeconds();
+        $attendance->forceFill(['shift_schedule_id' => $this->schedule->id])->saveQuietly();
 
-        // Today now starts at 10:00: the 08:30 check-in is no longer late.
-        $this->schedule->update(['shift_id' => $this->late->id]);
-        $this->assertSame(0, $attendance->fresh()->check_in_late_minutes);
+        // D4: the schedule the worker checked in to cannot be moved to 10:00 any more.
+        try {
+            $this->schedule->update(['shift_id' => $this->late->id]);
+            $this->fail('The schedule of a checked-in row must not change.');
+        } catch (ValidationException $exception) {
+            $this->assertSame([ShiftSchedule::LOCKED_MESSAGE], $exception->errors()['date']);
+        }
+
+        $this->assertSame(30, $attendance->fresh()->check_in_late_minutes);
 
         $attendance->fresh()->applyGeofenceApproval();
 
         $attendance->refresh();
-        $this->assertSame(0, $attendance->late_minutes);
-        $this->assertSame(AttendanceStatus::OnTime, $attendance->status);
+        $this->assertSame(30, $attendance->late_minutes);
+        $this->assertSame(AttendanceStatus::Late, $attendance->status);
     }
 
     public function test_moving_the_check_in_to_another_minute_drops_the_lateness_and_judges_the_new_time(): void

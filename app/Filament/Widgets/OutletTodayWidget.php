@@ -3,12 +3,15 @@
 namespace App\Filament\Widgets;
 
 use App\Services\OutletRosterService;
+use App\Services\RosterLiveStateService;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget;
 
 /**
  * Today's roster at the outlets a manager oversees: who is scheduled where and whether they checked in.
+ * Read through the same pipeline as the app's roster ({@see RosterLiveStateService::roster()}), so leave,
+ * split breaks, last night's shift and people without a schedule read the same and the numbers agree.
  */
 class OutletTodayWidget extends TableWidget
 {
@@ -16,7 +19,10 @@ class OutletTodayWidget extends TableWidget
 
     protected int|string|array $columnSpan = 'full';
 
-    /** @var list<array<string, mixed>>|null */
+    /** Labels of the live states the app's roster adds to the roster states. */
+    private const EXTRA_STATE_LABELS = [RosterLiveStateService::STATE_BREAK => 'Jeda', RosterLiveStateService::STATE_LEAVE => 'Cuti'];
+
+    /** @var array{outlets: list<array<string, mixed>>, summary: array{people_scheduled: int, people_checked_in: int}}|null */
     private ?array $roster = null;
 
     public static function canView(): bool
@@ -51,7 +57,7 @@ class OutletTodayWidget extends TableWidget
                 TextColumn::make('state')
                     ->label('Status')
                     ->badge()
-                    ->formatStateUsing(fn (string $state): string => OutletRosterService::STATE_LABELS[$state] ?? $state)
+                    ->formatStateUsing(fn (string $state): string => OutletRosterService::STATE_LABELS[$state] ?? self::EXTRA_STATE_LABELS[$state] ?? $state)
                     ->color(fn (string $state): string => match ($state) {
                         OutletRosterService::STATE_PRESENT, OutletRosterService::STATE_DONE => 'success',
                         OutletRosterService::STATE_LATE, OutletRosterService::STATE_WAITING => 'warning',
@@ -77,14 +83,18 @@ class OutletTodayWidget extends TableWidget
     {
         $rows = [];
 
-        foreach ($this->roster() as $outlet) {
+        foreach ($this->roster()['outlets'] as $outlet) {
             foreach ($outlet['entries'] as $entry) {
-                $rows[$entry['schedule_id']] = [
-                    'outlet' => $outlet['location']['name'] ?? 'Tanpa outlet',
+                $rows[] = [
+                    'outlet' => $outlet['location']['name'] ?? match ($outlet['kind'] ?? null) {
+                        RosterLiveStateService::KIND_UNSCHEDULED => 'Tanpa jadwal',
+                        RosterLiveStateService::KIND_OVERNIGHT => 'Shift semalam',
+                        default => 'Tanpa outlet',
+                    },
                     'name' => $entry['worker']['name'],
                     'number' => $entry['worker']['number'],
                     'shift' => $entry['shift'] ? ($entry['shift']['code'] ?: $entry['shift']['name']).' · '.$entry['shift']['start_time'].'-'.$entry['shift']['end_time'] : null,
-                    'section' => $entry['section'],
+                    'section' => $entry['note'] ?? $entry['section'],
                     'state' => $entry['state'],
                     'check_in' => $entry['check_in'],
                     'check_out' => $entry['check_out'],
@@ -99,7 +109,7 @@ class OutletTodayWidget extends TableWidget
     {
         $totals = [];
 
-        foreach ($this->roster() as $outlet) {
+        foreach ($this->roster()['outlets'] as $outlet) {
             foreach ($outlet['counts'] as $key => $count) {
                 $totals[$key] = ($totals[$key] ?? 0) + $count;
             }
@@ -110,20 +120,22 @@ class OutletTodayWidget extends TableWidget
         }
 
         return sprintf(
-            '%s · %d terjadwal · %d hadir · %d terlambat · %d belum absen',
+            '%s · %d terjadwal · %d hadir · %d terlambat · %d belum absen · %d dari %d orang sudah absen',
             now()->translatedFormat('l, d F Y'),
             $totals['scheduled'],
             $totals[OutletRosterService::STATE_PRESENT] + $totals[OutletRosterService::STATE_DONE],
             $totals[OutletRosterService::STATE_LATE],
             $totals[OutletRosterService::STATE_MISSING],
+            $this->roster()['summary']['people_checked_in'],
+            $this->roster()['summary']['people_scheduled'],
         );
     }
 
     /**
-     * @return list<array<string, mixed>>
+     * @return array{outlets: list<array<string, mixed>>, summary: array{people_scheduled: int, people_checked_in: int}}
      */
     private function roster(): array
     {
-        return $this->roster ??= app(OutletRosterService::class)->roster(auth()->user(), today());
+        return $this->roster ??= app(RosterLiveStateService::class)->roster(auth()->user(), today());
     }
 }

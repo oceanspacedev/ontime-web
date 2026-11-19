@@ -23,6 +23,7 @@ class Shift extends Model
         'end_time',
         'second_start_time',
         'second_end_time',
+        'normal_minutes',
         'late_tolerance_minutes',
         'is_active',
     ];
@@ -31,6 +32,7 @@ class Shift extends Model
     {
         return [
             'late_tolerance_minutes' => 'integer',
+            'normal_minutes' => 'integer',
             'is_active' => 'boolean',
         ];
     }
@@ -142,6 +144,17 @@ class Shift extends Model
 
             return $start->diffInMinutes($end);
         });
+    }
+
+    /**
+     * Normal working minutes of the whole shift; time worked inside the shift above it is automatic
+     * overtime. A shift without the setting, or with one longer than the shift, is normal time throughout.
+     */
+    public function normalMinutes(): int
+    {
+        $scheduledMinutes = $this->scheduledMinutes();
+
+        return $this->normal_minutes === null ? $scheduledMinutes : min((int) $this->normal_minutes, $scheduledMinutes);
     }
 
     /**

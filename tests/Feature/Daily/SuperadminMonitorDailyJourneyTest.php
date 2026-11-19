@@ -278,7 +278,8 @@ class SuperadminMonitorDailyJourneyTest extends TestCase
         Livewire::test(SuperadminOverviewWidget::class)
             ->assertOk()
             ->assertSee('2 Badan Usaha')
-            ->assertSee('1 Karyawan')
+            // Present counts every worker who came in, the late one included.
+            ->assertSee('2 Karyawan')
             ->assertSee('Telat: 1')
             ->assertSee('1 Pengajuan');
     }

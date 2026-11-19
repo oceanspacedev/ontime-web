@@ -138,6 +138,8 @@ class QaEReportsRecapTest extends TestCase
     public function test_team_recap_does_not_count_a_rostered_day_after_the_contract_ended(): void
     {
         $worker = Freelancer::create(['company_id' => $this->company->id, 'division_id' => $this->division->id, 'full_name' => 'Kontrak Habis', 'status' => 'completed', 'start_date' => '2026-10-01', 'end_date' => '2026-11-03']);
+        // On the roster since October, so the November weekdays read the roster only.
+        ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-10-26', 'is_day_off' => true]);
         $this->schedule($worker, '2026-11-03');
         $this->schedule($worker, '2026-11-04');
 
@@ -187,9 +189,11 @@ class QaEReportsRecapTest extends TestCase
     {
         Sanctum::actingAs($this->admin);
 
-        return $this->getJson("/api/v1/laporan-absensi?start_date={$from}&end_date={$until}")
-            ->assertOk()
-            ->json('summary');
+        // The four figures this class pins; the summary has more keys since the ledger (see OldClientContractTest).
+        return array_intersect_key(
+            $this->getJson("/api/v1/laporan-absensi?start_date={$from}&end_date={$until}")->assertOk()->json('summary'),
+            array_flip(['total_present', 'total_late', 'total_leave', 'total_absent']),
+        );
     }
 
     private function freelancer(string $name): Freelancer

@@ -36,7 +36,11 @@ class CheckInRequest extends FormRequest
             'liveness_frames.*' => ['image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
             // "Masuk di luar jadwal": the shift covered and the colleague replaced ("employee:12").
             'cover_shift_id' => ['nullable', 'integer', 'min:1'],
-            'replaces_worker' => ['nullable', 'string', 'max:40', 'regex:/^(employee|intern|freelancer):\d+$/'],
+            'replaces_worker' => ['nullable', 'string', 'max:40', 'regex:/^(employee|intern|freelancer):\d+(#\d+)?$/'],
+            // Optional for newer apps: the schedule (and its part) to check in to, and the outlet a cover works at.
+            'schedule_id' => ['nullable', 'integer', 'min:1'],
+            'segment' => ['nullable', 'integer', 'in:1,2'],
+            'cover_location_id' => ['nullable', 'integer', 'min:1'],
         ];
     }
 
@@ -65,6 +69,12 @@ class CheckInRequest extends FormRequest
             'replaces_worker.string' => 'Rekan yang digantikan tidak valid.',
             'replaces_worker.max' => 'Rekan yang digantikan tidak valid.',
             'replaces_worker.regex' => 'Rekan yang digantikan tidak valid.',
+            'schedule_id.integer' => 'Jadwal yang dipilih tidak valid.',
+            'schedule_id.min' => 'Jadwal yang dipilih tidak valid.',
+            'segment.integer' => 'Bagian shift yang dipilih tidak valid.',
+            'segment.in' => 'Bagian shift yang dipilih tidak valid.',
+            'cover_location_id.integer' => 'Outlet yang dipilih tidak valid.',
+            'cover_location_id.min' => 'Outlet yang dipilih tidak valid.',
         ];
     }
 }

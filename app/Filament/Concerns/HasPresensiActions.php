@@ -6,15 +6,21 @@ use App\Enums\AttendanceStatus;
 use App\Models\Attendance;
 use App\Models\CompanyLocation;
 use App\Models\CompanyPolicy;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\User;
 use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceCheckResult;
 use App\Services\Attendance\AttendanceRuleException;
+use App\Services\Attendance\WorkSession;
 use App\Services\AttendanceCheckService;
 use App\Services\OffScheduleCheckInService;
+use App\Services\SessionResolver;
 use App\Services\WorkScheduleService;
 use App\Support\SelfieUploadToken;
+use Carbon\CarbonImmutable;
 use Filament\Notifications\Notification;
 use Livewire\Attributes\Renderless;
 
@@ -33,6 +39,13 @@ trait HasPresensiActions
     /** "Masuk di luar jadwal": the colleague replaced, as "employee:12", or null. */
     public ?string $offScheduleReplaces = null;
 
+    /** "Masuk di luar jadwal": the id of the outlet the worker covers at, or null (matched by the geofence). */
+    public ?string $offScheduleLocationId = null;
+
+    /**
+     * The attendance of the session the worker is on now ({@see SessionResolver::current()}): the open row that
+     * can still be checked out (a shift of yesterday after midnight included), else the next session's row.
+     */
     public function getTodayAttendanceProperty(): ?Attendance
     {
         $user = auth()->user();
@@ -43,11 +56,19 @@ trait HasPresensiActions
 
         $profile = $this->getLinkedProfile();
 
-        if (! $profile) {
+        if (! $profile || ! $user instanceof User) {
             return Attendance::byWorker($user)->today()->first();
         }
 
-        return app(WorkScheduleService::class)->currentSegment($user, $profile, now())['attendance'];
+        return $this->currentSession($user, $profile)['attendance'];
+    }
+
+    /**
+     * @return array{session: WorkSession|null, attendance: Attendance|null, date: CarbonImmutable, sessions: list<array{session: WorkSession, attendance: Attendance|null}>}
+     */
+    private function currentSession(User $user, Employee|Intern|Freelancer $profile): array
+    {
+        return app(SessionResolver::class)->current($profile, now(), app(AttendanceCheckService::class)->closableAttendance($user));
     }
 
     public function getLinkedProfile(): mixed
@@ -58,7 +79,8 @@ trait HasPresensiActions
     }
 
     /**
-     * Working hours that apply today (dated schedule, default shift, or company policy).
+     * Working hours of the session the worker is on now; without a session (a day off, or no schedule) the
+     * day's own hours (the company hours).
      *
      * @return array{shift: Shift|null, is_day_off: bool, start_time: string, end_time: string, late_tolerance_minutes: int, source: string, location: CompanyLocation|null, section: string|null, segment: int, segment_count: int}|null
      */
@@ -68,13 +90,12 @@ trait HasPresensiActions
 
         $user = auth()->user();
 
-        if (! $profile || ! $user) {
+        if (! $profile || ! $user instanceof User) {
             return null;
         }
 
-        $service = app(WorkScheduleService::class);
-
-        return $service->resolve($profile, now(), $service->currentSegment($user, $profile, now())['segment']);
+        return $this->currentSession($user, $profile)['session']?->toWorkingHours()
+            ?? app(WorkScheduleService::class)->resolve($profile, today());
     }
 
     /**
@@ -86,8 +107,16 @@ trait HasPresensiActions
     public function getCoverOptionsProperty(): ?array
     {
         $profile = $this->getLinkedProfile();
+        $user = auth()->user();
 
-        return $profile ? app(OffScheduleCheckInService::class)->options($profile, today()) : null;
+        if (! $profile || ! $user instanceof User) {
+            return null;
+        }
+
+        // The date the cover is booked to: yesterday for a night shift covered after midnight, as the API does.
+        $date = app(AttendanceCheckService::class)->coverBusinessDate($user, ctype_digit((string) $this->offScheduleShiftId) ? (int) $this->offScheduleShiftId : null);
+
+        return app(OffScheduleCheckInService::class)->options($profile, $date);
     }
 
     public function getCompanyPolicyProperty(): ?CompanyPolicy
@@ -197,6 +226,7 @@ trait HasPresensiActions
                 livenessFramePaths: $framePaths,
                 coverShiftId: $isCheckIn && ctype_digit((string) $this->offScheduleShiftId) ? (int) $this->offScheduleShiftId : null,
                 replacesWorker: $isCheckIn && filled($this->offScheduleReplaces) ? $this->offScheduleReplaces : null,
+                coverLocationId: $isCheckIn && ctype_digit((string) $this->offScheduleLocationId) ? (int) $this->offScheduleLocationId : null,
             );
 
             $result = $isCheckIn ? $service->checkIn($user, $input) : $service->checkOut($user, $input);

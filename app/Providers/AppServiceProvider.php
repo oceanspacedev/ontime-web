@@ -8,6 +8,7 @@ use App\Services\Core\CoreSsoProvider;
 use App\Services\Face\BasicFaceVerifier;
 use App\Services\Face\CompreFaceVerifier;
 use App\Services\Face\FaceVerifier;
+use App\Services\SessionResolver;
 use App\Support\IdleApiTokens;
 use App\Support\ObservabilityAccess;
 use App\Support\StorageUrl;
@@ -40,6 +41,10 @@ class AppServiceProvider extends ServiceProvider
         if (str_starts_with((string) config('app.url'), 'https://')) {
             URL::forceScheme('https');
         }
+
+        // One resolver per request (or job): its holiday and first-roster-row caches then serve every caller
+        // of the request instead of being read again by each service that asks.
+        $this->app->scoped(SessionResolver::class);
 
         $this->app->bind(FaceVerifier::class, fn (Application $app): FaceVerifier => match (config('services.face.driver')) {
             'compreface' => $app->make(CompreFaceVerifier::class),

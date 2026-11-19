@@ -120,6 +120,8 @@ export default function AttendanceCheckScreen() {
   const isFreelancer = access.profileKind === 'freelancer';
   const [coverShiftId, setCoverShiftId] = useState<number | null>(null);
   const [replacesWorker, setReplacesWorker] = useState<string | null>(null);
+  // The outlet worked at; optional, the server falls back to the colleague's outlet or the geofence's.
+  const [coverLocationId, setCoverLocationId] = useState<number | null>(null);
   // Read again for the picked shift: a night shift covered after midnight lists the evening's colleagues.
   const cover = useQuery({
     queryKey: ['attendance', 'cover-options', coverShiftId],
@@ -230,6 +232,11 @@ export default function AttendanceCheckScreen() {
       if (offSchedule) {
         payload.coverShiftId = coverShiftId;
         payload.replacesWorker = replacesWorker;
+        payload.coverLocationId = attendanceApi.coverLocationOf(coverOptions, coverLocationId);
+      } else if (isCheckIn) {
+        payload.scheduleId = await attendanceApi.freshCurrentScheduleId(() =>
+          queryClient.fetchQuery({ queryKey: queryKeys.today, queryFn: attendanceApi.today, staleTime: 0 }),
+        );
       }
       const prefix = isCheckIn ? 'check-in' : 'check-out';
       if ((selfieMode === 'photo' || selfieMode === 'face') && shot) {
@@ -269,12 +276,15 @@ export default function AttendanceCheckScreen() {
         // The rules may have changed in the panel since the app last loaded the policy.
         refreshUser.mutate();
         // The picked shift or colleague is no longer on offer: pick again from fresh options.
-        if (error.errors?.cover_shift_id || error.errors?.replaces_worker) {
+        if (error.errors?.cover_shift_id || error.errors?.replaces_worker || error.errors?.cover_location_id) {
           if (error.errors?.cover_shift_id) {
             setCoverShiftId(null);
           }
           if (error.errors?.replaces_worker) {
             setReplacesWorker(null);
+          }
+          if (error.errors?.cover_location_id) {
+            setCoverLocationId(null);
           }
           void cover.refetch();
         }
@@ -516,6 +526,8 @@ export default function AttendanceCheckScreen() {
             replacesWorker={replacesWorker}
             onCoverShift={setCoverShiftId}
             onReplaces={setReplacesWorker}
+            coverLocationId={coverLocationId}
+            onCoverLocation={setCoverLocationId}
             error={offScheduleError}
             disabled={submit.isPending}
           />
@@ -577,12 +589,14 @@ const NO_CHOICE = 'none';
  * "Masuk di luar jadwal": the notice that the check-in waits for approval, the shift covered (required from
  * every worker) and, optionally, the rostered colleague replaced.
  */
-function OffScheduleSection({ options, coverShiftId, replacesWorker, onCoverShift, onReplaces, error, disabled }: {
+function OffScheduleSection({ options, coverShiftId, replacesWorker, onCoverShift, onReplaces, coverLocationId, onCoverLocation, error, disabled }: {
   options: CoverOptions | null;
   coverShiftId: number | null;
   replacesWorker: string | null;
   onCoverShift: (id: number | null) => void;
   onReplaces: (key: string | null) => void;
+  coverLocationId: number | null;
+  onCoverLocation: (id: number | null) => void;
   error: string | null;
   disabled: boolean;
 }) {
@@ -598,6 +612,8 @@ function OffScheduleSection({ options, coverShiftId, replacesWorker, onCoverShif
       label: `${colleague.name}${colleague.shift ? ` · ${colleague.shift.start_time}` : ''}${colleague.outlet ? ` · ${colleague.outlet.name}` : ''}${colleague.has_checked_in ? ' (sudah absen)' : ''}`,
     })),
   ];
+  // Newer servers list the outlets a cover may be booked at; older ones book it without the app's choice.
+  const outletOptions = [{ value: NO_CHOICE, label: 'Otomatis' }, ...(options?.outlets ?? []).map((outlet) => ({ value: String(outlet.id), label: outlet.name }))];
 
   return (
     <Group title="Masuk di luar jadwal" padded>
@@ -613,6 +629,16 @@ function OffScheduleSection({ options, coverShiftId, replacesWorker, onCoverShif
           <View style={styles.offScheduleField}>
             <Text style={styles.offScheduleLabel}>Menggantikan siapa (opsional)</Text>
             <Choice options={colleagueOptions} value={replacesWorker ?? NO_CHOICE} onChange={(value) => onReplaces(value === NO_CHOICE ? null : value)} />
+          </View>
+        ) : null}
+        {options?.outlets && options.outlets.length > 0 ? (
+          <View style={styles.offScheduleField}>
+            <Text style={styles.offScheduleLabel}>Outlet tempat bekerja (opsional)</Text>
+            <Choice
+              options={outletOptions}
+              value={coverLocationId === null ? NO_CHOICE : String(coverLocationId)}
+              onChange={(value) => onCoverLocation(value === NO_CHOICE ? null : Number(value))}
+            />
           </View>
         ) : null}
         {error ? <Text style={styles.offScheduleError}>{error}</Text> : null}

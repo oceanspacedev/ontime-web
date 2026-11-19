@@ -416,13 +416,20 @@ class Chaos_abuseTest extends TestCase
         $this->assertSame('pending', (string) $overtime->status);
         $this->assertNull($overtime->actual_duration_minutes);
 
+        // attendance_id is a real (optional) field since WP12: one that is not the worker's own row is refused.
+        $this->postJson('/api/v1/attendance-corrections', [
+            'date' => '2026-11-14', 'corrected_check_in' => '08:00', 'reason' => 'Lupa absen', 'attendance_id' => 999,
+        ])->assertUnprocessable()->assertJsonValidationErrors('attendance_id');
+
         $correctionId = $this->postJson('/api/v1/attendance-corrections', [
             'date' => '2026-11-14', 'corrected_check_in' => '08:00', 'reason' => 'Lupa absen',
-            'status' => 'approved', 'attendance_id' => 999, 'freelancer_id' => 1,
+            'status' => 'approved', 'origin' => 'admin', 'before_values' => ['status' => 'x'], 'freelancer_id' => 1,
         ])->assertCreated()->json('data.id');
 
         $correction = AttendanceCorrection::findOrFail($correctionId);
         $this->assertSame('pending', (string) $correction->status);
+        $this->assertSame('worker', $correction->origin);
+        $this->assertNull($correction->before_values);
         $this->assertNull($correction->freelancer_id);
         $this->assertSame($andi->id, (int) $correction->employee_id);
     }

@@ -44,6 +44,8 @@ class Probe_payroll_report_RPTB5Test extends TestCase
 
         $bayu = Freelancer::create(['company_id' => $company->id, 'division_id' => $brand->id, 'full_name' => 'Bayu', 'status' => 'active', 'start_date' => '2026-11-01']);
 
+        // The roster starts with the contract on Sunday 1 November (a day off): no fixed hours after that date.
+        ShiftSchedule::create(['freelancer_id' => $bayu->id, 'date' => '2026-11-01', 'is_day_off' => true]);
         foreach (['2026-11-07', '2026-11-08'] as $date) {
             ShiftSchedule::create(['freelancer_id' => $bayu->id, 'date' => $date, 'shift_id' => $morning->id, 'company_location_id' => $outlet->id]);
         }

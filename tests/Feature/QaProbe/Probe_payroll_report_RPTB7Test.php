@@ -39,6 +39,8 @@ class Probe_payroll_report_RPTB7Test extends TestCase
 
         $worker = Freelancer::create(['company_id' => $company->id, 'division_id' => $brand->id, 'full_name' => 'Libur Masuk', 'status' => 'active']);
 
+        // On the roster since October, so the November weekdays read the roster only.
+        ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-10-26', 'is_day_off' => true]);
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'is_day_off' => true, 'company_location_id' => $outlet->id]);
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 08:00:00', 'check_out' => '2026-11-06 17:00:00', 'status' => 'on_time', 'late_minutes' => 0, 'company_location_id' => $outlet->id]);
 

@@ -6,6 +6,7 @@ use App\Enums\SystemRole;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
+use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\User;
 use Carbon\CarbonImmutable;
@@ -23,6 +24,9 @@ use Illuminate\Validation\ValidationException;
  *   of them runs past midnight into the next day.
  * - Only a manager who may approve the worker's requests records the actual duration, never the
  *   requester, and only on approved overtime.
+ * - No overtime on a date an approved leave of the worker is charged for.
+ * - What a request counts for in the reports ({@see self::netMinutes()}) comes from the attendance ledger:
+ *   from the company's netting date on, the part of a request inside the worker's shift is not counted twice.
  */
 class OvertimeRequestService
 {
@@ -41,6 +45,93 @@ class OvertimeRequestService
      * Roles that may record the actual duration, always limited to workers inside their data access.
      */
     public const ACTUAL_DURATION_ROLES = ['Superadmin', 'Admin', 'Koordinator', 'Approver', 'BOD'];
+
+    public const ON_LEAVE_MESSAGE = 'Tidak bisa lembur pada tanggal cuti/izin yang sudah disetujui.';
+
+    /**
+     * Counted minutes read for a list by {@see self::preloadNetMinutes()}, kept until the model is released.
+     *
+     * @var \WeakMap<OvertimeRequest, int|null>|null
+     */
+    private static ?\WeakMap $netMinutes = null;
+
+    /**
+     * The minutes the request counts for in the reports, or null while the worker's company does not net
+     * requests against shift hours on that date (the request then counts in full). The figure is the
+     * ledger's ({@see AttendanceLedger::netOvertimeMinutes()}), so it is the one the recaps add up.
+     */
+    public function netMinutes(OvertimeRequest $overtime): ?int
+    {
+        if (self::$netMinutes !== null && self::$netMinutes->offsetExists($overtime)) {
+            return self::$netMinutes[$overtime];
+        }
+
+        return app(AttendanceLedger::class)->netOvertimeMinutes([$overtime])[(int) $overtime->getKey()] ?? null;
+    }
+
+    /**
+     * Read the counted minutes of a whole list at once, so showing it does not ask per row.
+     *
+     * @param  iterable<mixed>  $overtimes
+     */
+    public static function preloadNetMinutes(iterable $overtimes): void
+    {
+        $rows = [];
+
+        foreach ($overtimes as $overtime) {
+            if ($overtime instanceof OvertimeRequest && $overtime->exists) {
+                $rows[(int) $overtime->getKey()] = $overtime;
+            }
+        }
+
+        if ($rows === []) {
+            return;
+        }
+
+        self::$netMinutes ??= new \WeakMap;
+
+        foreach (app(AttendanceLedger::class)->netOvertimeMinutes($rows) as $id => $minutes) {
+            self::$netMinutes[$rows[$id]] = $minutes;
+        }
+    }
+
+    /**
+     * Error message when $date is charged by an approved leave of the worker, else null.
+     */
+    public static function leaveDateError(Employee|Intern|Freelancer $worker, mixed $date): ?string
+    {
+        if (! is_string($date) && ! $date instanceof \DateTimeInterface) {
+            return null;
+        }
+
+        try {
+            $day = Carbon::parse($date)->toDateString();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $onLeave = LeaveRequest::query()
+            ->where(self::workerColumn($worker), $worker->getKey())
+            ->where('status', 'approved')
+            ->whereDate('start_date', '<=', $day)
+            ->whereDate('end_date', '>=', $day)
+            ->get()
+            ->contains(fn (LeaveRequest $leave): bool => in_array($day, $leave->chargedDateStrings(), true));
+
+        return $onLeave ? self::ON_LEAVE_MESSAGE : null;
+    }
+
+    /**
+     * @throws ValidationException
+     */
+    public function assertNotOnLeave(Employee|Intern|Freelancer $worker, mixed $date, string $dateKey = 'date'): void
+    {
+        $error = self::leaveDateError($worker, $date);
+
+        if ($error !== null) {
+            throw ValidationException::withMessages([$dateKey => $error]);
+        }
+    }
 
     /**
      * Minutes between start and end, null when the times are unreadable or equal.

@@ -36,8 +36,10 @@ class CreateAttendanceCorrection extends CreateRecord
         }
 
         $data['status'] = 'pending';
+        $data['origin'] = AttendanceCorrection::ORIGIN_WORKER;
 
-        $errors = (new AttendanceCorrection($data))->submissionErrors();
+        $draft = new AttendanceCorrection($data);
+        $errors = $draft->resolveTarget() ?: $draft->submissionErrors();
 
         if ($errors !== []) {
             throw ValidationException::withMessages(
@@ -45,7 +47,7 @@ class CreateAttendanceCorrection extends CreateRecord
             );
         }
 
-        return $data;
+        return [...$data, ...$draft->targetAttributes()];
     }
 
     protected function afterCreate(): void

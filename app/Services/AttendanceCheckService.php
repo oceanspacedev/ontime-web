@@ -16,12 +16,16 @@ use App\Models\User;
 use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceCheckResult;
 use App\Services\Attendance\AttendanceRuleException;
+use App\Services\Attendance\CheckInPick;
+use App\Services\Attendance\WorkSession;
 use App\Services\Face\FaceMatch;
 use App\Services\Face\FaceServiceUnavailable;
 use App\Services\Face\FaceVerifier;
 use App\Support\SelfieUploadToken;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
@@ -53,23 +57,36 @@ class AttendanceCheckService
     /** Yesterday's day shift was never checked out: its real end time is filed as a correction, not tapped now. */
     public const FORGOTTEN_CHECK_OUT_MESSAGE = 'Absen pulang kemarin terlewat. Ajukan koreksi presensi untuk mencatat jam pulangnya.';
 
+    /** An earlier session of today was left open and the worker checked in elsewhere since: filed as a correction too. */
+    public const FORGOTTEN_EARLIER_SESSION_MESSAGE = 'Absen pulang sesi sebelumnya hari ini terlewat. Ajukan koreksi presensi untuk mencatat jam pulangnya.';
+
     /** The roster of the date changed between reading it and saving the check-in (for example a replacement approved meanwhile). */
     public const ROSTER_CHANGED_MESSAGE = 'Jadwal Anda hari ini baru saja berubah. Muat ulang lalu coba absen lagi.';
 
     /**
      * A rejected attendance ends there: a check-out would open a new approval round whose approval
-     * turns the rejected day into a valid one.
+     * turns the rejected day into a valid one. Only an approved correction that gives the real check-in
+     * time (and the check-out) revives it.
      */
-    public const REJECTED_CHECK_OUT_MESSAGE = 'Presensi ini sudah ditolak atasan, jadi tidak bisa check out. Ajukan koreksi presensi bila ada kekeliruan.';
+    public const REJECTED_CHECK_OUT_MESSAGE = 'Presensi ini sudah ditolak atasan, jadi tidak bisa check out. Bila Anda memang bekerja, ajukan koreksi dengan jam masuk dan jam pulang yang sebenarnya.';
+
+    /**
+     * The approver refused the check-out (not the check-in): the row keeps its check-in and its real end
+     * time is filed as a correction.
+     */
+    public const CHECK_OUT_REFUSED_MESSAGE = 'Absen pulang Anda ditolak atasan. Ajukan koreksi presensi untuk mencatat jam pulangnya.';
 
     /** An overnight row of yesterday counts as still open for this many hours after its check-in. */
     public const OVERNIGHT_OPEN_HOURS = 20;
 
-    /** The second segment of a split shift accepts check-in from this many minutes before it starts. */
-    private const SECOND_SEGMENT_OPENS_MINUTES_BEFORE = 60;
+    /** How many days back a forgotten check-out still answers a check-out tap with the correction message. */
+    public const FORGOTTEN_LOOKBACK_DAYS = 7;
 
-    /** How long before the shift (or company hours) starts the first check-in of the day opens. */
-    private const CHECK_IN_OPENS_MINUTES_BEFORE = 60;
+    /** The check-in named a schedule that is not one of the worker's working schedules around today. */
+    public const UNKNOWN_SCHEDULE_MESSAGE = 'Jadwal yang dipilih tidak ditemukan atau bukan jadwal Anda hari ini.';
+
+    /** Approval reason of a cover whose outlet is neither named nor matched by the geofence. */
+    public const OUTLET_UNKNOWN_REASON = 'outlet belum ditentukan';
 
     public function __construct(
         private readonly WorkScheduleService $workSchedule,
@@ -212,90 +229,81 @@ class AttendanceCheckService
     private function performCheckIn(User $user, AttendanceCheckInput $input): AttendanceCheckResult
     {
         $profile = $this->workerProfile($user);
-        $businessDate = $this->overnightSecondSegmentDate($user, $profile)
-            ?? $this->overnightCheckInDate($user, $profile)
-            ?? $this->earlyNextDayCheckInDate($user, $profile)
-            ?? $this->overnightCoverDate($user, $profile, $input->coverShiftId)
-            ?? today();
+        $pick = app(SessionResolver::class)->pickForCheckIn($profile, now(), $input->scheduleId, $input->segment);
+
+        if ($pick->outcome === CheckInPick::INVALID_SCHEDULE) {
+            throw new AttendanceRuleException(self::UNKNOWN_SCHEDULE_MESSAGE, 422, 'schedule_id');
+        }
+
+        // A night shift covered after midnight belongs to yesterday, when yesterday was not a working day either.
+        $coverDate = $pick->outcome !== CheckInPick::SESSION && $input->scheduleId === null
+            ? $this->overnightCoverDate($user, $profile, $input->coverShiftId)
+            : null;
+        $businessDate = CarbonImmutable::parse(($coverDate ?? $pick->date)->toDateString());
+        $isCover = $coverDate !== null
+            || $pick->outcome === CheckInPick::OFF_SCHEDULE
+            // Every session of the day is worked: a further shift is covered like one outside the schedule.
+            || ($pick->outcome === CheckInPick::ALREADY_IN && $input->coverShiftId !== null && $input->scheduleId === null);
+
         // Judged on the day the shift belongs to: a night shift starting on the first contract day is allowed.
         $this->ensureActive($profile, $businessDate);
-        $todayRows = Attendance::byWorker($user)->whereDate('date', $businessDate)->orderBy('segment')->get();
-        $existingAttendance = $todayRows->firstWhere('segment', 1);
+        $dayRows = Attendance::byWorker($user)->with('location')->whereDate('date', $businessDate->toDateString())->get();
 
-        // An approved leave writes today's row without a check-in; checking in would overwrite the leave.
-        if ($this->isApprovedLeave($existingAttendance)) {
+        // An approved leave writes the day's row without a check-in; checking in would overwrite the leave.
+        if ($dayRows->contains(fn (Attendance $row): bool => $this->isApprovedLeave($row))) {
             throw new AttendanceRuleException(self::ON_LEAVE_MESSAGE, 409);
         }
 
-        // Last night's shift is still open after midnight: it is checked out first, not doubled by a new day.
-        if (! $existingAttendance?->check_in && $this->openOvernightAttendance($user)) {
-            throw new AttendanceRuleException(self::OPEN_OVERNIGHT_MESSAGE, 409);
+        // An earlier session is still running (before its scheduled end, or last night's shift after midnight):
+        // it is checked out first. Past that, a check-in to another session leaves it as a missing check-out.
+        if ($open = $this->blockingOpenAttendance($user)) {
+            throw new AttendanceRuleException($open->date->lessThan($businessDate) ? self::OPEN_OVERNIGHT_MESSAGE : self::ALREADY_CHECKED_IN_MESSAGE, 409);
         }
 
-        $segment = 1;
-        $workingHours = $this->workSchedule->resolve($profile, $businessDate);
-        /** @var array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null}|null $offSchedule */
+        if (! $isCover && $pick->outcome === CheckInPick::ALREADY_IN) {
+            throw new AttendanceRuleException(self::ALREADY_CHECKED_IN_MESSAGE, 409);
+        }
+
+        // Checking in hours before a session starts would close it as "on time" for a presence nobody worked.
+        if (! $isCover && $pick->outcome === CheckInPick::TOO_EARLY && $pick->session && $pick->opensAt) {
+            throw $this->tooEarly($pick->session, $pick->opensAt);
+        }
+
+        /** @var array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null, replaced_schedule_id: int|null}|null $offSchedule */
         $offSchedule = null;
 
-        if ($existingAttendance?->check_in) {
-            // A split shift has a second segment to check in to once the first one is checked out.
-            $second = $todayRows->firstWhere('segment', 2);
-            $first = $existingAttendance;
-
-            // A rejected first segment can no longer be checked out, so it does not hold the second one back.
-            $firstSegmentClosed = $first->check_out || $first->status === AttendanceStatus::Rejected;
-
-            // The first segment covered a split shift outside the roster, and the roster still has no shift:
-            // the second segment follows that cover shift (and waits for approval the same way).
-            $coverShift = $first->is_off_schedule && $this->workSchedule->isOffSchedule($profile, $workingHours) ? $first->shift : null;
-            $segmentCount = $coverShift ? ($coverShift->hasSecondSegment() ? 2 : 1) : $workingHours['segment_count'];
-
-            if ($segmentCount < 2 || ! $firstSegmentClosed || $second?->check_in) {
-                throw new AttendanceRuleException(self::ALREADY_CHECKED_IN_MESSAGE, 409);
-            }
-
-            $segment = 2;
-            $existingAttendance = $second;
-
-            if ($coverShift) {
-                $workingHours = $this->workSchedule->hoursForShift($coverShift, $profile, 2, $first->location);
-                $replaced = $first->replaced_worker_type && $first->replaced_worker_id
-                    ? $this->offSchedule()->workerFromKey($first->replaced_worker_type.':'.$first->replaced_worker_id)
-                    : null;
-                $offSchedule = [
-                    'reason' => $this->offSchedule()->reason($replaced),
-                    'replaced_worker_type' => $first->replaced_worker_type,
-                    'replaced_worker_id' => $first->replaced_worker_id,
-                ];
-            } else {
-                $workingHours = $this->workSchedule->resolve($profile, $businessDate, 2);
-            }
-
-            // Checking in hours before the second segment starts would only record a presence nobody worked.
-            $opensAt = $businessDate->copy()->setTimeFromTimeString((string) $workingHours['start_time'])->subMinutes(self::SECOND_SEGMENT_OPENS_MINUTES_BEFORE);
+        if ($isCover) {
+            [$workingHours, $offSchedule] = $this->offScheduleHours($profile, $businessDate, $input);
+            $workingHours['sequence'] = $this->freeSequence($profile, $businessDate, $dayRows);
+            $existingAttendance = $dayRows->first(fn (Attendance $row): bool => (int) ($row->schedule_sequence ?: 1) === $workingHours['sequence'] && (int) $row->segment === 1 && $row->check_in === null);
+            $opensAt = $businessDate->setTimeFromTimeString((string) $workingHours['start_time'])->subMinutes(SessionResolver::CHECK_IN_OPENS_MINUTES_BEFORE);
 
             if (now()->lessThan($opensAt)) {
                 throw new AttendanceRuleException(
-                    sprintf('Segmen kedua dimulai pukul %s. Check in dibuka pukul %s.', substr((string) $workingHours['start_time'], 0, 5), $opensAt->format('H:i')),
+                    sprintf('Shift dimulai pukul %s. Absen masuk dibuka pukul %s.', substr((string) $workingHours['start_time'], 0, 5), $opensAt->format('H:i')),
                     422,
                 );
             }
-        }
 
-        if ($segment === 1 && $this->workSchedule->isOffSchedule($profile, $workingHours)) {
-            [$workingHours, $offSchedule] = $this->offScheduleHours($profile, $businessDate, $input, $workingHours);
-        }
+            // Never a cover of a shift that is already over on its date: it could only be booked very late and left open.
+            $coverShift = Shift::query()->find($input->coverShiftId);
+            $lastPart = $coverShift ? last($coverShift->segments()) : null;
 
-        // Checking in hours before the shift starts would close the day as "on time" for a presence nobody
-        // worked (and block the real check-in later): it opens a fixed time before the start, as segment 2 does.
-        if ($segment === 1 && ! $workingHours['is_day_off']) {
-            $opensAt = $businessDate->copy()->setTimeFromTimeString((string) $workingHours['start_time'])->subMinutes(self::CHECK_IN_OPENS_MINUTES_BEFORE);
-
-            if (now()->lessThan($opensAt)) {
+            if ($lastPart && now()->getTimestamp() >= AttendanceFigures::window($businessDate->toDateString(), $lastPart['start'], $lastPart['end'])[1]) {
                 throw new AttendanceRuleException(
-                    sprintf('%s dimulai pukul %s. Absen masuk dibuka pukul %s.', $workingHours['shift'] ? 'Shift' : 'Jam kerja', substr((string) $workingHours['start_time'], 0, 5), $opensAt->format('H:i')),
+                    sprintf('Shift %s pada tanggal ini sudah selesai pukul %s. Pilih shift yang sedang atau akan berjalan.', $coverShift->name, substr((string) $lastPart['end'], 0, 5)),
                     422,
                 );
+            }
+        } else {
+            /** @var WorkSession $session */
+            $session = $pick->session;
+            $workingHours = $session->toWorkingHours();
+            $existingAttendance = $pick->attendance;
+
+            // A later part of a split shift covered outside the roster waits for approval as its first part did.
+            if ($session->source === 'cover') {
+                $offSchedule = $this->coverOfSibling($dayRows, $session->sequence);
             }
         }
 
@@ -303,7 +311,12 @@ class AttendanceCheckService
         $reasons = $checks['approval_reasons'];
 
         if ($offSchedule) {
-            array_unshift($reasons, $offSchedule['reason']);
+            // A cover records where it was worked: the outlet whose geofence the worker is in, when none was named.
+            if ($workingHours['location'] === null) {
+                $workingHours['location'] = $this->matchedOutlet($profile, $input, $checks['matched_location_id']);
+            }
+
+            array_unshift($reasons, ...array_filter([$offSchedule['reason'], $workingHours['location'] === null ? self::OUTLET_UNKNOWN_REASON : null]));
         }
 
         $requiresApproval = $reasons !== [];
@@ -321,11 +334,15 @@ class AttendanceCheckService
         };
 
         try {
-            $attendance = $this->saveCheckIn($user, $profile, $existingAttendance, $businessDate, $segment, $checks, $workingHours, $now, $status, $lateMinutes, $checkInLateMinutes, $requiresApproval, $offSchedule);
+            $attendance = $this->saveCheckIn($user, $profile, $existingAttendance, $businessDate, $checks, $workingHours, $now, $status, $lateMinutes, $checkInLateMinutes, $requiresApproval, $offSchedule);
         } catch (UniqueConstraintViolationException) {
-            // Another write created today's row first: a leave approved meanwhile, or a second request
+            // Another write created the session's row first: a leave approved meanwhile, or a second request
             // of the same tap (double submit, retry) that won the race on the unique attendance index.
-            $winner = Attendance::byWorker($user)->whereDate('date', $businessDate)->where('segment', $segment)->first();
+            $winner = Attendance::byWorker($user)
+                ->whereDate('date', $businessDate->toDateString())
+                ->where('schedule_sequence', $workingHours['sequence'])
+                ->where('segment', $workingHours['segment'])
+                ->first();
 
             if ($this->isApprovedLeave($winner)) {
                 throw new AttendanceRuleException(self::ON_LEAVE_MESSAGE, 409);
@@ -343,16 +360,92 @@ class AttendanceCheckService
     }
 
     /**
+     * The refusal of a check-in before the session opens, naming its opening time.
+     */
+    private function tooEarly(WorkSession $session, CarbonImmutable $opensAt): AttendanceRuleException
+    {
+        $start = $session->startAt->format('H:i');
+
+        return new AttendanceRuleException(
+            $session->segment === 2
+                ? sprintf('Segmen kedua dimulai pukul %s. Check in dibuka pukul %s.', $start, $opensAt->format('H:i'))
+                : sprintf('%s dimulai pukul %s. Absen masuk dibuka pukul %s.', $session->shift ? 'Shift' : 'Jam kerja', $start, $opensAt->format('H:i')),
+            422,
+        );
+    }
+
+    /**
+     * The off-schedule details of the first part of a split shift covered outside the roster, which a later
+     * part of the same cover repeats (the reason and the colleague replaced).
+     *
+     * @param  Collection<int, Attendance>  $dayRows
+     * @return array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null, replaced_schedule_id: int|null}
+     */
+    private function coverOfSibling(Collection $dayRows, int $sequence): array
+    {
+        $first = $dayRows->first(fn (Attendance $row): bool => $row->is_off_schedule && (int) ($row->schedule_sequence ?: 1) === $sequence && $row->check_in !== null);
+        $replaced = $first?->replaced_worker_type && $first->replaced_worker_id
+            ? $this->offSchedule()->workerFromKey($first->replaced_worker_type.':'.$first->replaced_worker_id)
+            : null;
+
+        return [
+            'reason' => $this->offSchedule()->reason($replaced),
+            'replaced_worker_type' => $first?->replaced_worker_type,
+            'replaced_worker_id' => $first?->replaced_worker_id ? (int) $first->replaced_worker_id : null,
+            'replaced_schedule_id' => $first?->replaced_schedule_id ? (int) $first->replaced_schedule_id : null,
+        ];
+    }
+
+    /**
+     * The lowest schedule number of the date that no working roster row and no checked-in attendance holds:
+     * where an off-schedule check-in is filed (a day off of that number is the row its approval converts).
+     *
+     * @param  Collection<int, Attendance>  $dayRows
+     */
+    private function freeSequence(Employee|Intern|Freelancer $profile, CarbonInterface $businessDate, Collection $dayRows): int
+    {
+        $taken = ShiftSchedule::query()
+            ->where($this->workSchedule->workerColumn($profile), $profile->getKey())
+            ->whereDate('date', $businessDate->toDateString())
+            ->where('is_day_off', false)
+            ->whereNotNull('shift_id')
+            ->pluck('sequence')
+            ->merge($dayRows->filter(fn (Attendance $row): bool => $row->check_in !== null)->pluck('schedule_sequence'))
+            ->map(fn (mixed $sequence): int => (int) ($sequence ?: 1))
+            ->all();
+
+        $sequence = 1;
+
+        while (in_array($sequence, $taken, true)) {
+            $sequence++;
+        }
+
+        return $sequence;
+    }
+
+    /**
+     * The active outlet of the worker's company whose geofence the check-in position is in, when the
+     * check-in names no outlet: from the geofence check itself, or matched here when GPS is not required.
+     */
+    private function matchedOutlet(Employee|Intern|Freelancer $profile, AttendanceCheckInput $input, ?int $matchedId): ?CompanyLocation
+    {
+        if ($matchedId === null && $profile->company && $input->latitude !== null && $input->longitude !== null) {
+            $matchedId = GeofenceService::validateCompanyGeofence($profile->company, $input->latitude, $input->longitude)['matched_location_id'] ?? null;
+        }
+
+        return $matchedId ? CompanyLocation::query()->where('is_active', true)->find($matchedId) : null;
+    }
+
+    /**
      * @param  array<string, mixed>  $checks
-     * @param  array<string, mixed>  $workingHours
-     * @param  array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null}|null  $offSchedule
+     * @param  array<string, mixed>  $workingHours  the session's hours, with its schedule_id, sequence and segment
+     * @param  array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null, replaced_schedule_id: int|null}|null  $offSchedule
      */
     private function saveCheckIn(
         User $user,
         Employee|Intern|Freelancer $profile,
         ?Attendance $existingAttendance,
         CarbonInterface $businessDate,
-        int $segment,
         array $checks,
         array $workingHours,
         CarbonInterface $now,
@@ -362,32 +455,33 @@ class AttendanceCheckService
         bool $requiresApproval,
         ?array $offSchedule = null,
     ): Attendance {
-        return DB::transaction(function () use ($user, $profile, $existingAttendance, $businessDate, $segment, $checks, $workingHours, $now, $status, $lateMinutes, $checkInLateMinutes, $requiresApproval, $offSchedule): Attendance {
-            // The roster row is read again under a lock, the same one an approved replacement takes before it
-            // gives this worker the day off (OffScheduleCheckInService::applyApproval()): a check-in judged as a
-            // rostered day is refused when that day off, or another shift or outlet, landed in between, instead
-            // of being stored against hours the roster no longer has.
-            if ($segment === 1 && $offSchedule === null) {
-                $roster = ShiftSchedule::query()
-                    ->where($this->workSchedule->workerColumn($profile), $profile->getKey())
-                    ->whereDate('date', $businessDate->toDateString())
-                    ->lockForUpdate()
-                    ->first();
+        return DB::transaction(function () use ($user, $profile, $existingAttendance, $businessDate, $checks, $workingHours, $now, $status, $lateMinutes, $checkInLateMinutes, $requiresApproval, $offSchedule): Attendance {
+            $sessions = app(SessionResolver::class);
+            $sequence = (int) ($workingHours['sequence'] ?? 1);
+            $segment = (int) ($workingHours['segment'] ?? 1);
+            // The schedule the check-in was judged against is kept on the row: the roster row it belongs to
+            // (the one locked below), its hours, tolerance and names. An off-schedule check-in is a cover.
+            $snapshot = $sessions->snapshotFor($sessions->sessionFromHours($profile, $workingHours, $businessDate), $offSchedule !== null ? 'cover' : null);
+            $snapshot['schedule_sequence'] = $sequence;
 
-                if ($roster?->is_day_off || $this->rosterDiffersFrom($profile, $roster, $workingHours)) {
-                    throw new AttendanceRuleException(self::ROSTER_CHANGED_MESSAGE, 409);
-                }
+            // The roster is read again under a lock, the one an approved replacement takes before it gives this
+            // worker the day off (OffScheduleCheckInService::applyApproval()): a check-in judged against a
+            // rostered session is refused when that day off, or another shift or outlet, landed in between.
+            if ($offSchedule === null) {
+                $link = $this->lockedRoster($profile, $businessDate, $workingHours);
+                $snapshot['shift_schedule_id'] = $link?->getKey();
+                $snapshot['sched_source'] = $link ? 'schedule' : ($workingHours['shift'] !== null ? 'default' : $snapshot['sched_source']);
             }
 
             // A colleague is replaced by one backup: checked again under the colleague's roster lock.
-            if ($offSchedule !== null && $offSchedule['replaced_worker_type'] !== null && $offSchedule['replaced_worker_id'] !== null) {
-                $this->offSchedule()->lockReplacement($offSchedule['replaced_worker_type'], $offSchedule['replaced_worker_id'], $businessDate, $profile);
+            if ($offSchedule !== null && $offSchedule['replaced_worker_type'] !== null && $offSchedule['replaced_worker_id'] !== null && $segment === 1) {
+                $this->offSchedule()->lockReplacement($offSchedule['replaced_worker_type'], $offSchedule['replaced_worker_id'], $businessDate, $profile, $workingHours['shift']?->getKey(), $offSchedule['replaced_schedule_id']);
             }
 
-            // Reuse today's row (for example one created by an approved correction) instead of
-            // inserting a second row, which the unique (worker, date, segment) index rejects. An update
-            // never trips that index, so the row is read again under a lock: a concurrent check-in
-            // (double tap, retry) or a leave approved meanwhile is refused instead of overwritten.
+            // Reuse the session's row (for example one created by an approved correction) instead of inserting a
+            // second row, which the unique (worker, date, schedule_sequence, segment) index rejects. An update
+            // never trips that index, so the row is read again under a lock: a concurrent check-in (double tap,
+            // retry) or a leave approved meanwhile is refused instead of overwritten.
             if ($existingAttendance) {
                 $existingAttendance = Attendance::query()->whereKey($existingAttendance->getKey())->lockForUpdate()->first();
 
@@ -405,6 +499,11 @@ class AttendanceCheckService
                 'date' => $businessDate->toDateString(),
                 'segment' => $segment,
             ]);
+
+            // A legacy row may carry a check-out without any check-in: that time belongs to no session.
+            if ($attendance->exists && $attendance->check_out !== null) {
+                $attendance->fill(['check_out' => null, 'check_out_lat' => null, 'check_out_lng' => null, 'check_out_photo' => null]);
+            }
 
             $attendance->fill([
                 'shift_id' => $workingHours['shift']?->id,
@@ -427,7 +526,14 @@ class AttendanceCheckService
                 'is_off_schedule' => $offSchedule !== null,
                 'replaced_worker_type' => $offSchedule['replaced_worker_type'] ?? null,
                 'replaced_worker_id' => $offSchedule['replaced_worker_id'] ?? null,
+                'replaced_schedule_id' => $offSchedule['replaced_schedule_id'] ?? null,
+                // The approval round of this row is about the check-in (a check-out tapped meanwhile waits with it).
+                'pending_punch' => $requiresApproval ? Attendance::PUNCH_CHECK_IN : null,
+                'status_before_check_out' => null,
+                'check_out_rejected_at' => null,
+                'checks_before_check_out' => null,
             ]);
+            $attendance->fillSnapshot($snapshot);
 
             // The approver reads why this check-in waits ("Masuk di luar jadwal (menggantikan Budi)").
             if ($offSchedule && blank($attendance->notes)) {
@@ -445,20 +551,46 @@ class AttendanceCheckService
     }
 
     /**
-     * Whether the (locked) roster row of the date names another shift or outlet than the hours the check-in
-     * was judged against, which were resolved before the lock.
+     * Read the roster the session comes from again under a lock and return the schedule row the check-in is
+     * linked to (null for standing hours). A rostered session needs its row unchanged (same shift and outlet,
+     * not a day off); standing hours need the date to have gained no day off and no shift, and the worker's
+     * default shift and placement to be the ones judged against.
      *
      * @param  array<string, mixed>  $workingHours
+     *
+     * @throws AttendanceRuleException
      */
-    private function rosterDiffersFrom(Employee|Intern|Freelancer $profile, ?ShiftSchedule $roster, array $workingHours): bool
+    private function lockedRoster(Employee|Intern|Freelancer $profile, CarbonInterface $businessDate, array $workingHours): ?ShiftSchedule
     {
-        $rosterShift = $roster?->shift ?? ($profile->shift_id ? $profile->shift : null);
+        $rows = ShiftSchedule::query()
+            ->where($this->workSchedule->workerColumn($profile), $profile->getKey())
+            ->whereDate('date', $businessDate->toDateString())
+            ->when($workingHours['schedule_id'] ?? null, fn ($query, $id) => $query->whereKey($id))
+            ->lockForUpdate()
+            ->get();
+        $shiftId = (int) $workingHours['shift']?->getKey();
+        $locationId = (int) $workingHours['location']?->getKey();
 
-        if ((int) $rosterShift?->getKey() !== (int) $workingHours['shift']?->getKey()) {
-            return true;
+        if ($scheduleId = $workingHours['schedule_id'] ?? null) {
+            $row = $rows->first(fn (ShiftSchedule $row): bool => (int) $row->getKey() === (int) $scheduleId);
+
+            if (! $row || $row->is_day_off || (int) $row->shift_id !== $shiftId || (int) $row->company_location_id !== $locationId) {
+                throw new AttendanceRuleException(self::ROSTER_CHANGED_MESSAGE, 409);
+            }
+
+            return $row;
         }
 
-        return $roster !== null && (int) $roster->company_location_id !== (int) $workingHours['location']?->getKey();
+        $placement = $rows->first(fn (ShiftSchedule $row): bool => ! $row->is_day_off && $row->shift_id === null);
+        $changed = $rows->contains(fn (ShiftSchedule $row): bool => $row->is_day_off || $row->shift_id !== null)
+            || (int) ($profile->shift_id ? $profile->shift_id : 0) !== $shiftId
+            || ($placement !== null && (int) $placement->company_location_id !== $locationId);
+
+        if ($changed) {
+            throw new AttendanceRuleException(self::ROSTER_CHANGED_MESSAGE, 409);
+        }
+
+        return null;
     }
 
     /**
@@ -476,9 +608,10 @@ class AttendanceCheckService
         }
 
         if (! $attendance?->check_in) {
-            // Yesterday's day shift left open: tapping now would record tonight as its end time.
-            if ($this->openRowOfYesterday($user)) {
-                throw new AttendanceRuleException(self::FORGOTTEN_CHECK_OUT_MESSAGE, 422);
+            // An earlier shift left open past its check-out window: tapping now would record now as its end time.
+            // One whose check-out the approver refused (for example at 23:30, tapped again after midnight) says so.
+            if ($forgotten = $this->forgottenCheckOut($user)) {
+                throw new AttendanceRuleException($forgotten->check_out_rejected_at ? self::CHECK_OUT_REFUSED_MESSAGE : self::FORGOTTEN_CHECK_OUT_MESSAGE, 422);
             }
 
             throw new AttendanceRuleException('Anda belum melakukan check in hari ini.', 422);
@@ -490,6 +623,11 @@ class AttendanceCheckService
 
         if ($attendance->status === AttendanceStatus::Rejected) {
             throw new AttendanceRuleException(self::REJECTED_CHECK_OUT_MESSAGE, 409);
+        }
+
+        // Open, but no longer closable live (its check-out was refused, or its window has passed).
+        if (! $this->isLiveClosable($attendance)) {
+            throw new AttendanceRuleException($this->notClosableMessage($attendance), 422);
         }
 
         $checks = $this->runChecks($user, $profile, $input, self::PURPOSE_CHECK_OUT, $attendance->location);
@@ -526,6 +664,15 @@ class AttendanceCheckService
                     'liveness_notes' => $checks['liveness_notes'] ?? $attendance->liveness_notes,
                     'liveness_frames' => $checks['liveness_frames'] ?? $attendance->liveness_frames,
                 ];
+
+                // A settled check-in keeps its verdict aside while only the check-out waits, so a refusal
+                // voids the check-out alone; a check-in still waiting takes the check-out into its own round.
+                if ($requiresApproval && $attendance->status !== AttendanceStatus::PendingApproval) {
+                    $updates['status_before_check_out'] = $attendance->status?->value ?? AttendanceStatus::OnTime->value;
+                    $updates['pending_punch'] = Attendance::PUNCH_CHECK_OUT;
+                    // The check-in's own verification results, put back if this check-out is refused.
+                    $updates['checks_before_check_out'] = $attendance->only(Attendance::CHECK_RESULT_COLUMNS);
+                }
 
                 if ($requiresApproval) {
                     $updates['status'] = AttendanceStatus::PendingApproval;
@@ -565,8 +712,10 @@ class AttendanceCheckService
 
     /**
      * A row written by an approved leave ({@see LeaveRequest::applyLeave()}): leave status, no check-in, and a
-     * leave request of the same worker that is still approved and still covers the row's date. Nothing reverts
-     * the rows of a leave that is deleted or moved later, so such an orphaned row is checked in over as usual.
+     * leave request of the same worker that is still approved and charges the row's date
+     * ({@see LeaveRequest::chargedDateStrings()}, the list every leave reader uses). Deleting or re-dating a
+     * leave undoes its rows (the deleted hook and {@see LeaveRequest::syncAttendanceRows()}); a leave row left
+     * over from before that (no leave charges its date any more) is checked in over as usual.
      */
     private function isApprovedLeave(?Attendance $attendance): bool
     {
@@ -591,186 +740,202 @@ class AttendanceCheckService
             ->where('status', 'approved')
             ->whereDate('start_date', '<=', $date)
             ->whereDate('end_date', '>=', $date)
-            ->exists();
+            ->get(['start_date', 'end_date', 'charged_dates'])
+            ->contains(fn (LeaveRequest $leave): bool => in_array($date, $leave->chargedDateStrings(), true));
     }
 
     /**
-     * Today's open row (latest segment), or yesterday's still-open row when its shift crosses midnight.
-     * A forgotten check-out of yesterday's day shift is not offered: its real end time goes through a
-     * correction, so a check-out tapped the next night is never recorded as the end of that shift.
+     * The row a check-out tap closes: the live-closable row ({@see self::closableAttendance()}), else the
+     * session the worker checked in to last today (a later session already checked out says so, an earlier
+     * one left open is a missing check-out), else a rejected session of yesterday still inside its check-out
+     * window (an overnight shift tapped after midnight), else today's first row. That row then decides the
+     * refusal (already checked out, rejected, missing check-out, or not checked in).
      */
     private function attendanceToCheckOut(User $user): ?Attendance
     {
-        $todayRows = Attendance::byWorker($user)->with('location')->today()->orderByDesc('segment')->get();
-        $today = $todayRows->first();
-
-        if ($today?->check_in) {
-            // The open segment of a split shift, else the latest one (which is then refused as already checked out).
-            return $todayRows->first(fn (Attendance $row): bool => $row->check_in !== null && $row->check_out === null) ?? $today;
+        if ($closable = $this->closableAttendance($user)) {
+            return $closable;
         }
 
-        return $this->openOvernightAttendance($user) ?? $today;
-    }
+        $todayRows = Attendance::byWorker($user)->with('location')->today()->orderByDesc('segment')->get();
+        $latest = $todayRows->filter(fn (Attendance $row): bool => $row->check_in !== null)
+            ->sortByDesc(fn (Attendance $row): int => $row->check_in->getTimestamp())
+            ->first();
 
-    /**
-     * Yesterday's row of an overnight shift (its hours cross midnight) that is still open after midnight.
-     * Until it is checked out, the app offers its check-out and a new check-in is refused.
-     *
-     * A day shift whose check-out was forgotten does not count: that worker checks in to today as usual.
-     */
-    public function openOvernightAttendance(User $user): ?Attendance
-    {
-        $open = $this->openRowOfYesterday($user);
+        if ($latest) {
+            return $latest;
+        }
 
-        return $open && $this->crossesMidnight($user, $open) ? $open : null;
-    }
-
-    /**
-     * Yesterday's row checked in within the last {@see self::OVERNIGHT_OPEN_HOURS} hours and not checked out yet.
-     */
-    private function openRowOfYesterday(User $user): ?Attendance
-    {
-        return Attendance::byWorker($user)
-            ->with(['location', 'shift'])
+        $rejectedOvernight = Attendance::byWorker($user)
+            ->with('location')
             ->whereDate('date', today()->subDay())
             ->whereNotNull('check_in')
             ->whereNull('check_out')
-            ->where('check_in', '>=', now()->subHours(self::OVERNIGHT_OPEN_HOURS))
-            ->orderByDesc('segment')
-            ->first();
+            ->where('status', AttendanceStatus::Rejected)
+            ->orderByDesc('check_in')
+            ->get()
+            ->first(fn (Attendance $row): bool => ($closesAt = app(SessionResolver::class)->checkOutClosesAt($row)) === null || now()->lessThanOrEqualTo($closesAt));
+
+        return $rejectedOvernight ?? $todayRows->first();
     }
 
     /**
-     * Yesterday's date when this check-in is the first one of a night shift that started yesterday
-     * evening (for example 00:30 on a 22:00 - 06:00 shift, nothing checked in since): the shift belongs
-     * to the date it starts on, its lateness counts from yesterday's start, and the worker's own night
-     * shift starting this evening stays free. Null for a normal check-in on today's date.
+     * The worker's open row (checked in, not checked out, not rejected) of yesterday, today or tomorrow with
+     * the latest check-in, while it can still be checked out live ({@see self::isLiveClosable()}): a closing
+     * shift ending at 22:30 is closed at 00:10 on its own business date. The API, the web panel and the
+     * check-out itself all offer this row.
      */
-    private function overnightCheckInDate(User $user, Employee|Intern|Freelancer $profile): ?CarbonInterface
+    public function closableAttendance(User $user): ?Attendance
     {
-        $yesterday = today()->subDay();
-        $hours = $this->workSchedule->resolve($profile, $yesterday);
-        $start = substr((string) $hours['start_time'], 0, 5);
-        $end = substr((string) $hours['end_time'], 0, 5);
-
-        if ($hours['is_day_off'] || $end > $start || now()->format('H:i') >= $end) {
-            return null;
-        }
-
-        // A rotating roster: today's own shift (for example 06:00 - 14:00 after last night's 22:00 - 06:00)
-        // is nearer than last night's start, so this is an early check-in to today, not a late one to yesterday.
-        $todayHours = $this->workSchedule->resolve($profile, today());
-
-        if (! $todayHours['is_day_off']) {
-            $todayStart = today()->setTimeFromTimeString((string) $todayHours['start_time']);
-            $yesterdayStart = $yesterday->copy()->setTimeFromTimeString((string) $hours['start_time']);
-
-            if (abs(now()->diffInMinutes($todayStart)) < abs(now()->diffInMinutes($yesterdayStart))) {
-                return null;
-            }
-        }
-
-        $rows = Attendance::byWorker($user)
-            ->where(fn ($query) => $query->whereDate('date', $yesterday)->orWhereDate('date', today()))
-            ->get();
-
-        if ($rows->contains(fn (Attendance $row): bool => $row->check_in !== null)) {
-            return null;
-        }
-
-        $yesterdayRow = $rows->first(fn (Attendance $row): bool => $row->date->isSameDay($yesterday) && (int) $row->segment === 1);
-
-        return $this->isApprovedLeave($yesterdayRow) ? null : $yesterday;
-    }
-
-    /**
-     * Yesterday's date for a check-in after midnight to the second segment of yesterday's split shift that
-     * runs past midnight (00:10 on 16:00 - 20:00 & 22:00 - 02:00), while its first segment is closed and the
-     * second one is not checked in yet: the existing second-segment rules then apply to yesterday's rows.
-     */
-    private function overnightSecondSegmentDate(User $user, Employee|Intern|Freelancer $profile): ?CarbonInterface
-    {
-        $yesterday = today()->subDay();
-        $hours = $this->workSchedule->resolve($profile, $yesterday, 2);
-
-        if ($hours['is_day_off'] || $hours['segment'] !== 2) {
-            return null;
-        }
-
-        $start = substr((string) $hours['start_time'], 0, 5);
-        $end = substr((string) $hours['end_time'], 0, 5);
-
-        if ($end > $start || now()->format('H:i') >= $end) {
-            return null;
-        }
-
-        $rows = Attendance::byWorker($user)->whereDate('date', $yesterday)->get();
-        $first = $rows->first(fn (Attendance $row): bool => (int) $row->segment === 1);
-        $second = $rows->first(fn (Attendance $row): bool => (int) $row->segment === 2);
-
-        if (! $first?->check_in || ! ($first->check_out || $first->status === AttendanceStatus::Rejected) || $second?->check_in) {
-            return null;
-        }
-
-        return $yesterday;
-    }
-
-    /**
-     * Tomorrow's date for an early check-in before midnight to a shift starting shortly after it (23:59 on a
-     * 00:00 - 08:00 shift, whose check-in opens at 23:00): the shift belongs to the date it starts on and is
-     * judged against that start. Null when today's own shift is nearer, or nothing of tomorrow is open yet.
-     */
-    private function earlyNextDayCheckInDate(User $user, Employee|Intern|Freelancer $profile): ?CarbonInterface
-    {
-        $tomorrow = today()->addDay();
-        $hours = $this->workSchedule->resolve($profile, $tomorrow);
-
-        if ($hours['is_day_off'] || $this->workSchedule->isOffSchedule($profile, $hours)) {
-            return null;
-        }
-
-        $tomorrowStart = $tomorrow->copy()->setTimeFromTimeString((string) $hours['start_time']);
-
-        if (now()->lessThan($tomorrowStart->copy()->subMinutes(self::CHECK_IN_OPENS_MINUTES_BEFORE))) {
-            return null;
-        }
-
-        $todayHours = $this->workSchedule->resolve($profile, today());
-
-        if (! $todayHours['is_day_off']) {
-            $todayStart = today()->setTimeFromTimeString((string) $todayHours['start_time']);
-
-            if (abs(now()->diffInMinutes($todayStart)) < abs(now()->diffInMinutes($tomorrowStart))) {
-                return null;
-            }
-        }
-
-        // Today's shift is still open: it is checked out first.
-        $openToday = Attendance::byWorker($user)
-            ->whereDate('date', today())
+        return Attendance::byWorker($user)
+            ->with(['location', 'shift'])
+            ->whereDate('date', '>=', today()->subDay())
+            ->whereDate('date', '<=', today()->addDay())
             ->whereNotNull('check_in')
             ->whereNull('check_out')
             ->where('status', '!=', AttendanceStatus::Rejected)
-            ->exists();
+            ->orderByDesc('check_in')
+            ->orderByDesc('segment')
+            ->get()
+            ->first(fn (Attendance $row): bool => $this->isLiveClosable($row));
+    }
 
-        return $openToday ? null : $tomorrow;
+    /**
+     * Whether an open row can still be checked out live: its check-out was not refused, now is not past
+     * {@see SessionResolver::checkOutClosesAt()} (the scheduled end plus the grace hours, the end of its
+     * business date, or for an overnight row its check-in plus {@see self::OVERNIGHT_OPEN_HOURS} hours), and
+     * the worker has not checked in anywhere since. Past that, the row is a missing check-out.
+     */
+    public function isLiveClosable(Attendance $attendance): bool
+    {
+        if (! $attendance->check_in || $attendance->check_out || $attendance->status === AttendanceStatus::Rejected || $attendance->check_out_rejected_at) {
+            return false;
+        }
+
+        $closesAt = app(SessionResolver::class)->checkOutClosesAt($attendance);
+
+        if ($closesAt && now()->startOfSecond()->greaterThan($closesAt)) {
+            return false;
+        }
+
+        $workerKeys = array_filter([
+            'employee_id' => $attendance->employee_id,
+            'intern_id' => $attendance->intern_id,
+            'freelancer_id' => $attendance->freelancer_id,
+        ]);
+
+        if ($workerKeys === []) {
+            return true;
+        }
+
+        return Attendance::query()
+            ->where($workerKeys)
+            ->whereKeyNot($attendance->getKey())
+            ->where('check_in', '>', $attendance->check_in)
+            ->where('status', '!=', AttendanceStatus::Rejected)
+            ->doesntExist();
+    }
+
+    /**
+     * Yesterday's live-closable row of an overnight shift (its hours cross midnight). Until it is checked
+     * out, the app offers its check-out and a new check-in is refused.
+     */
+    public function openOvernightAttendance(User $user): ?Attendance
+    {
+        $open = $this->closableAttendance($user);
+
+        return $open && $open->date->isSameDay(today()->subDay()) && $this->crossesMidnight($user, $open) ? $open : null;
+    }
+
+    /**
+     * The worker's live-closable row that holds any new check-in back: until its scheduled end, and for a
+     * session ending on the next calendar day within {@see self::OVERNIGHT_OPEN_HOURS} hours of its check-in.
+     * Past that, a check-in to another session is allowed and the row becomes a missing check-out (a later
+     * check-in stops it being closable). A row without any hours holds a check-in back while it is closable.
+     */
+    private function blockingOpenAttendance(User $user): ?Attendance
+    {
+        $open = $this->closableAttendance($user);
+
+        if (! $open) {
+            return null;
+        }
+
+        $now = now()->startOfSecond();
+
+        if ($this->crossesMidnight($user, $open) && $now->lessThanOrEqualTo($open->check_in->copy()->addHours(self::OVERNIGHT_OPEN_HOURS))) {
+            return $open;
+        }
+
+        $end = app(SessionResolver::class)->windowOf($open)['end'] ?? null;
+
+        return $end === null || $now->lessThan($end) ? $open : null;
+    }
+
+    /**
+     * Why an open row can no longer be checked out live: its check-out was refused; or it is an earlier
+     * session of today that a later check-in left behind; or (the only or latest session of its day, or a
+     * row of an earlier day) its check-out was simply missed. Each is filed as a correction.
+     */
+    public function notClosableMessage(Attendance $attendance): string
+    {
+        return match (true) {
+            (bool) $attendance->check_out_rejected_at => self::CHECK_OUT_REFUSED_MESSAGE,
+            $attendance->date?->isToday() && $this->hasLaterCheckIn($attendance) => self::FORGOTTEN_EARLIER_SESSION_MESSAGE,
+            default => self::FORGOTTEN_CHECK_OUT_MESSAGE,
+        };
+    }
+
+    /**
+     * Whether the worker checked in (not rejected) after this row's check-in: the row is then an earlier
+     * session of the day, not the only or latest one.
+     */
+    private function hasLaterCheckIn(Attendance $attendance): bool
+    {
+        $worker = $attendance->getWorkerProfile();
+
+        return $worker !== null && $attendance->check_in !== null && Attendance::query()
+            ->where($this->workSchedule->workerColumn($worker), $worker->getKey())
+            ->whereKeyNot($attendance->getKey())
+            ->where('check_in', '>', $attendance->check_in)
+            ->where(fn ($notRejected) => $notRejected->whereNull('status')->orWhere('status', '!=', AttendanceStatus::Rejected->value))
+            ->exists();
+    }
+
+    /**
+     * An open row of the last {@see self::FORGOTTEN_LOOKBACK_DAYS} days that can no longer be checked out
+     * live: its real end time goes through a correction, so a check-out tapped now is never recorded as the
+     * end of that shift.
+     */
+    private function forgottenCheckOut(User $user): ?Attendance
+    {
+        return Attendance::byWorker($user)
+            ->with('shift')
+            ->whereDate('date', '>=', today()->subDays(self::FORGOTTEN_LOOKBACK_DAYS))
+            ->whereDate('date', '<=', today())
+            ->whereNotNull('check_in')
+            ->whereNull('check_out')
+            ->where('status', '!=', AttendanceStatus::Rejected)
+            ->orderByDesc('check_in')
+            ->get()
+            ->first(fn (Attendance $row): bool => ! $this->isLiveClosable($row));
     }
 
     /**
      * Hours of an off-schedule check-in ("Masuk di luar jadwal"): those of the covered shift, which every such
-     * check-in must name (window, lateness and early leave apply). The outlet is the one the replaced
-     * colleague was rostered at, if any.
+     * check-in must name (window, lateness and early leave apply). The outlet is the one the check-in names,
+     * else the one the replaced colleague was rostered at; without either the caller matches the geofence.
      *
-     * @param  array<string, mixed>  $rosterHours
-     * @return array{0: array<string, mixed>, 1: array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null}}
+     * @return array{0: array<string, mixed>, 1: array{reason: string, replaced_worker_type: string|null, replaced_worker_id: int|null, replaced_schedule_id: int|null}}
      *
      * @throws AttendanceRuleException
      */
-    private function offScheduleHours(Employee|Intern|Freelancer $profile, CarbonInterface $businessDate, AttendanceCheckInput $input, array $rosterHours): array
+    private function offScheduleHours(Employee|Intern|Freelancer $profile, CarbonInterface $businessDate, AttendanceCheckInput $input): array
     {
         $coverShift = $this->offSchedule()->coverShift($profile, $input->coverShiftId);
+        $outlet = $this->offSchedule()->coverLocation($profile, $input->coverLocationId);
         $replaced = $this->offSchedule()->replacedWorker($profile, $input->replacesWorker, $businessDate, $coverShift);
-        $location = $this->offSchedule()->outletOf($replaced) ?? $rosterHours['location'];
+        $location = $outlet ?? $this->offSchedule()->outletOf($replaced);
 
         $hours = $this->workSchedule->hoursForShift($coverShift, $profile, 1, $location);
 
@@ -778,6 +943,7 @@ class AttendanceCheckService
             'reason' => $this->offSchedule()->reason($replaced['worker'] ?? null),
             'replaced_worker_type' => $replaced ? $this->offSchedule()->typeOf($replaced['worker']) : null,
             'replaced_worker_id' => $replaced ? (int) $replaced['worker']->getKey() : null,
+            'replaced_schedule_id' => $replaced ? (int) $replaced['schedule']->getKey() : null,
         ]];
     }
 
@@ -806,7 +972,7 @@ class AttendanceCheckService
 
         $yesterday = today()->subDay();
 
-        if (! $this->workSchedule->isOffSchedule($profile, $this->workSchedule->resolve($profile, $yesterday))) {
+        if (app(SessionResolver::class)->sessionsFor($profile, $yesterday) !== []) {
             return null;
         }
 
@@ -833,10 +999,16 @@ class AttendanceCheckService
     }
 
     /**
-     * The row's shift ends the next day, or, without a shift, the company hours do (for example 22:00 - 06:00).
+     * The row's scheduled hours end the next day: those of its schedule snapshot, else of its shift or,
+     * without a shift, the company hours (for example 22:00 - 06:00).
      */
     private function crossesMidnight(User $user, Attendance $attendance): bool
     {
+        // The hours kept on the row at check-in decide; a row without them is read from its shift as before.
+        if ($attendance->hasSnapshot() && $attendance->sched_start_at && $attendance->sched_end_at) {
+            return ! $attendance->sched_end_at->isSameDay($attendance->sched_start_at);
+        }
+
         if ($attendance->shift) {
             $shift = $attendance->shift;
 
@@ -925,6 +1097,7 @@ class AttendanceCheckService
      *     liveness_verified: bool|null,
      *     liveness_notes: string|null,
      *     liveness_frames: list<string>|null,
+     *     matched_location_id: int|null,
      *     approval_reasons: list<string>,
      * }
      *
@@ -948,6 +1121,7 @@ class AttendanceCheckService
             'liveness_verified' => null,
             'liveness_notes' => null,
             'liveness_frames' => null,
+            'matched_location_id' => null,
         ];
 
         if ($policy?->require_gps) {
@@ -968,6 +1142,7 @@ class AttendanceCheckService
             }
 
             $geofence = GeofenceService::validateCompanyGeofence($company, $input->latitude, $input->longitude, $outlet);
+            $checks['matched_location_id'] = $geofence['matched_location_id'] ?? null;
 
             if (! $geofence['is_valid']) {
                 $checks['is_out_of_bounds'] = true;

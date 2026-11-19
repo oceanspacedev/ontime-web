@@ -46,8 +46,12 @@ class CreateLeaveRequest extends CreateRecord
             throw ValidationException::withMessages(collect($errors)->mapWithKeys(fn (string $message, string $field): array => ["data.{$field}" => $message])->all());
         }
 
-        $daysCount = $startDate->diffInDays($endDate) + 1;
         $leaveService = app(AnnualLeaveService::class);
+        $daysCount = count($leaveService->chargedDates($workerProfile, $startDate, $endDate));
+
+        if ($daysCount === 0) {
+            throw ValidationException::withMessages(['data.start_date' => AnnualLeaveService::NO_WORKDAY_MESSAGE.'.']);
+        }
 
         // Interns, freelancers and employees without annual leave cannot file it; others must fit their quota.
         // No leave of any type may share a day with another pending or approved leave.

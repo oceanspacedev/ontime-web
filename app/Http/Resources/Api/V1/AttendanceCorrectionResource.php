@@ -28,6 +28,16 @@ class AttendanceCorrectionResource extends JsonResource
             // Older app versions read rejection_note.
             'rejection_note' => $this->rejection_reason,
             'attachment' => StorageUrl::for($this->attachment),
+            // Additive (newer apps): the session corrected, a check-out on the next day, the shift and
+            // outlet that really applied, and whether the record is a worker's request or an admin's edit.
+            'attendance_id' => $this->attendance_id,
+            'schedule_id' => $this->shift_schedule_id,
+            'sequence' => $this->target_sequence,
+            'segment' => $this->target_segment,
+            'check_out_next_day' => (bool) $this->check_out_next_day,
+            'corrected_shift_id' => $this->corrected_shift_id,
+            'corrected_company_location_id' => $this->corrected_company_location_id,
+            'origin' => $this->origin ?? 'worker',
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'employee' => $this->employee ? $this->formatWorkerProfile($this->employee) : null,

@@ -2,6 +2,7 @@ import { onlineManager } from '@tanstack/react-query';
 
 import { type DevicePosition, LocationUnavailableError, submitLocationError } from '../location';
 import { confirmOnline } from '../networkState';
+import { workingScheduleCount } from '../today';
 import { appendFile, NetworkError, request } from './client';
 import type {
   Attendance,
@@ -59,6 +60,39 @@ export function isOffScheduleToday(
     return schedule.is_off_schedule;
   }
   return schedule.is_day_off || (isFreelancer && !schedule.shift);
+}
+
+/**
+ * The schedule a check-in names on a day with several schedules (not a split shift's segments): the session the home card shows as current (its
+ * hours and outlet are the ones on screen), and only for a real roster row. Null lets the server pick, as
+ * older builds always did: on a one-schedule day, on an older server, and for an off-schedule check-in.
+ */
+export function currentScheduleId(today: Pick<TodayAttendance, 'schedules'> | null | undefined, offSchedule: boolean): number | null {
+  if (offSchedule || workingScheduleCount(today) < 2) {
+    return null;
+  }
+  return (today?.schedules ?? []).find((item) => !item.is_day_off && item.is_current)?.schedule_id ?? null;
+}
+
+/**
+ * currentScheduleId from a fresh read of today, made right before the check-in is sent: the cached card may be
+ * up to its staleTime old, and the server books the named schedule as given even after its window closed. A
+ * failed read names nothing, so the server picks the session itself.
+ */
+export async function freshCurrentScheduleId(read: () => Promise<Pick<TodayAttendance, 'schedules'>>): Promise<number | null> {
+  try {
+    return currentScheduleId(await read(), false);
+  } catch {
+    return null;
+  }
+}
+
+/** A picked cover outlet that is still on offer, or null (the server then takes the colleague's or the geofence's outlet). */
+export function coverLocationOf(options: CoverOptions | null | undefined, picked: number | null): number | null {
+  if (picked === null || !options?.outlets) {
+    return null;
+  }
+  return options.outlets.some((outlet) => outlet.id === picked) ? picked : null;
 }
 
 /**
@@ -147,6 +181,10 @@ export interface CheckPayload {
   coverShiftId?: number | null;
   /** Check-in outside the schedule: the colleague replaced, as "employee:12". */
   replacesWorker?: string | null;
+  /** The schedule checked in to, on a day with several; without it the server picks. */
+  scheduleId?: number | null;
+  /** Check-in outside the schedule: the outlet worked at. */
+  coverLocationId?: number | null;
 }
 
 export type CheckResponse = AttendanceCheckResponse;
@@ -179,6 +217,12 @@ export function buildCheckForm(payload: CheckPayload): FormData {
   }
   if (payload.replacesWorker) {
     form.append('replaces_worker', payload.replacesWorker);
+  }
+  if (payload.scheduleId !== undefined && payload.scheduleId !== null) {
+    form.append('schedule_id', String(payload.scheduleId));
+  }
+  if (payload.coverLocationId !== undefined && payload.coverLocationId !== null) {
+    form.append('cover_location_id', String(payload.coverLocationId));
   }
   return form;
 }
@@ -276,6 +320,8 @@ export interface AttendanceFilter {
   start_date?: string;
   end_date?: string;
   status?: AttendanceStatus;
+  /** 1 keeps only the signed-in worker's own rows; older servers ignore it and return the whole scope. */
+  mine?: 1;
 }
 
 export function list(filter: AttendanceFilter): Promise<Paginated<Attendance, PaginationA>> {

@@ -56,6 +56,10 @@ class Probe_scheduling_BUGSCH4Test extends TestCase
         dump(array_intersect_key($mine, array_flip(['outlet', 'scheduled_days', 'present_days', 'absent_days', 'off_days'])));
 
         $this->assertSame(0, $mine['present_days']);
-        $this->assertSame(0, $mine['absent_days'], 'An approved leave day must not be counted as Tidak Hadir (no-show).');
+        $this->assertSame(1, $mine['leave_days'], 'The approved leave day is a leave day.');
+        // The recap now counts the no-shows laporan absensi always counted: the eleven weekdays (2 - 16 Nov) before
+        // the date of this worker's first roster row, when the company week (Monday to Friday) was expected of them.
+        // The leave day itself (the 17th) is not among them.
+        $this->assertSame(11, $mine['absent_days'], 'An approved leave day must not be counted as Tidak Hadir (no-show).');
     }
 }

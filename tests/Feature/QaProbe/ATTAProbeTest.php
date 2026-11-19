@@ -20,6 +20,7 @@ use App\Models\User;
 use App\Services\ApprovalFlowService;
 use App\Services\AttendanceCheckService;
 use App\Services\GeofenceService;
+use App\Services\RosterChangeContext;
 use Database\Seeders\RoleSeeder;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -686,7 +687,8 @@ class ATTAProbeTest extends TestCase
         foreach ([$atA1, $atA2] as $worker) {
             $schedule = ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => today(), 'shift_id' => $shift->id, 'company_location_id' => $a1->id]);
             $this->submit($worker, self::CHECK_IN_URL, ['latitude' => self::A1_LAT, 'longitude' => self::A1_LNG])->assertOk()->assertJsonPath('requires_approval', false);
-            $schedule->update(['company_location_id' => $a2->id]);
+            // D4: only an approved correction may still move a checked-in schedule.
+            RosterChangeContext::run('correction', null, fn () => $schedule->update(['company_location_id' => $a2->id]));
         }
 
         $this->travelTo(today()->setTime(17, 0));
