@@ -5,6 +5,7 @@ use App\Filament\Auth\Pages\PhoneLogin;
 use App\Http\Controllers\AppEmailLoginController;
 use App\Http\Controllers\AttendancePhotoController;
 use App\Http\Controllers\CoreSsoController;
+use App\Http\Controllers\PanduanVideoController;
 use App\Http\Controllers\TeamRecapDownloadController;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
@@ -47,6 +48,12 @@ Route::get('/auth/callback', [CoreSsoController::class, 'callback'])->name('sso.
 // Selfies for the panel's "Presensi Mandiri": the controller requires the panel (web guard) login and
 // answers with an upload token instead of the storage path (see App\Support\SelfieUploadToken).
 Route::post('/upload-selfie', [AttendancePhotoController::class, 'upload'])->name('upload.selfie');
+
+// Tutorial videos and posters of the panel's Panduan page. The controller checks panel access itself:
+// there is no "login" route for the auth middleware to send a guest to.
+Route::get('/admin/panduan/video/{file}', PanduanVideoController::class)
+    ->where('file', '[a-z0-9]+(?:-[a-z0-9]+)*\.(?:mp4|jpg)')
+    ->name('panduan.video');
 
 // Monthly team recap for the app: a signed, short-lived link the phone's browser can open.
 Route::get('/exports/team-recap/{user}', TeamRecapDownloadController::class)
