@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\OneSignalPushService;
+use App\Services\ShiftAssignmentService;
 use App\Traits\ScopesToWorkerVisibility;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -74,10 +75,7 @@ class Resignation extends Model
             $employee->update(['status' => 'inactive']);
 
             // Like an ended contract: rosters after the last working day no longer expect the leaver.
-            ShiftSchedule::query()
-                ->where('employee_id', $employee->getKey())
-                ->whereDate('date', '>', $this->last_working_day?->toDateString() ?? today()->toDateString())
-                ->delete();
+            app(ShiftAssignmentService::class)->deleteFutureFor($employee, $this->last_working_day ?? today());
 
             if ($user = $employee->user) {
                 $user->update(['is_active' => false]);

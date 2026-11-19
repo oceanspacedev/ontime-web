@@ -4,30 +4,33 @@ namespace App\Services;
 
 use App\Enums\AttendanceStatus;
 use App\Models\Attendance;
-use App\Models\ShiftSchedule;
-use Carbon\CarbonInterface;
+use App\Models\CompanyLocation;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Judges an attendance row again against the schedule that applies now: its shift, its lateness
- * (status on_time/late, or the check-in snapshot of a row waiting for approval) and its early leave.
+ * Judges an attendance row again against the schedule it was checked in to: its lateness (status
+ * on_time/late, or the check-in verdict of a row waiting for approval) and its early leave.
  *
- * Used whenever the facts behind the judgement change after the check-in: the roster of that date is
- * created, changed or removed ({@see ShiftSchedule} events), or an admin moves the check-in or check-out.
- * Rejected, leave and other non-working rows are never touched.
+ * D4: the schedule is the one kept in the row's snapshot (the sched_* columns), so a roster or shift
+ * master edit made after the check-in never changes the result, and nothing here rewrites the row's
+ * shift or snapshot. Used only when the facts of the attendance itself change: an admin moves the check-in
+ * or check-out, or a correction is applied. Rejected, leave and other non-working rows are never touched.
  */
 class AttendanceLatenessService
 {
     /** Statuses of a worked day whose lateness can be judged again. */
     private const RECALCULABLE = [AttendanceStatus::OnTime, AttendanceStatus::Late, AttendanceStatus::PendingApproval];
 
-    private static bool $paused = false;
-
-    public function __construct(private readonly WorkScheduleService $workSchedule) {}
+    public function __construct(
+        private readonly WorkScheduleService $workSchedule,
+        private readonly SessionResolver $sessions,
+    ) {}
 
     /**
-     * Run the callback without recalculating attendance on roster changes, for a schedule written as a
-     * consequence of a decision already taken on that attendance (for example an approved off-schedule check-in).
+     * Run the callback. Roster changes no longer re-judge attendance (D4), so there is nothing to pause;
+     * kept so existing callers keep working.
+     *
+     * @deprecated Roster changes never recalculate attendance; call the callback directly.
      *
      * @template T
      *
@@ -36,69 +39,139 @@ class AttendanceLatenessService
      */
     public static function withoutRosterRecalculation(callable $callback): mixed
     {
-        $previous = self::$paused;
-        self::$paused = true;
-
-        try {
-            return $callback();
-        } finally {
-            self::$paused = $previous;
-        }
-    }
-
-    public static function rosterRecalculationPaused(): bool
-    {
-        return self::$paused;
+        return $callback();
     }
 
     /**
-     * The shift and lateness of the row's check-in under the schedule that applies now.
+     * @deprecated Roster changes never recalculate attendance, so this is always false.
+     */
+    public static function rosterRecalculationPaused(): bool
+    {
+        return false;
+    }
+
+    /**
+     * The shift and lateness of the row's check-in under the schedule it was checked in to.
      *
-     * When the roster says the worker is off that day (a day off, or a freelancer without a shift), the
-     * row's own shift is kept (the cover shift of an off-schedule check-in, or the shift checked in to);
-     * without one there is nothing to be late for. An off-schedule check-in is only judged against the
-     * roster once that date's schedule names a real shift (the approved cover shift, or one the PIC set);
-     * never against the worker's default shift or the company hours it was not called in for.
+     * A row with a schedule snapshot is judged against it ({@see WorkScheduleService::snapshotLateMinutes()}),
+     * and keeps its shift. A row without one (written before snapshots existed, or a fixture) is judged
+     * against its own shift when it has one; only a row without a shift falls back to the schedule that
+     * applies now: when the roster says the worker is off that day (a day off, or a freelancer without a
+     * shift) there is nothing to be late for, and an off-schedule check-in is never judged against the
+     * worker's default shift or the company hours it was not called in for.
      *
-     * @return array{shift_id: int|null, late_minutes: int}
+     * hours are the working hours the row was judged against ({@see WorkScheduleService::resolve()} shape),
+     * or null when there are none or the snapshot was used.
+     *
+     * @return array{shift_id: int|null, late_minutes: int, hours: array<string, mixed>|null}
      */
     public function judge(Attendance $attendance): array
     {
         $worker = $attendance->getWorkerProfile();
 
         if (! $worker || ! $attendance->check_in || ! $attendance->date) {
-            return ['shift_id' => $attendance->shift_id, 'late_minutes' => 0];
+            return ['shift_id' => $attendance->shift_id, 'late_minutes' => 0, 'hours' => null];
+        }
+
+        if ($attendance->hasSnapshot()) {
+            return ['shift_id' => $attendance->shift_id, 'late_minutes' => $this->workSchedule->snapshotLateMinutes($attendance), 'hours' => null];
         }
 
         $segment = (int) ($attendance->segment ?: 1);
-        $hours = $this->workSchedule->resolve($worker, $attendance->date, $segment);
-        $offRoster = $this->workSchedule->isOffSchedule($worker, $hours)
-            || ($attendance->is_off_schedule && ! $this->workSchedule->hasRosteredShift($worker, $attendance->date));
+        $attendance->loadMissing('shift');
 
-        if ($offRoster) {
-            $attendance->loadMissing('shift');
-
-            if (! $attendance->shift) {
-                return ['shift_id' => null, 'late_minutes' => 0];
-            }
-
+        if ($attendance->shift) {
             $hours = $this->workSchedule->hoursForShift($attendance->shift, $worker, $segment);
+        } else {
+            $hours = $this->workSchedule->resolve($worker, $attendance->date, $segment);
+            $offRoster = $this->workSchedule->isOffSchedule($worker, $hours)
+                || ($attendance->is_off_schedule && ! $this->workSchedule->hasRosteredShift($worker, $attendance->date));
+
+            if ($offRoster) {
+                return ['shift_id' => null, 'late_minutes' => 0, 'hours' => null];
+            }
         }
 
         return [
             'shift_id' => $hours['shift']?->id,
             'late_minutes' => $this->workSchedule->lateMinutes($hours, $attendance->check_in, $attendance->date),
+            'hours' => $hours,
         ];
     }
 
     /**
-     * Judge the row again and save it. The row is read again under a lock, so an approval or a check-out
-     * running at the same time is not overwritten with stale values.
+     * The schedule snapshot of a checked-in row for the working hours it is judged against (null = none).
+     * An off-schedule check-in is always a cover; hours taken from the row's own shift on a day the roster
+     * gives no shift count as that shift without a roster link. The outlet is the one stored on the row.
+     *
+     * @param  array<string, mixed>|null  $hours
+     * @return array<string, mixed>
+     */
+    public function snapshotFor(Attendance $attendance, ?array $hours): array
+    {
+        $worker = $attendance->getWorkerProfile();
+        $session = $hours && $worker && $attendance->date ? $this->sessions->sessionFromHours($worker, $hours, $attendance->date) : null;
+
+        $source = match (true) {
+            (bool) $attendance->is_off_schedule => 'cover',
+            $session?->source === 'cover' => 'default',
+            default => null,
+        };
+
+        $outletName = $attendance->company_location_id
+            ? CompanyLocation::query()->whereKey($attendance->company_location_id)->value('name')
+            : null;
+
+        return $this->sessions->snapshotFor($session, $source, $outletName);
+    }
+
+    /**
+     * Give a checked-in row that has no schedule snapshot yet the one of the hours it is judged against,
+     * without judging it again: after an admin moved its times or gave it a check-in. The shift stored on
+     * the row decides (linked to the roster row of the date when that names the same shift); without one,
+     * the schedule that applies now (and its shift is stored). A row that has a snapshot keeps it.
+     *
+     * @return bool Whether a snapshot was written.
+     */
+    public function writeMissingSnapshot(Attendance $attendance): bool
+    {
+        return DB::transaction(function () use ($attendance): bool {
+            $row = Attendance::query()->with(['employee', 'intern', 'freelancer', 'shift'])->whereKey($attendance->getKey())->lockForUpdate()->first();
+            $worker = $row?->getWorkerProfile();
+
+            if (! $row || ! $row->check_in || $row->hasSnapshot() || ! $worker) {
+                return false;
+            }
+
+            $segment = (int) ($row->segment ?: 1);
+
+            if ($row->shift) {
+                // The roster row of the date is linked when it names the row's own shift (the backfill rule).
+                $rostered = $row->is_off_schedule ? null : $this->workSchedule->resolve($worker, $row->date, $segment);
+                $hours = $rostered && $rostered['source'] === 'schedule' && ($rostered['shift']?->id === $row->shift->id)
+                    ? $rostered
+                    : $this->workSchedule->hoursForShift($row->shift, $worker, $segment);
+            } else {
+                ['shift_id' => $shiftId, 'hours' => $hours] = $this->judge($row);
+                $row->shift_id = $shiftId;
+            }
+
+            $row->fillSnapshot($this->snapshotFor($row, $hours))->saveQuietly();
+            $attendance->setRawAttributes($row->getAttributes(), true);
+
+            return true;
+        });
+    }
+
+    /**
+     * Judge the row again and save it: the explicit admin or correction operation after the row's own
+     * times changed. The row is read again under a lock, so an approval or a check-out running at the same
+     * time is not overwritten with stale values. Its shift and schedule snapshot are never rewritten.
      *
      * A row whose status or late minutes an admin set by hand ({@see Attendance::$status_overridden}) keeps
-     * that verdict on a roster change; pass $force when the admin moved its times, which needs a new verdict.
+     * that verdict; pass $force when the admin moved its times, which needs a new verdict.
      *
-     * @return bool Whether the row changed.
+     * @return bool Whether the judged result (lateness, status, early leave) changed.
      */
     public function recalculate(Attendance $attendance, bool $force = false): bool
     {
@@ -115,16 +188,18 @@ class AttendanceLatenessService
 
             $row->status_overridden = false;
 
-            ['shift_id' => $shiftId, 'late_minutes' => $lateMinutes] = $this->judge($row);
+            ['late_minutes' => $lateMinutes] = $this->judge($row);
 
-            $row->shift_id = $shiftId;
-            $row->unsetRelation('shift');
             $row->check_in_late_minutes = $lateMinutes;
 
-            // A row waiting for approval is not late in reports yet; the approval applies the snapshot.
+            // A row waiting for approval is not late in reports yet; the approval applies the verdict.
+            // When only its check-out waits, the check-in was settled: its verdict is judged anew here
+            // and kept as the status the approval or rejection of the check-out brings back.
             if ($row->status !== AttendanceStatus::PendingApproval) {
                 $row->late_minutes = $lateMinutes;
                 $row->status = $lateMinutes > 0 ? AttendanceStatus::Late : AttendanceStatus::OnTime;
+            } elseif ($row->isCheckOutRound()) {
+                $row->rejudgeSettledCheckIn($lateMinutes);
             }
 
             $row->early_leave_minutes = $row->check_out ? $this->workSchedule->earlyLeaveMinutes($row) : null;
@@ -138,57 +213,5 @@ class AttendanceLatenessService
 
             return true;
         });
-    }
-
-    /**
-     * Recalculate every row of one worker on one date (both segments of a split shift).
-     *
-     * @return int The number of rows that changed.
-     */
-    public function recalculateWorkerDate(string $workerColumn, int $workerId, CarbonInterface|string $date): int
-    {
-        if (self::$paused) {
-            return 0;
-        }
-
-        $date = $date instanceof CarbonInterface ? $date->toDateString() : substr($date, 0, 10);
-
-        return Attendance::query()
-            ->where($workerColumn, $workerId)
-            ->whereDate('date', $date)
-            ->whereNotNull('check_in')
-            ->orderBy('segment')
-            ->get()
-            ->filter(fn (Attendance $row): bool => $this->recalculate($row))
-            ->count();
-    }
-
-    /**
-     * Recalculate the attendance a roster change affects: the worker on the schedule's date, and on its
-     * previous date when the date (or the worker) itself moved.
-     */
-    public function recalculateForSchedule(ShiftSchedule $schedule, bool $deleted = false): void
-    {
-        if (self::$paused) {
-            return;
-        }
-
-        $targets = [];
-
-        foreach (['employee_id', 'intern_id', 'freelancer_id'] as $column) {
-            if ($schedule->{$column}) {
-                $targets[] = [$column, (int) $schedule->{$column}, $schedule->date];
-            }
-
-            if (! $deleted && $schedule->getOriginal($column) && ($schedule->wasChanged($column) || $schedule->wasChanged('date'))) {
-                $targets[] = [$column, (int) $schedule->getOriginal($column), $schedule->getOriginal('date')];
-            }
-        }
-
-        foreach ($targets as [$column, $workerId, $date]) {
-            if ($date) {
-                $this->recalculateWorkerDate($column, $workerId, $date);
-            }
-        }
     }
 }

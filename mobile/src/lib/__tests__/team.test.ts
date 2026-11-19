@@ -1,6 +1,6 @@
 import { deriveAccess } from '../access';
-import type { TeamRoster, User } from '../api/types';
-import { recapLine, rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention, weekCellText, weekStart } from '../team';
+import type { TeamRoster, User, WeekCell } from '../api/types';
+import { daySchedules, entrySupportsMultipleSchedules, recapLine, rosterBadge, rosterLine, rosterSummary, shiftDate, shiftText, teamAttention, weekCellMarks, weekCellText, weekStart } from '../team';
 
 function user(overrides: Partial<User>): User {
   return {
@@ -78,6 +78,21 @@ describe('team summaries', () => {
     expect(rosterSummary({ date: '2026-11-06', outlets: [] }, '2026-11-06')).toBe('Belum ada jadwal');
   });
 
+  it('prefers the distinct people a newer server counts, so a two-outlet person counts once', () => {
+    const twoOutlets: TeamRoster = {
+      date: '2026-11-06',
+      outlets: [
+        { location: { id: 1, name: 'JChicken Ciledug' }, counts: { ...counts, scheduled: 2, hadir: 1, terlambat: 0 }, entries: [] },
+        { location: { id: 2, name: 'JChicken Bintaro' }, counts: { ...counts, scheduled: 2, hadir: 1, terlambat: 0 }, entries: [] },
+      ],
+    };
+    // An older server: per-outlet counts are added up.
+    expect(rosterSummary(twoOutlets, '2026-11-06')).toBe('2 dari 4 orang sudah absen');
+    expect(rosterSummary({ ...twoOutlets, summary: { people_scheduled: 3, people_checked_in: 1 } }, '2026-11-06')).toBe('1 dari 3 orang sudah absen');
+    expect(rosterSummary({ ...twoOutlets, date: '2026-11-07', summary: { people_scheduled: 3, people_checked_in: 0 } }, '2026-11-06')).toBe('3 orang terjadwal');
+    expect(rosterSummary({ date: '2026-11-06', outlets: [], summary: { people_scheduled: 0, people_checked_in: 0 } }, '2026-11-06')).toBe('Belum ada jadwal');
+  });
+
   it('points out who is missing or late', () => {
     expect(teamAttention(roster)).toBe('1 belum absen · 1 terlambat');
     expect(teamAttention({ ...roster, outlets: [{ ...roster.outlets[0], counts: { ...counts, belum: 0, terlambat: 0 } }] })).toBeUndefined();
@@ -104,6 +119,14 @@ describe('recapLine', () => {
     expect(recapLine({ ...row, early_leave_days: 1, overtime_hours: 6.5 })).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 1× pulang cepat · 152,5 jam · lembur 6,5 jam');
     expect(recapLine({ ...row, pending_days: 2 })).toBe('Masuk 18/20 · 2 tidak hadir · 2 menunggu persetujuan · 3× telat · 152,5 jam');
     expect(recapLine({ ...row, early_leave_days: 0, overtime_hours: 0 })).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam');
+  });
+
+  it('appends leave days and missed check-outs from a newer server', () => {
+    expect(recapLine({ ...row, leave_days: 2 })).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam · 2 hari cuti');
+    expect(recapLine({ ...row, leave_days: 2, missing_check_out_days: 1, overtime_hours: 6 })).toBe(
+      'Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam · lembur 6 jam · 2 hari cuti · 1× belum absen pulang',
+    );
+    expect(recapLine({ ...row, leave_days: 0, missing_check_out_days: 0 })).toBe('Masuk 18/20 · 2 tidak hadir · 3× telat · 152,5 jam');
   });
 });
 
@@ -161,4 +184,53 @@ describe('weekly grid', () => {
     expect(weekCellText({ is_day_off: true, shift: null })).toBe('OFF');
     expect(weekCellText(undefined)).toBe('–');
   });
+
+  const pagi: WeekCell = {
+    schedule_id: 10,
+    sequence: 1,
+    is_day_off: false,
+    shift: { id: 1, name: 'Pagi', code: 'P', talenta_code: null, label: '', segments: [] },
+    location_id: 1,
+    outlet: 'JChicken Ciledug',
+    section: null,
+    more: 1,
+    locked: true,
+    on_leave: false,
+  };
+  const malam: WeekCell = { ...pagi, schedule_id: 11, sequence: 2, shift: { ...pagi.shift!, id: 2, name: 'Malam', code: null }, more: undefined, locked: false };
+
+  it('joins the codes of a day with several schedules', () => {
+    expect(weekCellText(pagi, [pagi, malam])).toBe('P+Malam');
+    // One schedule in the list reads as the single cell.
+    expect(weekCellText(pagi, [pagi])).toBe('P');
+    // An older server sends no list: the single cell.
+    expect(weekCellText(pagi, undefined)).toBe('P');
+    expect(weekCellText(undefined, [])).toBe('–');
+  });
+
+  it('reads every schedule of a date, falling back to the single cell on an older server', () => {
+    expect(daySchedules({ days: { '2026-11-02': pagi }, day_schedules: { '2026-11-02': [pagi, malam] } }, '2026-11-02')).toEqual([pagi, malam]);
+    expect(daySchedules({ days: { '2026-11-02': pagi } }, '2026-11-02')).toEqual([pagi]);
+    expect(daySchedules({ days: {}, day_schedules: {} }, '2026-11-02')).toEqual([]);
+  });
+
+  it('marks a leave date and a schedule that already has attendance', () => {
+    expect(weekCellMarks([pagi, malam])).toEqual({ onLeave: false, locked: true });
+    expect(weekCellMarks([{ ...malam, on_leave: true }])).toEqual({ onLeave: true, locked: false });
+    expect(weekCellMarks([{ locked: undefined, on_leave: undefined }])).toEqual({ onLeave: false, locked: false });
+  });
 });
+
+describe('entrySupportsMultipleSchedules', () => {
+  it('offers adding a schedule only for a real schedule row on a newer server', () => {
+    expect(entrySupportsMultipleSchedules({ schedule_id: 41, schedule_count: 1 })).toBe(true);
+    expect(entrySupportsMultipleSchedules({ schedule_id: 41, schedule_count: 2 })).toBe(true);
+  });
+
+  it('does not offer it for an unscheduled or overnight entry, or on an older server', () => {
+    expect(entrySupportsMultipleSchedules({ schedule_id: null, schedule_count: 0 })).toBe(false);
+    expect(entrySupportsMultipleSchedules({ schedule_id: 41, schedule_count: undefined })).toBe(false);
+    expect(entrySupportsMultipleSchedules({ schedule_id: null, schedule_count: undefined })).toBe(false);
+  });
+});
+

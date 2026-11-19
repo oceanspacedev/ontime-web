@@ -11,22 +11,35 @@ use App\Http\Resources\Api\V1\AttendanceResource;
 use App\Models\Attendance;
 use App\Models\AttendanceCorrection;
 use App\Models\CompanyLocation;
+use App\Models\Employee;
+use App\Models\Freelancer;
+use App\Models\Intern;
 use App\Models\LeaveRequest;
+use App\Models\ShiftSchedule;
 use App\Models\User;
 use App\Services\Attendance\AttendanceCheckInput;
 use App\Services\Attendance\AttendanceRuleException;
+use App\Services\Attendance\WorkSession;
 use App\Services\AttendanceCheckService;
+use App\Services\AttendanceFigures;
+use App\Services\DataAccessService;
 use App\Services\Face\FaceServiceUnavailable;
 use App\Services\Face\FaceVerifier;
 use App\Services\FileNamingService;
 use App\Services\GeofenceService;
 use App\Services\OffScheduleCheckInService;
+use App\Services\OutletRosterService;
+use App\Services\SessionResolver;
 use App\Services\UploadStorageException;
 use App\Services\WorkScheduleService;
 use App\Support\StorageUrl;
+use Carbon\CarbonInterface;
+use Carbon\Exceptions\InvalidFormatException;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
@@ -115,6 +128,9 @@ class AttendanceApiController extends Controller
             livenessFramePaths: $framePaths,
             coverShiftId: $isCheckIn && $request->filled('cover_shift_id') ? (int) $request->input('cover_shift_id') : null,
             replacesWorker: $isCheckIn && $request->filled('replaces_worker') ? (string) $request->input('replaces_worker') : null,
+            scheduleId: $isCheckIn && $request->filled('schedule_id') ? (int) $request->input('schedule_id') : null,
+            segment: $isCheckIn && $request->filled('segment') ? (int) $request->input('segment') : null,
+            coverLocationId: $isCheckIn && $request->filled('cover_location_id') ? (int) $request->input('cover_location_id') : null,
         );
 
         try {
@@ -169,11 +185,12 @@ class AttendanceApiController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        // Own records plus workers inside the user's data access, same as the panel.
-        $query = Attendance::query()->with(Attendance::workerEagerLoads())->visibleTo($user);
+        // Own records, the workers inside the user's data access and whoever worked at an outlet in it:
+        // the same rows every team report counts.
+        $query = DataAccessService::scopeWorkerOrOutletRecords(Attendance::query()->with(Attendance::workerEagerLoads()), $user, Attendance::workerRelations());
 
         if ($request->has('start_date') && $request->has('end_date')) {
-            $query->whereBetween('date', [$request->input('start_date'), $request->input('end_date')]);
+            $this->whereDateRange($query, $request->input('start_date'), $request->input('end_date'));
         } elseif ($request->has('month') && $request->has('year')) {
             $query->whereMonth('date', $request->input('month'))
                 ->whereYear('date', $request->input('year'));
@@ -181,6 +198,11 @@ class AttendanceApiController extends Controller
 
         if ($request->has('status')) {
             $query->where('status', $request->input('status'));
+        }
+
+        // mine=1 keeps only the signed-in worker's own rows (the correction form's session picker).
+        if ($request->boolean('mine')) {
+            $query->byWorker($user);
         }
 
         // Many rows share a date (a team, split shifts): the id keeps the pages disjoint.
@@ -197,6 +219,30 @@ class AttendanceApiController extends Controller
         ]);
     }
 
+    /**
+     * Rows dated from the start day up to and including the end day, as a half-open range so the end day
+     * also matches where dates are stored with a time (SQLite). Dates that cannot be read match nothing.
+     *
+     * @param  Builder<Attendance>  $query
+     */
+    private function whereDateRange(Builder $query, mixed $start, mixed $end): void
+    {
+        try {
+            $from = is_string($start) && $start !== '' ? Carbon::parse($start)->toDateString() : null;
+            $until = is_string($end) && $end !== '' ? Carbon::parse($end)->addDay()->toDateString() : null;
+        } catch (InvalidFormatException) {
+            $from = $until = null;
+        }
+
+        if ($from === null || $until === null) {
+            $query->whereRaw('1 = 0');
+
+            return;
+        }
+
+        $query->where('date', '>=', $from)->where('date', '<', $until);
+    }
+
     public function show(int $id, Request $request): JsonResponse
     {
         $user = $request->user();
@@ -206,7 +252,9 @@ class AttendanceApiController extends Controller
             return response()->json(['message' => 'Data presensi tidak ditemukan.'], 404);
         }
 
-        if (! ApprovalApiController::canOpen($attendance, $user)) {
+        $inScope = DataAccessService::scopeWorkerOrOutletRecords(Attendance::query(), $user, Attendance::workerRelations())->whereKey($attendance->getKey())->exists();
+
+        if (! $inScope && ! ApprovalApiController::canOpen($attendance, $user)) {
             return response()->json(['message' => 'Anda tidak memiliki akses ke presensi ini.'], 403);
         }
 
@@ -309,81 +357,240 @@ class AttendanceApiController extends Controller
         }
 
         $workSchedule = app(WorkScheduleService::class);
-        // On a split shift, "today" is the segment the worker is on: segment 2 starts fresh once segment 1 is checked out.
-        ['segment' => $segment, 'attendance' => $attendance] = $workSchedule->currentSegment($user, $profile, today());
+        $resolver = app(SessionResolver::class);
+        // The session the worker is on now (the same one a check-in or check-out tap acts on): the open row that
+        // can still be checked out (a shift of yesterday after midnight included), else the next session of the
+        // day. On a split shift or a second schedule, the card starts fresh once the earlier session is closed.
+        $current = $resolver->current($profile, now(), $attendanceCheck->closableAttendance($user));
+        /** @var WorkSession|null $session */
+        $session = $current['session'];
+        $attendance = $current['attendance']?->loadMissing(['employee', 'intern', 'freelancer', 'location']);
+        $date = $current['date'];
+        // Without a session (a day off, or no schedule) the card shows the day's own hours: the company hours.
+        $dayHours = $session ? null : $workSchedule->resolve($profile, today());
+        $shift = $session?->shift;
+        $hasSessionToday = $resolver->sessionsFor($profile, today()) !== [];
 
-        // After midnight an overnight shift is still open on yesterday's row: the app offers its check-out.
-        if (! $attendance?->check_in) {
-            $attendance = $attendanceCheck->openOvernightAttendance($user)?->loadMissing(['employee', 'intern', 'freelancer']) ?? $attendance;
-        }
-        $hours = $workSchedule->resolve($profile, today(), $segment);
-        $segments = $hours['shift']?->segments() ?? [];
-        $doneToday = Attendance::byWorker($user)->with(['employee', 'intern', 'freelancer'])->whereDate('date', today())->orderBy('segment')->get();
+        $dayRows = Attendance::byWorker($user)->with(['employee', 'intern', 'freelancer'])->whereDate('date', $date->toDateString())->get()
+            ->sortBy(fn (Attendance $row): array => [$row->sched_start_at?->getTimestamp() ?? $row->check_in?->getTimestamp() ?? 0, (int) $row->schedule_sequence, (int) $row->segment])
+            ->values();
+        $todayRows = $date->isSameDay(today()) ? $dayRows : Attendance::byWorker($user)->whereDate('date', today())->get();
+        $isOnLeave = $todayRows->contains(fn (Attendance $row): bool => (int) ($row->schedule_sequence ?: 1) === 1 && (int) $row->segment === 1 && $this->isApprovedLeaveRow($row));
+        $unclosed = $this->unclosedRows($user, $attendance, $attendanceCheck);
+        $pendingUnclosedDates = $this->pendingCorrectionDates($user, $unclosed);
 
         return response()->json([
             'date' => today()->toDateString(),
             // Today is covered by an approved leave: check-in would be refused, so the app does not offer it.
-            'is_on_leave' => $this->isApprovedLeaveRow($doneToday->firstWhere('segment', 1)),
+            'is_on_leave' => $isOnLeave,
             'has_checked_in' => $attendance?->check_in !== null,
             'has_checked_out' => $attendance?->check_out !== null,
             'attendance' => $attendance ? new AttendanceResource($attendance) : null,
-            // Every segment's attendance of today (one row, or two on a split shift).
-            'attendances' => AttendanceResource::collection($doneToday),
-            // Today's working hours: the dated schedule, else the default shift, else the company hours.
+            // Every attendance of the session's business date (each part and each schedule), ordered by start.
+            'attendances' => AttendanceResource::collection($dayRows),
+            // The current session's hours: a dated schedule, else the default shift, else the company hours.
             'schedule' => [
-                'shift' => $hours['shift'] ? ['id' => (int) $hours['shift']->id, 'name' => $hours['shift']->name, 'code' => $hours['shift']->code, 'talenta_code' => $hours['shift']->talenta_code] : null,
-                'is_day_off' => $hours['is_day_off'],
-                'segment' => $hours['segment'],
-                'segment_count' => $hours['segment_count'],
-                // Every segment of the day, for showing "07:45–13:00 & 17:45–22:00".
-                'segments' => $segments,
-                'start_time' => substr($hours['start_time'], 0, 5),
-                'end_time' => substr($hours['end_time'], 0, 5),
-                'late_tolerance_minutes' => $hours['late_tolerance_minutes'],
-                'outlet' => $this->outletGeofence($hours['location']),
-                'section' => $hours['section'],
-                // Not expected to work today (day off, or a freelancer without a roster): a check-in needs approval and may cover a colleague.
-                'is_off_schedule' => $workSchedule->isOffSchedule($profile, $hours),
+                'shift' => $shift ? ['id' => (int) $shift->id, 'name' => $shift->name, 'code' => $shift->code, 'talenta_code' => $shift->talenta_code] : null,
+                'is_day_off' => $session ? false : (bool) $dayHours['is_day_off'],
+                'segment' => $session->segment ?? 1,
+                'segment_count' => $session->segmentCount ?? 1,
+                // Every segment of the session's shift, for showing "07:45–13:00 & 17:45–22:00".
+                'segments' => $shift?->segments() ?? [],
+                'start_time' => $session ? $session->startAt->format('H:i') : substr((string) $dayHours['start_time'], 0, 5),
+                'end_time' => $session ? $session->endAt->format('H:i') : substr((string) $dayHours['end_time'], 0, 5),
+                'late_tolerance_minutes' => $session->toleranceMinutes ?? (int) $dayHours['late_tolerance_minutes'],
+                'outlet' => $this->outletGeofence($session ? $session->location : $dayHours['location']),
+                'section' => $session ? $session->section : $dayHours['section'],
+                // Not expected to work (day off, or no schedule): a check-in needs approval and may cover a colleague.
+                'is_off_schedule' => $session ? $session->source === 'cover' : ! $hasSessionToday,
             ],
             // Where check-out is accepted: the outlet the open attendance was checked in at.
             'check_out_outlet' => $attendance?->check_in !== null && $attendance->check_out === null
-                ? $this->outletGeofence($attendance->loadMissing('location')->location)
+                ? $this->outletGeofence($attendance->location)
                 : null,
             // An earlier shift was never checked out: the app points to a correction, today's check-in stays open.
-            'unclosed_previous' => $this->unclosedPrevious($user, $attendance),
+            'unclosed_previous' => $this->unclosedPrevious($unclosed, $pendingUnclosedDates),
+            // Every open row that needs a correction, oldest first (an earlier day and an earlier session of today alike).
+            'unclosed_list' => $unclosed->reverse()->map(fn (Attendance $row): array => $this->unclosedEntry($row, $pendingUnclosedDates) + ['schedule_sequence' => (int) ($row->schedule_sequence ?: 1)])->values()->all(),
+            // Every schedule part of the session's business date, ordered by start.
+            'schedules' => $this->todaySchedules($profile, $date, $current['sessions'], $session, $isOnLeave && $date->isSameDay(today()), $resolver),
+            // The worker has a schedule today that they are expected to work (not a day off, not a weekend of company hours).
+            'is_scheduled' => $isScheduledToday = $this->isScheduledOn($resolver, $profile, today()),
+            // The business date the card describes (the current session's: yesterday while last night's shift
+            // is still on after midnight), and whether the worker is expected to work on it. The app decides
+            // "Tidak ada jadwal hari ini" from these, so the notice agrees with the hours the card shows.
+            'session_date' => $date->toDateString(),
+            'is_session_scheduled' => $date->isSameDay(today()) ? $isScheduledToday : $this->isScheduledOn($resolver, $profile, $date),
+            'day_totals' => $this->dayTotals($dayRows),
         ]);
     }
 
     /**
-     * The latest row of the last UNCLOSED_LOOKBACK_DAYS days (before today) that was checked in but never
-     * checked out and is not the one offered for check-out now (an overnight shift still running is checked
-     * out as usual). Every segment counts, so a forgotten segment 1 of a split shift is found too, and a
-     * forgotten shift before a day off still shows after it. A row whose date already has a pending
-     * correction gives way to an older one that has none. The worker asks for a correction with the real
-     * check-out time; checking out now would record the wrong time.
-     *
-     * @return array{date: string, check_in: string|null, shift: string|null, correction_pending: bool}|null
+     * Whether the worker has a schedule on the date that they are expected to work (not a day off, not a
+     * weekend of company hours).
      */
-    private function unclosedPrevious(User $user, ?Attendance $shown): ?array
+    private function isScheduledOn(SessionResolver $resolver, Employee|Intern|Freelancer $profile, CarbonInterface $date): bool
     {
-        $unclosed = Attendance::byWorker($user)
+        return collect($resolver->sessionsFor($profile, $date))->contains(fn (WorkSession $session): bool => $session->scheduleId !== null || $session->isExpected);
+    }
+
+    /**
+     * The schedule parts of the date with the attendance of each, for the newer app's list of the day.
+     *
+     * @param  list<array{session: WorkSession, attendance: Attendance|null}>  $sessions
+     * @return list<array<string, mixed>>
+     */
+    private function todaySchedules(Employee|Intern|Freelancer $profile, CarbonInterface $date, array $sessions, ?WorkSession $current, bool $onLeave, SessionResolver $resolver): array
+    {
+        if ($sessions === []) {
+            $dayOff = ShiftSchedule::query()
+                ->where(app(WorkScheduleService::class)->workerColumn($profile), $profile->getKey())
+                ->whereDate('date', $date->toDateString())
+                ->where('is_day_off', true)
+                ->first();
+
+            return $dayOff ? [[
+                'schedule_id' => (int) $dayOff->id, 'sequence' => (int) ($dayOff->sequence ?: 1), 'segment' => 1, 'is_current' => false,
+                'is_day_off' => true, 'shift' => null, 'outlet' => null, 'section' => $dayOff->section, 'start_time' => null, 'end_time' => null,
+                'crosses_midnight' => false, 'late_tolerance_minutes' => null, 'normal_minutes' => null,
+                'state' => $onLeave ? 'cuti' : OutletRosterService::STATE_DAY_OFF, 'check_out_closes_at' => null, 'attendance' => null,
+            ]] : [];
+        }
+
+        return array_map(function (array $entry) use ($current, $onLeave, $resolver): array {
+            /** @var WorkSession $session */
+            $session = $entry['session'];
+            /** @var Attendance|null $row */
+            $row = $entry['attendance']?->loadMissing(['employee', 'intern', 'freelancer']);
+            $closesAt = $resolver->checkOutClosesAt($row?->check_in ? $row : $session);
+
+            return [
+                'schedule_id' => $session->scheduleId,
+                'sequence' => $session->sequence,
+                'segment' => $session->segment,
+                'is_current' => $current !== null && $current->date->equalTo($session->date) && $current->key() === $session->key(),
+                'is_day_off' => false,
+                'shift' => $session->shift ? ['id' => (int) $session->shift->id, 'name' => $session->shift->name, 'code' => $session->shift->code] : null,
+                'outlet' => $this->outletGeofence($session->location),
+                'section' => $session->section,
+                'start_time' => $session->startAt->format('H:i'),
+                'end_time' => $session->endAt->format('H:i'),
+                'crosses_midnight' => $session->crossesMidnight(),
+                'late_tolerance_minutes' => $session->toleranceMinutes,
+                'normal_minutes' => $session->normalMinutes,
+                'state' => $this->sessionState($session, $row, $onLeave),
+                'check_out_closes_at' => $closesAt?->toIso8601String(),
+                'attendance' => $row ? new AttendanceResource($row) : null,
+            ];
+        }, $sessions);
+    }
+
+    /**
+     * The state of one session in the roster vocabulary (libur > cuti > ditolak > menunggu > belum/nanti >
+     * pulang > terlambat > hadir).
+     */
+    private function sessionState(WorkSession $session, ?Attendance $row, bool $onLeave): string
+    {
+        return match (true) {
+            $onLeave && $row?->check_in === null => 'cuti',
+            $row?->check_in === null => now()->greaterThanOrEqualTo($session->startAt) ? OutletRosterService::STATE_MISSING : OutletRosterService::STATE_UPCOMING,
+            $row->status === AttendanceStatus::Rejected => OutletRosterService::STATE_REJECTED,
+            $row->status === AttendanceStatus::PendingApproval => OutletRosterService::STATE_WAITING,
+            $row->check_out !== null => OutletRosterService::STATE_DONE,
+            $row->status === AttendanceStatus::Late => OutletRosterService::STATE_LATE,
+            default => OutletRosterService::STATE_PRESENT,
+        };
+    }
+
+    /**
+     * Worked, automatic overtime and late minutes of the day's attendance, rejected rows left out: the
+     * figures the reports count for it.
+     *
+     * @param  Collection<int, Attendance>  $rows
+     * @return array{worked_minutes: int, overtime_minutes: int, late_minutes: int}
+     */
+    private function dayTotals(Collection $rows): array
+    {
+        $counted = $rows->filter(fn (Attendance $row): bool => $row->check_in !== null && $row->status !== AttendanceStatus::Rejected)->values();
+        AttendanceFigures::preload($counted);
+        $totals = ['worked_minutes' => 0, 'overtime_minutes' => 0, 'late_minutes' => 0];
+
+        foreach ($counted as $row) {
+            $figures = AttendanceFigures::forAttendance($row);
+            $totals['worked_minutes'] += $figures['worked_minutes'];
+            $totals['overtime_minutes'] += $figures['overtime_minutes'];
+            $totals['late_minutes'] += $figures['reported_late_minutes'];
+        }
+
+        return $totals;
+    }
+
+    /**
+     * The open rows of the last UNCLOSED_LOOKBACK_DAYS days (today included) that were checked in but never
+     * checked out and are not the one offered for check-out now, nor still closable live (a shift still inside
+     * its check-out window is checked out as usual), newest first. Every segment counts, so a forgotten
+     * segment 1 of a split shift is found too, and a forgotten shift before a day off still shows after it.
+     * The worker asks for a correction with the real check-out time; checking out now would record the wrong time.
+     *
+     * @return Collection<int, Attendance>
+     */
+    private function unclosedRows(User $user, ?Attendance $shown, AttendanceCheckService $attendanceCheck): Collection
+    {
+        return Attendance::byWorker($user)
             ->with('shift')
-            ->whereDate('date', '<', today())
+            // Today too: an earlier session of a several-schedule day left open once the worker checked in elsewhere.
+            ->whereDate('date', '<=', today())
             ->whereDate('date', '>=', today()->subDays(self::UNCLOSED_LOOKBACK_DAYS))
             ->whereNotNull('check_in')
             ->whereNull('check_out')
             ->where('status', '!=', AttendanceStatus::Rejected)
             ->orderByDesc('date')
+            ->orderByDesc('check_in')
             ->orderByDesc('segment')
             ->get()
-            ->reject(fn (Attendance $row): bool => $shown !== null && $shown->is($row))
+            ->reject(fn (Attendance $row): bool => ($shown !== null && $shown->is($row)) || $attendanceCheck->isLiveClosable($row))
             ->values();
+    }
 
-        if ($unclosed->isEmpty()) {
+    /**
+     * The open row the released app prompts for ({@see self::unclosedRows()}): the latest one of an earlier
+     * day, as before several schedules a day existed, so an earlier session of today never hides a forgotten
+     * check-out of a previous day; an earlier session of today only when no earlier day has one. A row whose
+     * date already has a pending correction gives way to an older one that has none. Every open row is listed
+     * in "unclosed_list".
+     *
+     * @param  Collection<int, Attendance>  $unclosed
+     * @param  Collection<string, int>  $pendingDates
+     * @return array{date: string, check_in: string|null, shift: string|null, correction_pending: bool}|null
+     */
+    private function unclosedPrevious(Collection $unclosed, Collection $pendingDates): ?array
+    {
+        $earlierDays = $unclosed->filter(fn (Attendance $row): bool => $row->date->lt(today()))->values();
+        $candidates = $earlierDays->isNotEmpty() ? $earlierDays : $unclosed;
+
+        if ($candidates->isEmpty()) {
             return null;
         }
 
-        $pendingDates = AttendanceCorrection::query()
+        /** @var Attendance $row */
+        $row = $candidates->first(fn (Attendance $row): bool => ! $pendingDates->has($row->date->toDateString())) ?? $candidates->first();
+
+        return $this->unclosedEntry($row, $pendingDates);
+    }
+
+    /**
+     * The dates (Y-m-d, as keys) of the open rows that already have a pending correction.
+     *
+     * @param  Collection<int, Attendance>  $unclosed
+     * @return Collection<string, int>
+     */
+    private function pendingCorrectionDates(User $user, Collection $unclosed): Collection
+    {
+        if ($unclosed->isEmpty()) {
+            return collect();
+        }
+
+        return AttendanceCorrection::query()
             ->where(array_filter(Attendance::workerKeys($user)))
             ->whereDate('date', '>=', $unclosed->last()->date)
             ->whereDate('date', '<=', $unclosed->first()->date)
@@ -391,10 +598,14 @@ class AttendanceApiController extends Controller
             ->pluck('date')
             ->map(fn ($date): string => Carbon::parse($date)->toDateString())
             ->flip();
+    }
 
-        /** @var Attendance $row */
-        $row = $unclosed->first(fn (Attendance $row): bool => ! $pendingDates->has($row->date->toDateString())) ?? $unclosed->first();
-
+    /**
+     * @param  Collection<string, int>  $pendingDates
+     * @return array{date: string, check_in: string|null, shift: string|null, correction_pending: bool}
+     */
+    private function unclosedEntry(Attendance $row, Collection $pendingDates): array
+    {
         return [
             'date' => $row->date->toDateString(),
             'check_in' => $row->check_in?->format('H:i'),

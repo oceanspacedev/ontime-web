@@ -9,8 +9,11 @@ use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Models\ShiftScheduleChange;
 use App\Services\SchedulingOptions;
+use App\Services\ShiftAssignmentService;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -19,6 +22,7 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
@@ -29,8 +33,12 @@ use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class ShiftScheduleResource extends Resource
@@ -80,7 +88,9 @@ class ShiftScheduleResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $user = auth()->user();
-        $query = parent::getEloquentQuery()->with([...ShiftSchedule::workerEagerLoads(), 'shift.division', 'location']);
+        $query = parent::getEloquentQuery()
+            ->with([...ShiftSchedule::workerEagerLoads(), 'shift.division', 'location'])
+            ->withExists(['attendances as has_checked_in_attendance' => fn (Builder $attendance) => ShiftSchedule::lockingAttendances($attendance)]);
 
         return $user ? $query->visibleTo($user) : $query->whereRaw('1 = 0');
     }
@@ -115,6 +125,8 @@ class ShiftScheduleResource extends Resource
                 TextInput::make('notes')
                     ->label('Catatan')
                     ->maxLength(255),
+
+                static::reasonField(),
             ]);
     }
 
@@ -126,6 +138,12 @@ class ShiftScheduleResource extends Resource
                 TextColumn::make('date')
                     ->label('Tanggal')
                     ->date('D, d M Y')
+                    ->sortable(),
+
+                TextColumn::make('sequence')
+                    ->label('Urutan')
+                    ->tooltip('Jadwal ke berapa pada tanggal itu (maksimal 3 sehari).')
+                    ->alignCenter()
                     ->sortable(),
 
                 TextColumn::make('worker_name')
@@ -187,16 +205,123 @@ class ShiftScheduleResource extends Resource
                     ->label('Libur'),
             ])
             ->recordActions([
+                Action::make('history')
+                    ->label('Riwayat')
+                    ->icon(Heroicon::OutlinedClock)
+                    ->color('gray')
+                    ->modalHeading('Riwayat Perubahan Jadwal')
+                    ->modalWidth(Width::Large)
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Tutup')
+                    ->modalContent(fn (ShiftSchedule $record): View => view('filament.modals.shift-schedule-history', ['changes' => static::changesOf($record)])),
                 EditAction::make()
                     ->slideOver()
-                    ->modalWidth(Width::Medium),
-                DeleteAction::make(),
+                    ->modalWidth(Width::Medium)
+                    ->disabled(fn (ShiftSchedule $record): bool => static::isLockedRecord($record))
+                    ->tooltip(fn (ShiftSchedule $record): ?string => static::isLockedRecord($record) ? ShiftSchedule::LOCKED_MESSAGE : null)
+                    ->using(function (EditAction $action, ShiftSchedule $record, array $data): void {
+                        try {
+                            app(ShiftAssignmentService::class)->updateSchedule(auth()->user(), $record, $data, $data['reason'] ?? null);
+                        } catch (AuthorizationException|ValidationException $exception) {
+                            static::notifyRefused($exception);
+                            $action->halt();
+                        }
+                    }),
+                DeleteAction::make()
+                    ->disabled(fn (ShiftSchedule $record): bool => static::isLockedRecord($record))
+                    ->tooltip(fn (ShiftSchedule $record): ?string => static::isLockedRecord($record) ? ShiftSchedule::LOCKED_MESSAGE : null)
+                    ->schema(fn (ShiftSchedule $record): array => static::isPast($record) ? [static::reasonField()] : [])
+                    ->using(function (DeleteAction $action, ShiftSchedule $record, array $data): bool {
+                        try {
+                            app(ShiftAssignmentService::class)->deleteSchedule(auth()->user(), $record, $data['reason'] ?? null);
+                        } catch (AuthorizationException|ValidationException $exception) {
+                            static::notifyRefused($exception);
+                            $action->halt();
+                        }
+
+                        return true;
+                    }),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    DeleteBulkAction::make()
+                        ->schema([
+                            TextInput::make('reason')
+                                ->label('Alasan perubahan')
+                                ->helperText('Wajib bila ada jadwal tanggal yang sudah lewat. Jadwal yang sudah ada absensinya tidak dihapus.')
+                                ->maxLength(255),
+                        ])
+                        ->using(function (DeleteBulkAction $action, iterable $records, array $data): void {
+                            $assignments = app(ShiftAssignmentService::class);
+
+                            foreach ($records as $record) {
+                                try {
+                                    $assignments->deleteSchedule(auth()->user(), $record, $data['reason'] ?? null);
+                                } catch (AuthorizationException|ValidationException) {
+                                    $action->reportBulkProcessingFailure();
+                                }
+                            }
+                        }),
                 ]),
             ]);
+    }
+
+    /**
+     * "Alasan perubahan": required when the schedule's date is before today, and logged with the change.
+     */
+    public static function reasonField(): TextInput
+    {
+        return TextInput::make('reason')
+            ->label('Alasan perubahan')
+            ->helperText('Wajib untuk tanggal yang sudah lewat; tercatat di riwayat jadwal.')
+            ->maxLength(255)
+            ->required(fn (?ShiftSchedule $record): bool => $record !== null && static::isPast($record))
+            ->visible(fn (?ShiftSchedule $record): bool => $record !== null && static::isPast($record));
+    }
+
+    public static function isPast(ShiftSchedule $record): bool
+    {
+        return $record->date !== null && $record->date->toDateString() < today()->toDateString();
+    }
+
+    /**
+     * Whether the schedule already has attendance, so only an attendance correction may change it.
+     */
+    public static function isLockedRecord(ShiftSchedule $record): bool
+    {
+        $loaded = $record->getAttribute('has_checked_in_attendance');
+
+        return $loaded !== null ? (bool) $loaded : $record->isLocked();
+    }
+
+    /**
+     * Change log of the worker's schedules on the record's date, newest first.
+     *
+     * @return EloquentCollection<int, ShiftScheduleChange>
+     */
+    public static function changesOf(ShiftSchedule $record): EloquentCollection
+    {
+        $column = match (true) {
+            $record->employee_id !== null => 'employee_id',
+            $record->intern_id !== null => 'intern_id',
+            default => 'freelancer_id',
+        };
+
+        return ShiftScheduleChange::query()
+            ->with('changer')
+            ->where($column, $record->{$column})
+            ->whereDate('date', $record->date->toDateString())
+            ->latest('id')
+            ->get();
+    }
+
+    private static function notifyRefused(AuthorizationException|ValidationException $exception): void
+    {
+        Notification::make()
+            ->title('Jadwal tidak disimpan')
+            ->body($exception instanceof ValidationException ? collect($exception->errors())->flatten()->implode(' ') : $exception->getMessage())
+            ->danger()
+            ->send();
     }
 
     /**

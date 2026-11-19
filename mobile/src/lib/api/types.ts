@@ -215,6 +215,30 @@ export interface Attendance {
   replaced_worker?: { key: string; name: string } | null;
   /** Ready label for approvers and history, e.g. "Masuk di luar jadwal · menggantikan Budi · shift Closing". */
   off_schedule_label?: string | null;
+  /**
+   * Part (1 or 2) of a split shift. This and the fields below come from the schedule the row was checked
+   * in to; they are missing on older servers.
+   */
+  segment?: number;
+  schedule_id?: number | null;
+  schedule_sequence?: number;
+  shift?: { id: number | null; name: string; code: string | null } | null;
+  outlet?: { id: number; name: string | null } | null;
+  /** "HH:MM" of the schedule that applied, null without hours. */
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
+  /** Minutes actually worked, the number the reports add up. */
+  worked_minutes?: number;
+  normal_minutes?: number | null;
+  /** Automatic overtime above the shift's normal hours. */
+  overtime_minutes?: number;
+  /** Late minutes as the reports count them (0 for a rejected or off-schedule row). */
+  reported_late_minutes?: number;
+  /** Checked in, but the check-out was never recorded and its window has closed ("Belum absen pulang"). */
+  is_missing_check_out?: boolean;
+  pending_punch?: string | null;
+  /** Ready label, e.g. "Pagi · 08:00–16:00 · JChicken Ciledug". */
+  schedule_label?: string | null;
 }
 
 export type AttendancePurpose = 'check_in' | 'check_out';
@@ -271,11 +295,54 @@ export interface TodaySchedule {
   is_off_schedule?: boolean;
 }
 
+/** One schedule of the day (newer servers), ordered by start; a day may have several. */
+export interface TodayScheduleItem {
+  /** Null for standing company hours without a roster row. */
+  schedule_id: number | null;
+  sequence: number;
+  segment: number;
+  /** The session the top-level fields (and the Masuk / Pulang buttons) describe. */
+  is_current: boolean;
+  is_day_off: boolean;
+  shift: { id: number; name: string; code: string | null } | null;
+  outlet: OutletGeofence | null;
+  section: string | null;
+  /** "HH:MM", null on a day off. */
+  start_time: string | null;
+  end_time: string | null;
+  crosses_midnight: boolean;
+  late_tolerance_minutes: number | null;
+  normal_minutes: number | null;
+  /** Roster vocabulary: hadir, terlambat, pulang, menunggu, belum, nanti, libur, cuti, ditolak. */
+  state: RosterState;
+  /** ISO time after which a check-out is no longer accepted. */
+  check_out_closes_at: string | null;
+  attendance: Attendance | null;
+}
+
+export interface DayTotals {
+  worked_minutes: number;
+  overtime_minutes: number;
+  late_minutes: number;
+}
+
 export interface TodayAttendance {
   date: string;
   has_checked_in: boolean;
   has_checked_out: boolean;
   attendance: Attendance | null;
+  /** Every row of the business date. Missing on older servers. */
+  attendances?: Attendance[];
+  /** Every schedule of the day with its attendance. Missing on older servers. */
+  schedules?: TodayScheduleItem[];
+  /** False when the worker has no schedule to work today (day off, not rostered). Missing on older servers. */
+  is_scheduled?: boolean;
+  /** The business date the card describes: the current session's, which is yesterday while last night's shift is still on. Missing on older servers. */
+  session_date?: string;
+  /** Like is_scheduled, for session_date instead of the calendar day. Missing on older servers. */
+  is_session_scheduled?: boolean;
+  /** What the day's attendance adds up to so far. Missing on older servers. */
+  day_totals?: DayTotals;
   /** Jam kerja yang berlaku hari ini; absen pada backend lama. */
   schedule?: TodaySchedule | null;
   /** Outlet the open attendance was checked in at; check-out is only accepted there. */
@@ -354,6 +421,17 @@ export interface AttendanceCorrection extends RequestBase {
   corrected_check_out: string | null;
   total_steps: number;
   attachment: string | null;
+  /** The fields below are missing on older servers. */
+  attendance_id?: number | null;
+  schedule_id?: number | null;
+  sequence?: number | null;
+  segment?: number | null;
+  /** The corrected check-out falls on the day after `date` (a shift past midnight). */
+  check_out_next_day?: boolean;
+  corrected_shift_id?: number | null;
+  corrected_company_location_id?: number | null;
+  /** "worker" for a request, "admin" for an edit recorded by an admin. */
+  origin?: string;
 }
 
 export interface Resignation extends RequestBase {
@@ -423,6 +501,11 @@ export interface AttendanceReportResponse extends Paginated<Attendance, Paginati
     total_late: number;
     total_leave: number;
     total_absent: number;
+    /** Missing on older servers. */
+    total_pending?: number;
+    total_missing_check_out?: number;
+    total_worked_hours?: number;
+    total_overtime_hours?: number;
   };
 }
 
@@ -474,6 +557,14 @@ export interface RosterEntry {
   can_edit?: boolean;
   /** What explains the state: "Jeda · segmen 2 mulai 17:45", "Shift semalam (16 Nov) · belum absen pulang", "Tanpa jadwal". */
   note?: string | null;
+  /** The fields below are missing on older servers. */
+  outlet_name?: string | null;
+  overtime_minutes?: number;
+  /** The schedule has attendance, so it is changed by a correction, not here. */
+  locked?: boolean;
+  /** How many schedules the worker has that date (this entry is one of them). */
+  schedule_count?: number;
+  is_missing_check_out?: boolean;
 }
 
 export interface WeekCell {
@@ -484,6 +575,14 @@ export interface WeekCell {
   outlet: string | null;
   section: string | null;
   borrowed_from?: string | null;
+  /** The fields below are missing on older servers. */
+  sequence?: number;
+  /** How many further schedules the worker has that date (the cell shows the first). */
+  more?: number;
+  /** The schedule has attendance and cannot be changed from the roster. */
+  locked?: boolean;
+  /** The date is charged to an approved leave. */
+  on_leave?: boolean;
 }
 
 /** One week (Monday to Sunday): a line per worker, a cell per date that has a schedule. */
@@ -492,7 +591,13 @@ export interface TeamWeek {
   end: string;
   days: string[];
   /** `can_edit` is false for a worker lent in from another brand. */
-  workers: { worker: RosterEntry['worker']; days: Record<string, WeekCell>; can_edit?: boolean }[];
+  workers: {
+    worker: RosterEntry['worker'];
+    days: Record<string, WeekCell>;
+    can_edit?: boolean;
+    /** Every schedule of each date, in day order. Missing on older servers. */
+    day_schedules?: Record<string, WeekCell[]>;
+  }[];
 }
 
 export interface RosterOutlet {
@@ -507,6 +612,8 @@ export interface RosterOutlet {
 export interface TeamRoster {
   date: string;
   outlets: RosterOutlet[];
+  /** Distinct people, so a person on two outlets counts once. Missing on older servers. */
+  summary?: { people_scheduled: number; people_checked_in: number };
 }
 
 export interface TeamShift {
@@ -559,6 +666,31 @@ export interface ScheduleChange {
   shift_id?: number | null;
   company_location_id?: number | null;
   section?: string | null;
+  /** Edit or clear exactly this schedule of a day that has several. Ignored by older servers. */
+  schedule_id?: number | null;
+  /** Add a further schedule to the day instead of changing it. */
+  add?: boolean;
+  /** Why a past date is changed; logged with the change. */
+  reason?: string | null;
+}
+
+/** One schedule as PUT /team/schedules answers it. */
+export interface SavedSchedule {
+  id: number;
+  date: string;
+  is_day_off: boolean;
+  shift_id: number | null;
+  company_location_id: number | null;
+  section: string | null;
+  sequence?: number;
+  locked?: boolean;
+}
+
+export interface ScheduleSaveResponse {
+  message: string;
+  data: SavedSchedule | null;
+  /** Every schedule of the date after the change. Missing on older servers. */
+  schedules?: SavedSchedule[];
 }
 
 export interface TeamFreelancer {
@@ -619,6 +751,19 @@ export interface TeamRecapRow {
   off_days: number;
   scheduled_hours: number;
   worked_hours: number;
+  /** The fields below are missing on older servers. */
+  leave_days?: number;
+  missing_check_out_days?: number;
+  incomplete_days?: number;
+  sessions_scheduled?: number;
+  sessions_worked?: number;
+  sessions_missed?: number;
+  normal_hours?: number;
+  auto_overtime_hours?: number;
+  request_overtime_hours?: number;
+  scheduled_days_to_date?: number;
+  scheduled_hours_to_date?: number;
+  overtime_unattended_count?: number;
 }
 
 export interface TeamRecap {
@@ -958,4 +1103,8 @@ export interface CoverOptions {
   off_schedule_reason: 'day_off' | 'no_schedule' | null;
   shifts: CoverShiftOption[];
   colleagues: CoverColleague[];
+  /** Outlets the cover may be booked at. Missing on older servers. */
+  outlets?: NamedRef[];
+  /** The worker's own default shift, to pre-select. Missing on older servers. */
+  default_shift_id?: number | null;
 }

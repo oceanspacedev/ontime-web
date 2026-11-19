@@ -4,7 +4,7 @@ import { View } from 'react-native';
 import { workerName } from '@/components/AttendanceRow';
 import { Badge, Button, Group, InfoRow, Notice, Text, useTextStyles } from '@/components/ui';
 import type { Attendance } from '@/lib/api';
-import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatTime } from '@/lib/format';
+import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatMinutes, formatTime } from '@/lib/format';
 import { openMaps } from '@/lib/geo';
 import { makeStyles, radius, spacing } from '@/theme';
 
@@ -22,8 +22,11 @@ export function AttendanceDetail({ attendance }: { attendance: Attendance }) {
           </View>
           <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} />
         </View>
+        {attendance.schedule_label ? <InfoRow label="Jadwal" value={attendance.schedule_label} /> : null}
         <InfoRow label="Masuk" value={formatTime(attendance.check_in)} valueStyle={styles.time} />
-        <InfoRow label="Pulang" value={formatTime(attendance.check_out)} valueStyle={styles.time} />
+        <InfoRow label="Pulang" value={attendance.is_missing_check_out && !attendance.check_out ? 'Belum absen pulang' : formatTime(attendance.check_out)} valueStyle={styles.time} />
+        {attendance.worked_minutes ? <InfoRow label="Durasi kerja" value={formatMinutes(attendance.worked_minutes)} /> : null}
+        {attendance.overtime_minutes ? <InfoRow label="Lembur" value={formatMinutes(attendance.overtime_minutes)} /> : null}
         {attendance.late_minutes ? <InfoRow label="Terlambat" value={`${attendance.late_minutes} menit`} /> : null}
         {attendance.is_corrected ? <InfoRow label="Koreksi" value="Sudah dikoreksi" /> : null}
         {attendance.liveness_verified ? <InfoRow label="Liveness" value="Lolos" /> : null}
@@ -32,6 +35,9 @@ export function AttendanceDetail({ attendance }: { attendance: Attendance }) {
         ) : null}
       </Group>
 
+      {attendance.is_missing_check_out ? (
+        <Notice tone="warning" icon="time-outline" message="Belum absen pulang dan waktunya sudah lewat. Ajukan koreksi dengan jam pulang yang sebenarnya." />
+      ) : null}
       {attendance.is_out_of_bounds ? <Notice tone="warning" message="Presensi dilakukan di luar area kantor." /> : null}
       {attendance.is_mock_location ? <Notice tone="warning" message="Lokasi palsu (mock location) terdeteksi saat presensi." /> : null}
       {attendance.liveness_verified === false ? (

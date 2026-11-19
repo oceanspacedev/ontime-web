@@ -27,6 +27,8 @@ class CompanyPolicy extends Model
         'default_approval_stages',
         'work_start_time',
         'work_end_time',
+        'uses_shift_roster',
+        'overtime_netting_from',
     ];
 
     protected function casts(): array
@@ -43,6 +45,8 @@ class CompanyPolicy extends Model
             'geofence_radius_meters' => 'integer',
             'annual_leave_quota' => 'integer',
             'default_approval_stages' => 'integer',
+            'uses_shift_roster' => 'boolean',
+            'overtime_netting_from' => 'date',
         ];
     }
 

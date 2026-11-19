@@ -12,16 +12,25 @@ use Illuminate\Support\Carbon;
  * 1. never before the worker's start or after their employment ended,
  * 2. a dated shift schedule decides: a shift makes the day a working day (weekends and holidays included),
  *    a day off does not,
- * 3. a worker on a roster (from the Monday of the week of their first shift schedule onward) works only the
- *    rostered days, so a day without a schedule is not a working day for them (as in the team recap),
- * 4. otherwise a holiday from the master (national, or of the worker's company) is not a working day,
- * 5. otherwise (a worker without any roster, on a default shift or the company hours) the company policy week
+ * 3. in a company that uses shift rosters (blank = not scheduled) a day without a schedule is a working day
+ *    only for a fixed-hours worker (a default shift and never any dated schedule), Monday to Friday outside
+ *    holidays,
+ * 4. in any other company a worker on a roster (from the Monday of the week of their first shift schedule
+ *    onward) works only the rostered days, so a day without a schedule is not a working day for them,
+ * 5. otherwise a holiday from the master (national, or of the worker's company) is not a working day,
+ * 6. otherwise (a worker without any roster, on a default shift or the company hours) the company policy week
  *    applies: Monday to Friday (there is no custom work week yet).
  *
  * Today never counts as a no-show: the worker's shift may still be ahead, so the last countable day is yesterday.
+ *
+ * Called by the attendance ledger ({@see AttendanceLedger}) and the session resolver only; every report
+ * reads the ledger.
  */
 final class ExpectedWorkDays
 {
+    /** @var array<string, bool> weekday lookups by date */
+    private array $weekdays = [];
+
     /**
      * @param  array<string, true>  $globalHolidays  dates of national holidays and holidays without a company
      * @param  array<int, array<string, true>>  $companyHolidays  dates per company id
@@ -72,8 +81,10 @@ final class ExpectedWorkDays
      * @param  string|null  $employedFrom  Y-m-d, the first day of employment
      * @param  string|null  $employedUntil  Y-m-d, the last day of employment
      * @param  bool  $rostered  the worker is on a roster on this date (from the week of their first shift schedule on), so only rostered days are working days
+     * @param  bool  $usesShiftRoster  the worker's company uses shift rosters: a day without a schedule is not scheduled
+     * @param  bool  $fixedHours  in such a company: the worker has a default shift and never had a dated schedule
      */
-    public function isExpected(string $date, ?bool $scheduledDayOff, ?int $companyId, ?string $employedFrom = null, ?string $employedUntil = null, bool $rostered = false): bool
+    public function isExpected(string $date, ?bool $scheduledDayOff, ?int $companyId, ?string $employedFrom = null, ?string $employedUntil = null, bool $rostered = false, bool $usesShiftRoster = false, bool $fixedHours = false): bool
     {
         if (($employedFrom !== null && $date < $employedFrom) || ($employedUntil !== null && $date > $employedUntil)) {
             return false;
@@ -83,7 +94,7 @@ final class ExpectedWorkDays
             return ! $scheduledDayOff;
         }
 
-        if ($rostered) {
+        if ($usesShiftRoster ? ! $fixedHours : $rostered) {
             return false;
         }
 
@@ -91,7 +102,7 @@ final class ExpectedWorkDays
             return false;
         }
 
-        return Carbon::parse($date)->isWeekday();
+        return $this->weekdays[$date] ??= Carbon::parse($date)->isWeekday();
     }
 
     public function isHoliday(string $date, ?int $companyId): bool

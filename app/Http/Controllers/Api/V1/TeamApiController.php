@@ -2,21 +2,17 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\AttendanceStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\StoreTeamFreelancerRequest;
 use App\Http\Requests\Api\V1\UpdateTeamScheduleRequest;
-use App\Models\Attendance;
 use App\Models\CompanyLocation;
 use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
-use App\Models\LeaveRequest;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
 use App\Models\User;
 use App\Services\DataAccessService;
-use App\Services\OutletRosterService;
 use App\Services\RosterLiveStateService;
 use App\Services\ScheduleCopyService;
 use App\Services\SchedulingOptions;
@@ -25,12 +21,10 @@ use App\Services\TeamRecapService;
 use App\Services\WeeklyScheduleService;
 use App\Services\WorkerAccountService;
 use App\Services\WorkScheduleService;
-use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 use InvalidArgumentException;
@@ -49,7 +43,7 @@ class TeamApiController extends Controller
     ];
 
     /** Roster state of a scheduled worker on approved leave who has not checked in. */
-    public const STATE_LEAVE = 'cuti';
+    public const STATE_LEAVE = RosterLiveStateService::STATE_LEAVE;
 
     private const BORROWED_MESSAGE = 'Pekerja ini dipinjam dari brand lain. Jadwalnya diatur koordinator brand asalnya.';
 
@@ -63,36 +57,39 @@ class TeamApiController extends Controller
      * shift, who is still on last night's shift, and who checked in without a schedule ("Tanpa jadwal"),
      * with counts rebuilt from the rows so the header and the list agree.
      */
-    public function roster(Request $request, OutletRosterService $roster, RosterLiveStateService $liveState): JsonResponse
+    public function roster(Request $request, RosterLiveStateService $liveState): JsonResponse
     {
         $user = $this->manager($request);
         $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d'], ...$this->scheduleFilterRules()]);
         $date = Carbon::parse($validated['date'] ?? today()->toDateString());
-        $filters = $this->scheduleFilters($validated);
 
-        $outlets = $roster->roster($user, $date, $filters);
-        $entries = collect($outlets)->flatMap(fn (array $outlet): array => $outlet['entries']);
-        $editable = $this->editableWorkers($user, $entries->pluck('worker'));
-        $onLeave = $this->workersOnLeave($entries->pluck('worker'), $date);
-        $outlets = array_map(fn (array $outlet): array => $this->withLeaveAndEditFlags($outlet, $editable, $onLeave), $outlets);
+        $roster = $liveState->roster($user, $date, $this->scheduleFilters($validated));
 
         return response()->json([
             'date' => $date->toDateString(),
-            'outlets' => $liveState->apply($user, $date, $outlets, $filters),
+            'outlets' => $roster['outlets'],
+            // Distinct people: someone with two schedules today counts once here (the outlet counts are per schedule).
+            'summary' => $roster['summary'],
         ]);
     }
 
     /**
      * The week (Monday to Sunday) holding the date, one line per worker with a cell per day.
      */
-    public function week(Request $request, WeeklyScheduleService $weeks): JsonResponse
+    public function week(Request $request, WeeklyScheduleService $weeks, RosterLiveStateService $liveState): JsonResponse
     {
         $user = $this->manager($request);
         $validated = $request->validate(['date' => ['nullable', 'date_format:Y-m-d'], ...$this->scheduleFilterRules()]);
 
         $week = $weeks->week($user, Carbon::parse($validated['date'] ?? today()->toDateString()), $this->scheduleFilters($validated));
-        $editable = $this->editableWorkers($user, collect($week['workers'])->pluck('worker'));
-        $week['workers'] = array_map(fn (array $row): array => [...$row, 'can_edit' => isset($editable[$this->workerKey($row['worker'])])], $week['workers']);
+        $editable = $liveState->editableWorkers($user, collect($week['workers'])->pluck('worker'));
+        // A worker listed only for a leave has no cells: days stay a JSON object, as for everyone else.
+        $week['workers'] = array_map(fn (array $row): array => [
+            ...$row,
+            'days' => $row['days'] === [] ? (object) [] : $row['days'],
+            'day_schedules' => $row['day_schedules'] === [] ? (object) [] : $row['day_schedules'],
+            'can_edit' => isset($editable[$this->workerKey($row['worker'])]),
+        ], $week['workers']);
 
         return response()->json($week);
     }
@@ -191,10 +188,6 @@ class TeamApiController extends Controller
         $data = $request->validated();
         $worker = $this->findWorker($request->user(), $data['worker_type'], (int) $data['worker_id'], scheduling: true);
 
-        if ($data['mode'] !== ShiftAssignmentService::MODE_CLEAR && ($outsideContract = $this->outsideContract($worker, Carbon::parse($data['date']))) !== null) {
-            return $this->fieldError('date', $outsideContract);
-        }
-
         $schedule = $assignments->assignDay(
             $request->user(),
             $worker,
@@ -203,19 +196,36 @@ class TeamApiController extends Controller
             isset($data['shift_id']) ? (int) $data['shift_id'] : null,
             isset($data['company_location_id']) ? (int) $data['company_location_id'] : null,
             $data['section'] ?? null,
+            reason: $data['reason'] ?? null,
+            source: 'api',
+            scheduleId: isset($data['schedule_id']) ? (int) $data['schedule_id'] : null,
+            add: (bool) ($data['add'] ?? false),
         );
 
         return response()->json([
             'message' => $schedule ? 'Jadwal disimpan.' : 'Jadwal dihapus.',
-            'data' => $schedule ? [
-                'id' => (int) $schedule->id,
-                'date' => $schedule->date->toDateString(),
-                'is_day_off' => $schedule->is_day_off,
-                'shift_id' => $schedule->shift_id,
-                'company_location_id' => $schedule->company_location_id,
-                'section' => $schedule->section,
-            ] : null,
+            'data' => $schedule ? [...$this->scheduleData($schedule), 'sequence' => (int) ($schedule->sequence ?: 1)] : null,
+            // Every schedule of the worker on that date after the change, in day order.
+            'schedules' => $assignments->rowsOn($worker, $data['date'])
+                ->map(fn (ShiftSchedule $row): array => [...$this->scheduleData($row), 'sequence' => (int) ($row->sequence ?: 1), 'locked' => $row->isLocked()])
+                ->values()
+                ->all(),
         ]);
+    }
+
+    /**
+     * @return array{id: int, date: string, is_day_off: bool, shift_id: int|null, company_location_id: int|null, section: string|null}
+     */
+    private function scheduleData(ShiftSchedule $schedule): array
+    {
+        return [
+            'id' => (int) $schedule->id,
+            'date' => $schedule->date->toDateString(),
+            'is_day_off' => (bool) $schedule->is_day_off,
+            'shift_id' => $schedule->shift_id !== null ? (int) $schedule->shift_id : null,
+            'company_location_id' => $schedule->company_location_id !== null ? (int) $schedule->company_location_id : null,
+            'section' => $schedule->section,
+        ];
     }
 
     /**
@@ -231,105 +241,9 @@ class TeamApiController extends Controller
         $from = Carbon::parse($data['from']);
         $to = Carbon::parse($data['to']);
 
-        $result = DB::transaction(function () use ($copies, $user, $from, $to): array {
-            $outsideContract = $this->copiesOutsideContract($user, $from, $to);
-            $result = $copies->copyWeek($user, $from, $to);
-            $removed = 0;
+        $result = DB::transaction(fn (): array => $copies->copyWeek($user, $from, $to));
 
-            foreach ($outsideContract as $slot) {
-                // Deleted one by one so the ShiftSchedule deleted hook recalculates lateness of that day.
-                ShiftSchedule::query()
-                    ->where($slot['column'], $slot['worker_id'])
-                    ->whereDate('date', $slot['date'])
-                    ->where('created_by', $user->id)
-                    ->get()
-                    ->each(function (ShiftSchedule $schedule) use (&$removed): void {
-                        $schedule->delete();
-                        $removed++;
-                    });
-            }
-
-            $result['copied'] -= $removed;
-            $result['skipped_ended'] = $removed;
-
-            return $result;
-        });
-
-        $message = $copies->summary($result);
-
-        if ($result['skipped_ended'] > 0) {
-            $message .= " {$result['skipped_ended']} dilewati karena di luar masa kontrak pekerja.";
-        }
-
-        return response()->json(['message' => $message, 'data' => $result]);
-    }
-
-    /**
-     * The days a week copy would give to a worker outside their contract (ended, or before it starts),
-     * limited to days that are still empty so nothing the copy keeps is touched afterwards.
-     *
-     * @return list<array{column: string, worker_id: int, date: string}>
-     */
-    private function copiesOutsideContract(User $user, Carbon $from, Carbon $to): array
-    {
-        $source = $from->copy()->startOfWeek();
-        $offsetDays = (int) $source->diffInDays($to->copy()->startOfWeek(), false);
-
-        if ($offsetDays === 0) {
-            return [];
-        }
-
-        $columns = app(WorkScheduleService::class);
-        $slots = [];
-
-        ShiftSchedule::query()
-            ->visibleTo($user)
-            ->with(ShiftSchedule::workerEagerLoads())
-            ->where('date', '>=', $source->toDateString())
-            ->where('date', '<', $source->copy()->addDays(7)->toDateString())
-            ->get()
-            ->each(function (ShiftSchedule $schedule) use ($user, $offsetDays, $columns, &$slots): void {
-                $worker = $schedule->getWorkerProfile();
-                $date = $schedule->date->copy()->addDays($offsetDays);
-
-                if (! $worker || ! $user->canManageWorker($worker) || $this->outsideContract($worker, $date) === null) {
-                    return;
-                }
-
-                $column = $columns->workerColumn($worker);
-
-                if (ShiftSchedule::query()->where($column, $worker->getKey())->whereDate('date', $date->toDateString())->exists()) {
-                    return;
-                }
-
-                $slots[] = ['column' => $column, 'worker_id' => (int) $worker->getKey(), 'date' => $date->toDateString()];
-            });
-
-        return $slots;
-    }
-
-    /**
-     * Why the worker cannot be scheduled on the date, or null when they can: an ended contract, a day
-     * after the contract's end date, or a day before it starts.
-     */
-    private function outsideContract(Employee|Intern|Freelancer $worker, CarbonInterface $date): ?string
-    {
-        $endDate = $worker instanceof Employee ? null : $worker->end_date;
-        $startDate = $worker instanceof Employee ? null : $worker->start_date;
-
-        if ($endDate !== null && $date->toDateString() > $endDate->toDateString()) {
-            return 'Kontrak pekerja ini berakhir '.$endDate->locale('id')->translatedFormat('d F Y').'. Hari setelahnya tidak bisa dijadwalkan.';
-        }
-
-        if ($endDate === null && in_array($worker->status, WorkerAccountService::ENDED_STATUSES, true)) {
-            return 'Kontrak pekerja ini sudah berakhir.';
-        }
-
-        if ($startDate !== null && $date->toDateString() < $startDate->toDateString()) {
-            return 'Kontrak pekerja ini baru mulai '.$startDate->locale('id')->translatedFormat('d F Y').'. Hari sebelumnya tidak bisa dijadwalkan.';
-        }
-
-        return null;
+        return response()->json(['message' => $copies->summary($result), 'data' => $result]);
     }
 
     public function recap(Request $request, TeamRecapService $recaps): JsonResponse
@@ -337,9 +251,13 @@ class TeamApiController extends Controller
         $user = $this->manager($request);
         $month = $this->month($request);
 
+        $report = $recaps->report($user, $month);
+
         return response()->json([
             'month' => $month->format('Y-m'),
-            'data' => $recaps->recap($user, $month),
+            'data' => $report['rows'],
+            // Distinct worker-days: a day worked at two outlets counts once here.
+            'total' => $report['total'],
         ]);
     }
 
@@ -474,7 +392,7 @@ class TeamApiController extends Controller
     {
         $validated = $request->validate(['month' => ['nullable', 'date_format:Y-m']]);
 
-        return isset($validated['month']) ? Carbon::createFromFormat('Y-m', $validated['month'])->startOfMonth() : today()->startOfMonth();
+        return isset($validated['month']) ? TeamRecapService::parseMonth($validated['month']) : today()->startOfMonth();
     }
 
     private function manager(Request $request): User
@@ -511,88 +429,6 @@ class TeamApiController extends Controller
             ->visibleTo($user)
             ->where(app(WorkScheduleService::class)->workerColumn($worker), $worker->getKey())
             ->exists();
-    }
-
-    /**
-     * Keys ("freelancer:12") of the listed workers whose schedule the user may change. Workers lent in
-     * from another brand are only shown; their own brand plans them.
-     *
-     * @param  Collection<int, array{type: string, id: int}>  $workers
-     * @return array<string, true>
-     */
-    private function editableWorkers(User $user, Collection $workers): array
-    {
-        $editable = [];
-
-        foreach ($workers->groupBy('type') as $type => $ofType) {
-            self::WORKER_TYPES[$type]['model']::query()
-                ->whereKey($ofType->pluck('id')->unique()->all())
-                ->get()
-                ->filter(fn ($worker): bool => $user->canManageWorker($worker))
-                ->each(function ($worker) use ($type, &$editable): void {
-                    $editable["{$type}:{$worker->getKey()}"] = true;
-                });
-        }
-
-        return $editable;
-    }
-
-    /**
-     * Keys of the listed workers on approved leave that day (an approved request, or the leave row it wrote).
-     *
-     * @param  Collection<int, array{type: string, id: int}>  $workers
-     * @return array<string, true>
-     */
-    private function workersOnLeave(Collection $workers, CarbonInterface $date): array
-    {
-        $onLeave = [];
-        $day = $date->toDateString();
-
-        foreach ($workers->groupBy('type') as $type => $ofType) {
-            $ids = $ofType->pluck('id')->unique()->all();
-            $column = "{$type}_id";
-
-            LeaveRequest::query()
-                ->where('status', 'approved')
-                ->whereIn($column, $ids)
-                ->whereDate('start_date', '<=', $day)
-                ->whereDate('end_date', '>=', $day)
-                ->pluck($column)
-                ->merge(Attendance::query()->whereIn($column, $ids)->whereDate('date', $day)->where('status', AttendanceStatus::Leave)->pluck($column))
-                ->each(function ($id) use ($type, &$onLeave): void {
-                    $onLeave["{$type}:{$id}"] = true;
-                });
-        }
-
-        return $onLeave;
-    }
-
-    /**
-     * Marks each entry editable or not and shows a worker on approved leave who has not checked in as
-     * "cuti" instead of "belum absen", so the outlet's counts and the home card stay right.
-     *
-     * @param  array{location: mixed, counts: array<string, int>, entries: list<array<string, mixed>>}  $outlet
-     * @param  array<string, true>  $editable
-     * @param  array<string, true>  $onLeave
-     * @return array<string, mixed>
-     */
-    private function withLeaveAndEditFlags(array $outlet, array $editable, array $onLeave): array
-    {
-        $outlet['counts'][self::STATE_LEAVE] = 0;
-
-        foreach ($outlet['entries'] as $index => $entry) {
-            $key = $this->workerKey($entry['worker']);
-            $outlet['entries'][$index]['can_edit'] = isset($editable[$key]);
-
-            if (isset($onLeave[$key]) && in_array($entry['state'], [OutletRosterService::STATE_MISSING, OutletRosterService::STATE_UPCOMING], true)) {
-                $outlet['entries'][$index]['state'] = self::STATE_LEAVE;
-                $outlet['counts'][$entry['state']]--;
-                $outlet['counts'][self::STATE_LEAVE]++;
-                $outlet['counts']['scheduled']--;
-            }
-        }
-
-        return $outlet;
     }
 
     /**

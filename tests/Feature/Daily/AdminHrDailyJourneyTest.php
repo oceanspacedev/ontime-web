@@ -464,6 +464,8 @@ class AdminHrDailyJourneyTest extends TestCase
     {
         $lastMonday = today()->subWeek()->startOfWeek();
         $thisMonday = today()->startOfWeek();
+        // HR works on Monday morning: last week is gone (a reason is asked), this week lies ahead for the copy (D4).
+        $this->travelTo($thisMonday->copy()->setTime(7, 0));
 
         $this->actingAs($this->hrAdmin);
         $this->assertTrue(ShiftScheduleResource::canViewAny());
@@ -477,6 +479,7 @@ class AdminHrDailyJourneyTest extends TestCase
                 'mode' => 'shift',
                 'shift_id' => $this->shiftPagi->id,
                 'overwrite' => true,
+                'reason' => 'Menyusun jadwal minggu lalu',
             ])
             ->assertHasNoFormErrors()
             ->assertNotified('Jadwal shift disimpan');
@@ -501,6 +504,8 @@ class AdminHrDailyJourneyTest extends TestCase
     {
         $lastMonday = today()->subWeek()->startOfWeek();
         $thisMonday = today()->startOfWeek();
+        // The copy is made on Monday morning: a copy never plans a day already gone (D4).
+        $this->travelTo($thisMonday->copy()->setTime(7, 0));
         $logistikShift = Shift::create(['company_id' => $this->alfaLogistik->id, 'name' => 'Gudang', 'start_time' => '07:00', 'end_time' => '15:00', 'is_active' => true]);
         $betaShift = Shift::create(['company_id' => $this->betaCorp->id, 'name' => 'Beta', 'start_time' => '07:00', 'end_time' => '15:00', 'is_active' => true]);
 

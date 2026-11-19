@@ -11,6 +11,7 @@ use App\Models\Intern;
 use App\Models\ShiftSchedule;
 use App\Models\ShiftSwapRequest;
 use App\Models\User;
+use App\Services\SessionResolver;
 use App\Services\ShiftSwapService;
 use App\Services\WorkerAccountService;
 use App\Services\WorkScheduleService;
@@ -97,7 +98,7 @@ class ShiftSwapRequestApiController extends Controller
         // colleagues; a larger company narrows the list with the search field.
         $workers = collect([Employee::class, Intern::class, Freelancer::class])
             ->flatMap(fn (string $modelClass): Collection => $modelClass::query()
-                ->with(['division', 'shift', 'user'])
+                ->with(['division', 'shift', 'user', 'company.policy'])
                 ->where('company_id', $me->company_id)
                 ->whereNotNull('user_id')
                 ->when($me instanceof $modelClass, fn ($query) => $query->whereKeyNot($me->getKey()))
@@ -112,12 +113,18 @@ class ShiftSwapRequestApiController extends Controller
             ->values();
 
         $schedules = $this->schedulesOn($workers, $date);
+        $resolver = app(SessionResolver::class);
+
+        // Whether each colleague was ever rostered, read for all of them at once (blank days of a roster company).
+        foreach ($workers->groupBy(fn ($worker): string => app(WorkScheduleService::class)->workerColumn($worker)) as $column => $ofType) {
+            $resolver->primeRosteredSince($column, $ofType->pluck('id')->all());
+        }
 
         return response()->json([
-            'data' => $workers->map(function ($worker) use ($schedules): array {
+            'data' => $workers->map(function ($worker) use ($schedules, $date): array {
                 $key = app(WorkScheduleService::class)->workerColumn($worker).':'.$worker->id;
                 $schedule = $schedules->get($key);
-                $state = $this->shiftSwaps->cellState($worker, $schedule);
+                $state = $this->shiftSwaps->cellState($worker, $schedule, $date);
                 $shift = $schedule?->shift ?? ($state['shift_id'] ? $worker->shift : null);
 
                 return [
@@ -239,7 +246,7 @@ class ShiftSwapRequestApiController extends Controller
     }
 
     /**
-     * Schedule rows of the workers on the date, keyed "worker_column:id".
+     * One schedule row per worker on the date (the lowest numbered one), keyed "worker_column:id".
      *
      * @param  Collection<int, Employee|Intern|Freelancer>  $workers
      * @return Collection<string, ShiftSchedule>
@@ -261,6 +268,9 @@ class ShiftSwapRequestApiController extends Controller
                     $query->orWhereIn($column, $ids);
                 }
             })
+            // Highest number first, so keyBy keeps the lowest numbered row of the day (the order the swap reads).
+            ->orderByDesc('sequence')
+            ->orderByDesc('id')
             ->get()
             ->keyBy(function (ShiftSchedule $schedule): string {
                 $column = $schedule->employee_id ? 'employee_id' : ($schedule->intern_id ? 'intern_id' : 'freelancer_id');

@@ -83,6 +83,41 @@ class AttendanceReminderTest extends TestCase
         $this->assertLastReminder('Anda belum absen pulang', 'Shift Pagi selesai 17:00. Absen pulang sekarang, atau ajukan koreksi bila sudah pulang.', 'check_out');
     }
 
+    public function test_a_session_left_open_before_a_later_check_in_is_reminded_for_a_correction_not_a_check_out(): void
+    {
+        $evening = Shift::create(['company_id' => $this->company->id, 'division_id' => $this->jchicken->id, 'name' => 'Sore', 'start_time' => '17:30', 'end_time' => '23:00', 'late_tolerance_minutes' => 10]);
+        ShiftSchedule::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-06', 'sequence' => 2, 'shift_id' => $evening->id, 'company_location_id' => $this->outlet->id]);
+        Attendance::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-06', 'schedule_sequence' => 1, 'check_in' => '2026-11-06 07:55:00', 'status' => 'on_time']);
+        Attendance::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-06', 'schedule_sequence' => 2, 'check_in' => '2026-11-06 16:50:00', 'status' => 'on_time']);
+
+        // A check-out tap now would close the evening session: no "Waktunya pulang" for the morning one.
+        $this->at('17:00');
+        $this->assertSame(0, $this->sendDue()['time_to_leave']);
+
+        $this->at('19:05');
+        $this->assertSame(1, $this->sendDue()['forgot_check_out']);
+        $this->assertLastReminder('Anda belum absen pulang', 'Shift Pagi selesai 17:00. Ajukan koreksi dengan jam pulang yang sebenarnya.', 'correction');
+    }
+
+    public function test_a_rejected_check_in_gets_no_check_out_reminders(): void
+    {
+        Attendance::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 07:55:00', 'status' => 'rejected']);
+
+        $this->at('17:00');
+        $this->assertSame(0, $this->sendDue()['time_to_leave']);
+        $this->at('19:05');
+        $this->assertSame(0, $this->sendDue()['forgot_check_out']);
+    }
+
+    public function test_a_date_of_a_leave_range_the_leave_does_not_charge_is_reminded_as_a_working_day(): void
+    {
+        LeaveRequest::create(['freelancer_id' => $this->bayu->id, 'leave_type' => 'sick', 'start_date' => '2026-11-05', 'end_date' => '2026-11-07', 'charged_dates' => ['2026-11-05', '2026-11-07'], 'days_count' => 2, 'reason' => 'Sakit', 'status' => 'approved']);
+
+        $this->at('08:11');
+        $this->assertSame(1, $this->sendDue()['not_checked_in']);
+        $this->assertLastReminder('Anda belum absen masuk', 'Shift Pagi mulai 08:00. Absen sekarang di JChicken Ciledug.', 'check_in');
+    }
+
     public function test_nothing_is_sent_once_checked_in_or_after_the_window(): void
     {
         Attendance::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 07:40:00', 'status' => 'on_time']);
@@ -110,6 +145,9 @@ class AttendanceReminderTest extends TestCase
         $this->assertSame(1, $this->sendDue()['not_checked_in'], 'Only Bayu, whose shift is scheduled.');
     }
 
+    /**
+     * A fixed-hours company (uses_shift_roster off); a company on shift rosters: RosterCompanyUnscheduledTest.
+     */
     public function test_a_default_shift_counts_when_there_is_no_schedule(): void
     {
         [$user] = $this->freelancer('Default', ['shift_id' => $this->morning->id]);

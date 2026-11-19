@@ -6,7 +6,8 @@ import { Badge, Button, Group, Notice, Text } from '@/components/ui';
 import type { Access } from '@/lib/access';
 import { type Attendance, attendanceApi, type TodayAttendance } from '@/lib/api';
 import { attendanceStatusLabel, attendanceStatusTone, formatDate, formatTime } from '@/lib/format';
-import { unclosedNotice } from '@/lib/today';
+import { rosterBadge } from '@/lib/team';
+import { cardDate, dayTotalsLine, isUnscheduledToday, listedSchedules, scheduleItemAttendance, scheduleItemLine, unclosedNotice, workingScheduleCount } from '@/lib/today';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 interface Props {
@@ -50,18 +51,27 @@ export function TodayCard({ today, access }: Props) {
   const workEnd = schedule?.end_time ?? policy?.work_end_time ?? null;
   /** An earlier shift never checked out: fixed by a correction, while today's check-in stays offered. */
   const unclosed = unclosedNotice(today.unclosed_previous, today.date);
+  /** Newer servers: no schedule to work today, every schedule of a day with several, and the day's figures. */
+  const unscheduled = isUnscheduledToday(today);
+  const schedules = listedSchedules(today);
+  const totals = dayTotalsLine(today.day_totals);
 
   return (
     <Group title={TODAY_GROUP_TITLE} padded cardStyle={styles.card}>
       <View style={styles.header}>
         <View style={styles.headerText}>
           <Text style={styles.date} numberOfLines={1}>
-            {formatDate(today.date, 'weekday')}
+            {formatDate(cardDate(today), 'weekday')}
           </Text>
           {schedule?.is_day_off ? (
             <View style={styles.scheduleRow}>
               <Ionicons name="calendar-outline" size={14} color={colors.textMuted} />
               <Text style={styles.schedule}>Hari ini dijadwalkan libur</Text>
+            </View>
+          ) : unscheduled ? (
+            <View style={styles.scheduleRow}>
+              <Ionicons name="calendar-clear-outline" size={14} color={colors.textMuted} />
+              <Text style={styles.schedule}>Tidak ada jadwal hari ini</Text>
             </View>
           ) : workStart ? (
             <View style={styles.scheduleRow}>
@@ -74,7 +84,7 @@ export function TodayCard({ today, access }: Props) {
               </Text>
             </View>
           ) : null}
-          {schedule?.outlet && !schedule.is_day_off ? (
+          {schedule?.outlet && !schedule.is_day_off && !unscheduled ? (
             <View style={styles.scheduleRow}>
               <Ionicons name="storefront-outline" size={14} color={colors.textMuted} />
               <Text style={styles.schedule} numberOfLines={1}>
@@ -94,11 +104,39 @@ export function TodayCard({ today, access }: Props) {
         ) : null}
       </View>
 
-      <View style={[styles.times, done && styles.timesLast]}>
+      {schedules.length > 0 ? (
+        <View style={styles.sessions}>
+          <Text style={styles.sessionsTitle}>{workingScheduleCount(today)} jadwal hari ini</Text>
+          {schedules.map((item, index) => {
+            const badge = rosterBadge(item, today.date, today.date);
+            const worked = scheduleItemAttendance(item);
+            return (
+              <View key={`${item.schedule_id ?? 'jam'}:${item.segment}:${index}`} style={styles.session}>
+                <View style={styles.sessionText}>
+                  <Text style={[styles.sessionLine, item.is_current && styles.sessionCurrent]} numberOfLines={2}>
+                    {scheduleItemLine(item)}
+                  </Text>
+                  {worked ? <Text style={styles.schedule}>{worked}</Text> : null}
+                </View>
+                {badge ? <Badge label={badge.label} tone={badge.tone} /> : null}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      <View style={[styles.times, done && !totals && styles.timesLast]}>
         <TimeHalf label="Masuk" value={attendance?.check_in} icon="log-in-outline" />
         <View style={styles.divider} />
         <TimeHalf label="Pulang" value={attendance?.check_out} icon="log-out-outline" />
       </View>
+
+      {totals ? (
+        <View style={styles.scheduleRow}>
+          <Ionicons name="stopwatch-outline" size={14} color={colors.textMuted} />
+          <Text style={styles.schedule}>{totals}</Text>
+        </View>
+      ) : null}
 
       {unclosed ? (
         <View style={styles.unclosed}>
@@ -175,6 +213,12 @@ const useStyles = makeStyles((c) => ({
   date: { fontSize: fontSize.lg, fontWeight: '600', color: c.text },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   schedule: { flexShrink: 1, fontSize: fontSize.sm, color: c.textMuted },
+  sessions: { gap: spacing.sm },
+  sessionsTitle: { fontSize: fontSize.sm, fontWeight: '600', color: c.textMuted },
+  session: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  sessionText: { flex: 1, gap: 2 },
+  sessionLine: { fontSize: fontSize.sm, color: c.text },
+  sessionCurrent: { fontWeight: '600' },
   times: {
     flexDirection: 'row',
     alignItems: 'stretch',

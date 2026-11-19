@@ -4,7 +4,7 @@ import { Pressable, View } from 'react-native';
 
 import { Badge, Text } from '@/components/ui';
 import type { Attendance } from '@/lib/api';
-import { attendanceStatusLabel, attendanceStatusTone, formatTime } from '@/lib/format';
+import { attendanceStatusLabel, attendanceStatusTone, formatMinutes, formatTime } from '@/lib/format';
 import { fontSize, makeStyles, spacing, useTheme } from '@/theme';
 
 const LOCALE = 'id-ID';
@@ -70,7 +70,15 @@ export function AttendanceRow({ attendance, showWorker, onPress }: { attendance:
           <Badge label={attendanceStatusLabel(attendance.status)} tone={attendanceStatusTone(attendance.status)} />
           {attendance.late_minutes ? <Text style={styles.late}>Terlambat {attendance.late_minutes} menit</Text> : null}
           {attendance.is_corrected ? <Text style={styles.note}>Sudah dikoreksi</Text> : null}
+          {attendance.is_missing_check_out ? <Text style={styles.late}>Belum absen pulang</Text> : null}
+          {attendance.worked_minutes ? <Text style={styles.note}>{formatMinutes(attendance.worked_minutes)}</Text> : null}
+          {attendance.overtime_minutes ? <Text style={styles.note}>Lembur {formatMinutes(attendance.overtime_minutes)}</Text> : null}
         </View>
+        {attendance.schedule_label ? (
+          <Text style={styles.note} numberOfLines={1}>
+            {attendance.schedule_label}
+          </Text>
+        ) : null}
         {attendance.is_off_schedule ? (
           <Text style={styles.note} numberOfLines={2}>
             {attendance.off_schedule_label ?? 'Masuk di luar jadwal'}

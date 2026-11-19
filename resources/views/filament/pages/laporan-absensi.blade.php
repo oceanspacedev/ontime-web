@@ -13,5 +13,16 @@
         </div>
     </form>
 
+    @if ($this->summary !== [])
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+            @foreach ($this->summary as $figure)
+                <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
+                    <p class="text-xs text-gray-500 dark:text-gray-400">{{ $figure['label'] }}</p>
+                    <p class="text-base font-semibold text-gray-950 dark:text-white">{{ $figure['value'] }}</p>
+                </div>
+            @endforeach
+        </div>
+    @endif
+
     {{ $this->table }}
 </x-filament-panels::page>

@@ -61,6 +61,9 @@ class ShiftScheduleTest extends TestCase
         $this->grantDataAccessTo($this->admin, $this->company->id);
     }
 
+    /**
+     * A fixed-hours company (uses_shift_roster off); a company on shift rosters: RosterCompanyUnscheduledTest.
+     */
     public function test_working_hours_come_from_schedule_then_default_shift_then_policy(): void
     {
         $service = app(WorkScheduleService::class);
@@ -145,6 +148,8 @@ class ShiftScheduleTest extends TestCase
                 'mode' => 'shift',
                 'shift_id' => $this->morning->id,
                 'overwrite' => false,
+                // Monday of this week may already be gone: the panel asks why a past day is changed (D4).
+                'reason' => 'Jadwal minggu ini',
             ])
             ->assertHasNoFormErrors()
             ->assertNotified('Jadwal shift disimpan');
@@ -285,6 +290,8 @@ class ShiftScheduleTest extends TestCase
                 'company_location_id' => $outlet->id,
                 'section' => ' HK ',
                 'overwrite' => true,
+                // Monday of this week may already be gone: the panel asks why a past day is changed (D4).
+                'reason' => 'Jadwal minggu ini',
             ])
             ->assertHasNoFormErrors()
             ->assertNotified('Jadwal shift disimpan');

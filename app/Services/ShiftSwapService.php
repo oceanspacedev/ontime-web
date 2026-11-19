@@ -37,6 +37,8 @@ class ShiftSwapService
 
     public const EXPIRED_MESSAGE = 'Tanggal tukar shift sudah lewat.';
 
+    public const MULTI_SCHEDULE_MESSAGE = 'Tukar shift belum mendukung hari dengan lebih dari satu jadwal.';
+
     /** Same as AttendanceCheckService: the first check-in of a shift opens this many minutes before it starts. */
     public const CHECK_IN_OPENS_MINUTES_BEFORE = 60;
 
@@ -122,13 +124,25 @@ class ShiftSwapService
      * The shift falls back to the worker's default shift when the date has no scheduled shift.
      *
      * Mirrors WorkScheduleService::isOffSchedule: a freelancer only works when rostered, so a freelancer with
-     * no shift that day (no row, or a row without a shift, and no default shift) is off.
+     * no shift that day (no row, or a row without a shift, and no default shift) is off. In a company that
+     * uses shift rosters a blank day (no row, or a row without a shift) is off for every worker, without
+     * the default-shift fallback, except for a fixed-hours worker on a day their standing hours apply
+     * ({@see SessionResolver::standingSession()}, when the date is given).
      *
      * @return array{off: bool, shift_id: int|null, company_location_id: int|null, section: string|null, schedule_id: int|null}
      */
-    public function cellState(Employee|Intern|Freelancer $worker, ?ShiftSchedule $schedule): array
+    public function cellState(Employee|Intern|Freelancer $worker, ?ShiftSchedule $schedule, ?CarbonInterface $date = null): array
     {
         $shiftId = $schedule?->shift_id ?? $worker->shift_id;
+
+        if ($schedule?->shift_id === null && $worker->loadMissing('company.policy')->company?->policy?->uses_shift_roster) {
+            $standing = $date !== null ? app(SessionResolver::class)->standingSession($worker, $date) : null;
+            $shiftId = $standing?->shift ? (int) $standing->shift->getKey() : null;
+
+            if ($shiftId === null) {
+                return ['off' => true, 'shift_id' => null, 'company_location_id' => null, 'section' => null, 'schedule_id' => $schedule ? (int) $schedule->id : null];
+            }
+        }
 
         if ($schedule?->is_day_off || ($worker instanceof Freelancer && $shiftId === null)) {
             return ['off' => true, 'shift_id' => null, 'company_location_id' => null, 'section' => null, 'schedule_id' => $schedule ? (int) $schedule->id : null];
@@ -144,21 +158,57 @@ class ShiftSwapService
     }
 
     /**
-     * The schedule rows of the worker on the dates, keyed by date. Locked when $lock is true (inside a transaction).
+     * The schedule row of the worker on each date, keyed by date: the lowest numbered one, so the choice does
+     * not depend on the order the database returns them in (a swap is refused on a date with several working
+     * rows, see {@see self::multiScheduleError()}). Locked when $lock is true (inside a transaction).
      *
      * @param  list<string>  $dates
      * @return Collection<string, ShiftSchedule>
      */
     private function schedulesOf(Employee|Intern|Freelancer $worker, array $dates, bool $lock = false): Collection
     {
+        return $this->rowsOf($worker, $dates, $lock)
+            ->groupBy(fn (ShiftSchedule $schedule): string => $schedule->date->toDateString())
+            ->map(fn (Collection $rows): ShiftSchedule => $rows->first());
+    }
+
+    /**
+     * Every schedule row of the worker on the dates, by date and number.
+     *
+     * @param  list<string>  $dates
+     * @return Collection<int, ShiftSchedule>
+     */
+    private function rowsOf(Employee|Intern|Freelancer $worker, array $dates, bool $lock = false): Collection
+    {
         $column = app(WorkScheduleService::class)->workerColumn($worker);
 
         return ShiftSchedule::query()
             ->where($column, $worker->getKey())
             ->where(fn ($query) => collect($dates)->each(fn (string $date) => $query->orWhereDate('date', $date)))
+            ->orderBy('date')
+            ->orderBy('sequence')
+            ->orderBy('id')
             ->when($lock, fn ($query) => $query->lockForUpdate())
-            ->get()
-            ->keyBy(fn (ShiftSchedule $schedule): string => $schedule->date->toDateString());
+            ->get();
+    }
+
+    /**
+     * Refused while either worker has more than one working schedule on a swapped date: a swap moves one
+     * whole day, and which of several schedules should move is not asked yet.
+     *
+     * @param  list<string>  $dates
+     */
+    private function multiScheduleError(Employee|Intern|Freelancer $requester, Employee|Intern|Freelancer $counterpart, array $dates, bool $lock = false): ?string
+    {
+        foreach ([$requester, $counterpart] as $worker) {
+            $working = $this->rowsOf($worker, $dates, $lock)->filter(fn (ShiftSchedule $row): bool => ! $row->is_day_off);
+
+            if ($working->countBy(fn (ShiftSchedule $row): string => $row->date->toDateString())->contains(fn (int $count): bool => $count > 1)) {
+                return self::MULTI_SCHEDULE_MESSAGE;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -185,8 +235,8 @@ class ShiftSwapService
         $cells = [];
 
         foreach ($dates as $date) {
-            $cells["requester|{$date}"] = $this->cellState($requester, $requesterSchedules->get($date));
-            $cells["counterpart|{$date}"] = $this->cellState($counterpart, $counterpartSchedules->get($date));
+            $cells["requester|{$date}"] = $this->cellState($requester, $requesterSchedules->get($date), Carbon::parse($date));
+            $cells["counterpart|{$date}"] = $this->cellState($counterpart, $counterpartSchedules->get($date), Carbon::parse($date));
         }
 
         return $cells;
@@ -232,6 +282,10 @@ class ShiftSwapService
 
         if (! $counterpart->user_id) {
             return "{$counterpart->full_name} belum punya akun aplikasi, jadi tidak bisa menyetujui tukar shift.";
+        }
+
+        if ($error = $this->multiScheduleError($requester, $counterpart, $dates)) {
+            return $error;
         }
 
         $cells = $this->snapshot($requester, $counterpart, $dates);
@@ -690,11 +744,15 @@ class ShiftSwapService
             return ['status' => ShiftSwapRequest::STATUS_FAILED, 'message' => $error];
         }
 
+        if ($error = $this->multiScheduleError($requester, $counterpart, $dates, lock: true)) {
+            return ['status' => ShiftSwapRequest::STATUS_FAILED, 'message' => $error];
+        }
+
         $requesterSchedules = $this->schedulesOf($requester, $dates, lock: true);
         $counterpartSchedules = $this->schedulesOf($counterpart, $dates, lock: true);
         $current = $this->cellsFrom($requester, $counterpart, $dates, $requesterSchedules, $counterpartSchedules);
 
-        if ($current !== ($swap->schedule_snapshot ?? [])) {
+        if (! $this->sameCells($current, $swap->schedule_snapshot ?? [])) {
             return ['status' => ShiftSwapRequest::STATUS_FAILED, 'message' => self::STALE_MESSAGE];
         }
 
@@ -707,18 +765,20 @@ class ShiftSwapService
             return ['status' => ShiftSwapRequest::STATUS_FAILED, 'message' => $error];
         }
 
-        $snapshot = $swap->schedule_snapshot;
+        // The cells just read equal the stored ones and always carry every key with its own type.
+        $snapshot = $current;
 
         try {
             // A savepoint: a schedule row inserted concurrently (unique worker + date) undoes every write of
             // this swap, and the request fails as stale instead of answering with a server error.
-            DB::transaction(function () use ($dates, $requester, $counterpart, $requesterSchedules, $counterpartSchedules, $snapshot, $approver): void {
+            // A schedule that got attendance meanwhile is locked (the model refuses the write): stale as well.
+            RosterChangeContext::run('swap', null, fn () => DB::transaction(function () use ($dates, $requester, $counterpart, $requesterSchedules, $counterpartSchedules, $snapshot, $approver): void {
                 foreach ($dates as $date) {
                     $this->writeCell($requester, $date, $requesterSchedules->get($date), $snapshot["counterpart|{$date}"], "Tukar shift dengan {$counterpart->full_name}", $approver);
                     $this->writeCell($counterpart, $date, $counterpartSchedules->get($date), $snapshot["requester|{$date}"], "Tukar shift dengan {$requester->full_name}", $approver);
                 }
-            });
-        } catch (UniqueConstraintViolationException) {
+            }));
+        } catch (UniqueConstraintViolationException|ValidationException) {
             return ['status' => ShiftSwapRequest::STATUS_FAILED, 'message' => self::STALE_MESSAGE];
         }
 
@@ -727,6 +787,44 @@ class ShiftSwapService
         $this->notify($counterpart->user, $swap, 'approved', 'Tukar shift disetujui', "Tukar shift dengan {$requester->full_name} disetujui. Jadwal Anda sudah diperbarui.");
 
         return null;
+    }
+
+    /**
+     * Whether the schedules read now are the ones stored when the swap was filed. A JSON column may hand the
+     * stored cells back with their keys in another order (MySQL sorts them) and ids as strings, so each stored
+     * key is compared by value after casting; a key this version does not know is ignored.
+     *
+     * @param  array<string, array<string, mixed>>  $current
+     * @param  array<string, mixed>  $stored
+     */
+    private function sameCells(array $current, array $stored): bool
+    {
+        if (count($current) !== count($stored)) {
+            return false;
+        }
+
+        foreach ($current as $key => $cell) {
+            $storedCell = $stored[$key] ?? null;
+
+            if (! is_array($storedCell)) {
+                return false;
+            }
+
+            foreach ($storedCell as $name => $value) {
+                $same = match ($name) {
+                    'off' => (bool) $value === (bool) $cell['off'],
+                    'shift_id', 'company_location_id', 'schedule_id' => ($value === null ? null : (int) $value) === ($cell[$name] === null ? null : (int) $cell[$name]),
+                    'section' => ($value === null ? null : (string) $value) === ($cell['section'] === null ? null : (string) $cell['section']),
+                    default => true,
+                };
+
+                if (! $same) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -786,7 +884,7 @@ class ShiftSwapService
 
     /**
      * Set the worker's schedule on the date to the given assignment, keeping the row when there is one so the
-     * schedule hooks (lateness recompute) see an update.
+     * change log records an update of that schedule.
      *
      * @param  array{off: bool, shift_id: int|null, company_location_id: int|null, section: string|null, schedule_id: int|null}  $state
      */

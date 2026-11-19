@@ -3,11 +3,11 @@ import { useState } from 'react';
 import { Alert, Pressable, ScrollView, View } from 'react-native';
 
 import { Choice, EmptyState, ErrorBanner, IconButton, LoadingView, Sheet, Text } from '@/components/ui';
-import type { ScheduleTarget } from '@/components/ScheduleSheet';
-import { errorMessage, teamApi, type TeamWeek } from '@/lib/api';
+import type { ScheduleSlot, ScheduleTarget } from '@/components/ScheduleSheet';
+import { errorMessage, teamApi, type TeamWeek, type WeekCell } from '@/lib/api';
 import { toDateString } from '@/lib/format';
 import { queryKeys } from '@/lib/queryClient';
-import { BORROWED_READ_ONLY, canEditSchedule, shiftDate, shiftText, weekCellText, weekStart } from '@/lib/team';
+import { BORROWED_READ_ONLY, canEditSchedule, daySchedules, shiftDate, shiftText, weekCellMarks, weekCellText, weekStart } from '@/lib/team';
 import { fontSize, makeStyles, radius, spacing } from '@/theme';
 
 const OFF = 'off';
@@ -15,6 +15,25 @@ const CLEAR = 'clear';
 const NO_SECTION = '-';
 
 const DAY_NAMES = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+
+/** "P · 08:00–16:00", or the shift's own label when it has no segments. */
+function cellShiftText(shift: NonNullable<WeekCell['shift']>): string {
+  const hours = shift.segments?.length ? shift.segments.map((segment) => `${segment.start}–${segment.end}`).join(' & ') : shift.label;
+  return [shift.code || shift.name, hours].filter(Boolean).join(' · ');
+}
+
+/** One cell of the grid as the schedule sheet edits it. */
+function slotOf(cell: WeekCell): ScheduleSlot {
+  return {
+    schedule_id: cell.schedule_id,
+    shift_id: cell.shift?.id ?? null,
+    location_id: cell.location_id,
+    section: cell.section,
+    is_day_off: cell.is_day_off,
+    locked: cell.locked,
+    label: cell.is_day_off ? 'Libur' : [cell.shift ? cellShiftText(cell.shift) : 'Tanpa shift', cell.outlet, cell.section].filter(Boolean).join(' · '),
+  };
+}
 
 interface Props {
   /** Any date inside the week to show. */
@@ -89,10 +108,15 @@ export function WeekGrid({ date, onChange, onEdit }: Props) {
       return;
     }
     const cell = row.days[day];
+    const schedules = daySchedules(row, day);
     onEdit({
       worker: { type: row.worker.type, id: row.worker.id, name: row.worker.name, company_id: row.worker.company_id },
       date: day,
-      current: cell ? { shift_id: cell.shift?.id ?? null, location_id: cell.location_id, section: cell.section, is_day_off: cell.is_day_off } : null,
+      // Several schedules open as a list; a single one opens straight in the form.
+      current: schedules.length > 1 ? null : cell ? slotOf(cell) : null,
+      schedules: schedules.map(slotOf),
+      // A newer server sends each cell's sequence and the full list of the day.
+      supportsMulti: row.day_schedules !== undefined,
     });
   };
 
@@ -181,9 +205,15 @@ export function WeekGrid({ date, onChange, onEdit }: Props) {
                 </View>
                 {week.data.days.map((day) => {
                   const cell = row.days[day];
+                  const schedules = daySchedules(row, day);
+                  const marks = weekCellMarks(schedules);
                   return (
-                    <Pressable key={day} style={[styles.cell, styles.box, (cell?.is_day_off || !canEditSchedule(row)) && styles.off]} onPress={() => edit(row, day)} accessibilityRole="button" accessibilityLabel={`${row.worker.name}, ${day}`}>
-                      <Text style={[styles.code, !cell && styles.empty]}>{weekCellText(cell)}</Text>
+                    <Pressable key={day} style={[styles.cell, styles.box, (cell?.is_day_off || !canEditSchedule(row)) && styles.off]} onPress={() => edit(row, day)} accessibilityRole="button" accessibilityLabel={`${row.worker.name}, ${day}${marks.onLeave ? ', cuti' : ''}${marks.locked ? ', sudah ada absensi' : ''}`}>
+                      <Text style={[styles.code, !cell && styles.empty]} numberOfLines={1} adjustsFontSizeToFit>
+                        {weekCellText(cell, schedules)}
+                      </Text>
+                      {marks.onLeave ? <Text style={styles.leave}>cuti</Text> : null}
+                      {marks.locked ? <Text style={styles.borrowed}>terkunci</Text> : null}
                       {cell?.borrowed_from ? <Text style={styles.borrowed}>pinjam</Text> : null}
                     </Pressable>
                   );
@@ -223,5 +253,6 @@ const useStyles = makeStyles((c) => ({
   today: { color: c.primary },
   code: { fontSize: fontSize.sm, fontWeight: '600', color: c.text },
   borrowed: { fontSize: 9, color: c.textMuted },
+  leave: { fontSize: 9, color: c.info, fontWeight: '600' },
   empty: { color: c.textMuted, fontWeight: '400' },
 }));

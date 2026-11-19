@@ -7,6 +7,7 @@ use App\Http\Requests\Api\V1\StoreAttendanceCorrectionRequest;
 use App\Http\Requests\Api\V1\UpdateAttendanceCorrectionRequest;
 use App\Http\Resources\Api\V1\AttendanceCorrectionResource;
 use App\Models\AttendanceCorrection;
+use App\Models\User;
 use App\Services\ApprovalFlowService;
 use App\Services\FileNamingService;
 use Illuminate\Http\JsonResponse;
@@ -37,7 +38,9 @@ class AttendanceCorrectionApiController extends Controller
             ]);
         }
 
-        $query = AttendanceCorrection::query()->with(AttendanceCorrection::workerEagerLoads());
+        // The worker's own requests (and an admin's schedule correction filed for them), not the records
+        // of an admin's edit or deletion: the released app would show those as requests never filed.
+        $query = AttendanceCorrection::query()->claims()->with(AttendanceCorrection::workerEagerLoads());
         if ($employee) {
             $query->where('employee_id', $employee->id);
         } elseif ($intern) {
@@ -96,6 +99,8 @@ class AttendanceCorrectionApiController extends Controller
                     'reason' => $request->input('reason'),
                     'attachment' => $attachmentPath,
                     'status' => 'pending',
+                    'origin' => AttendanceCorrection::ORIGIN_WORKER,
+                    ...$request->correctionAttributes(),
                 ]);
 
                 app(ApprovalFlowService::class)->generateSteps($correction, 'correction');
@@ -141,6 +146,10 @@ class AttendanceCorrectionApiController extends Controller
             return response()->json(['message' => 'Pengajuan koreksi absensi tidak ditemukan.'], 404);
         }
 
+        if ($correction->origin === AttendanceCorrection::ORIGIN_ADMIN) {
+            return response()->json(['message' => AttendanceCorrection::ADMIN_FILED_MESSAGE], 422);
+        }
+
         if ($correction->status !== 'pending') {
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat diubah.'], 422);
         }
@@ -149,7 +158,7 @@ class AttendanceCorrectionApiController extends Controller
             return response()->json(['message' => 'Pengajuan sudah mulai diproses, tidak bisa diubah.'], 422);
         }
 
-        $data = $request->only(['date', 'corrected_check_in', 'corrected_check_out', 'reason']);
+        $data = [...$request->only(['date', 'corrected_check_in', 'corrected_check_out', 'reason']), ...$request->correctionAttributes()];
 
         $previousAttachment = $correction->attachment;
 
@@ -205,7 +214,8 @@ class AttendanceCorrectionApiController extends Controller
         $user = $request->user();
         $correction = AttendanceCorrection::with(['employee', 'intern', 'freelancer', 'approvalSteps'])->find($id);
 
-        if (! $correction) {
+        // The record of an admin's edit or deletion is not a request of the worker, as in the list.
+        if (! $correction || ($correction->isAdminRecord() && $this->isWorkerOf($correction, $user))) {
             return response()->json(['message' => 'Pengajuan koreksi absensi tidak ditemukan atau sudah dibatalkan.'], 404);
         }
 
@@ -245,6 +255,10 @@ class AttendanceCorrectionApiController extends Controller
             return response()->json(['message' => 'Pengajuan koreksi absensi tidak ditemukan.'], 404);
         }
 
+        if ($correction->origin === AttendanceCorrection::ORIGIN_ADMIN) {
+            return response()->json(['message' => AttendanceCorrection::ADMIN_FILED_MESSAGE], 422);
+        }
+
         if ($correction->status !== 'pending') {
             return response()->json(['message' => 'Pengajuan yang sudah diproses tidak dapat dibatalkan.'], 422);
         }
@@ -277,6 +291,16 @@ class AttendanceCorrectionApiController extends Controller
         return response()->json([
             'message' => 'Pengajuan koreksi absensi berhasil dibatalkan.',
         ]);
+    }
+
+    /**
+     * Whether the user is the worker the correction is about.
+     */
+    private function isWorkerOf(AttendanceCorrection $correction, User $user): bool
+    {
+        return ($correction->employee_id && $correction->employee_id === $user->employee?->id)
+            || ($correction->intern_id && $correction->intern_id === $user->intern?->id)
+            || ($correction->freelancer_id && $correction->freelancer_id === $user->freelancer?->id);
     }
 
     /**

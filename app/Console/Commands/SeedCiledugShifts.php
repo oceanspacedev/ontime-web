@@ -14,11 +14,15 @@ class SeedCiledugShifts extends Command
     protected $description = 'Create the brand shifts of the Ciledug outlets (JChicken, Momoyo, Luuca) with their Talenta codes; shifts the brand already has (same name or code) are left alone';
 
     /**
-     * Brand => shifts as [name, code, start, end, talenta code, second start, second end], from the
-     * outlets' own schedule sheets (week 44, November 2026). Hours that differ by weekday are separate
-     * shifts, and a split shift has a second segment. Talenta codes read from the sheets: check them.
+     * Brand => shifts as [name, code, start, end, talenta code, second start, second end, normal minutes],
+     * from the outlets' own schedule sheets (week 44, November 2026). Hours that differ by weekday are
+     * separate shifts, and a split shift has a second segment. Talenta codes read from the sheets: check them.
      *
-     * @var array<string, list<array{0: string, 1: string, 2: string, 3: string, 4: string|null, 5?: string, 6?: string}>>
+     * Normal minutes (the normal working time of a long shift; time worked inside the shift above it is
+     * automatic overtime) are only written for a shift that lists them. None does yet: the figures come
+     * from the owner. A shift without a second segment gives null for both of its hours first.
+     *
+     * @var array<string, list<array{0: string, 1: string, 2: string, 3: string, 4: string|null, 5?: string|null, 6?: string|null, 7?: int}>>
      */
     private const PRESET = [
         'JCHICKEN' => [
@@ -86,6 +90,7 @@ class SeedCiledugShifts extends Command
                 [$name, $code, $start, $end, $talenta] = $row;
                 $secondStart = $row[5] ?? null;
                 $secondEnd = $row[6] ?? null;
+                $normalMinutes = $row[7] ?? null;
 
                 $attributes = ['company_id' => $company->id, 'division_id' => $brand->exists ? $brand->id : null, 'name' => $name];
 
@@ -105,7 +110,7 @@ class SeedCiledugShifts extends Command
                         'second_start_time' => $secondStart,
                         'second_end_time' => $secondEnd,
                         'is_active' => true,
-                    ]);
+                    ] + ($normalMinutes !== null ? ['normal_minutes' => $normalMinutes] : []));
                 }
 
                 $created++;

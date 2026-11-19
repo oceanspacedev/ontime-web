@@ -396,9 +396,12 @@ class Chaos_fnb_combosTest extends TestCase
         $fRecap = $this->recapOf('Fani');
         $aRecap = $this->recapOf('Andi');
 
-        $this->assertSame([1, 1, 0, 0], [$fRecap['scheduled_days'], $fRecap['present_days'], $fRecap['absent_days'], $fRecap['off_days']]);
+        // Since the attendance ledger the recap also counts the no-shows laporan absensi always counted: the eleven
+        // weekdays (2 - 16 Nov) before the date of a worker's first roster row, when the company week was expected
+        // of them. The Tuesday of this scenario adds none.
+        $this->assertSame([1, 1, 11, 0], [$fRecap['scheduled_days'], $fRecap['present_days'], $fRecap['absent_days'], $fRecap['off_days']]);
         $this->assertSame(8.08, (float) $fRecap['worked_hours']);
-        $this->assertSame([0, 0, 0, 1], [$aRecap['scheduled_days'], $aRecap['present_days'], $aRecap['absent_days'], $aRecap['off_days']]);
+        $this->assertSame([0, 0, 11, 1], [$aRecap['scheduled_days'], $aRecap['present_days'], $aRecap['absent_days'], $aRecap['off_days']]);
     }
 
     /**
@@ -423,8 +426,12 @@ class Chaos_fnb_combosTest extends TestCase
         $b = $this->recapOf('Budi');
 
         $this->assertSame('rejected', $leave->fresh()->status);
-        $this->assertSame([0, 0, 0, 1], [$a['scheduled_days'], $a['present_days'], $a['absent_days'], $a['off_days']]);
-        $this->assertSame([1, 1, 0, 0, 1, 10], [$b['scheduled_days'], $b['present_days'], $b['absent_days'], $b['off_days'], $b['late_days'], $b['late_minutes']]);
+        // Since the attendance ledger the recap also counts the no-shows laporan absensi always counted: the
+        // weekdays before the date of a worker's first roster row, when the company week was expected of them.
+        // Andi: the eleven of 2 - 16 Nov. Budi's only row is his approved cover's own, which never ends the
+        // company week: every other weekday up to Thursday 19 Nov (13) is expected of him. The Tuesday adds none.
+        $this->assertSame([0, 0, 11, 1], [$a['scheduled_days'], $a['present_days'], $a['absent_days'], $a['off_days']]);
+        $this->assertSame([1, 1, 13, 0, 1, 10], [$b['scheduled_days'], $b['present_days'], $b['absent_days'], $b['off_days'], $b['late_days'], $b['late_minutes']]);
     }
 
     /**

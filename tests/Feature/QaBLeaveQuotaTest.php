@@ -17,6 +17,9 @@ use App\Models\User;
 use App\Notifications\ApprovalRequestedNotification;
 use App\Services\AnnualLeaveService;
 use App\Services\ApprovalFlowService;
+use App\Services\Attendance\LedgerQuery;
+use App\Services\AttendanceLedger;
+use App\Services\OffScheduleCheckInService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -137,6 +140,65 @@ class QaBLeaveQuotaTest extends TestCase
         $this->expectApprovalRefused($leave, "{$employee->full_name} sudah melakukan presensi pada tanggal 16/11/2026, 17/11/2026. Tolak pengajuan ini, atau minta pekerja mengubah tanggal cuti/izinnya.");
         $this->assertSame(AttendanceStatus::OnTime, $first->fresh()->status);
         $this->assertSame(0, Attendance::query()->where('status', AttendanceStatus::Leave->value)->count());
+    }
+
+    public function test_a_rejected_check_in_gives_way_to_a_leave_and_comes_back_when_the_leave_is_undone(): void
+    {
+        $employee = $this->makeEmployee();
+        $rejected = $this->attendance($employee, '2026-11-16', 1, AttendanceStatus::Rejected, '08:00');
+        $leave = $this->pendingLeave($employee, '2026-11-16', '2026-11-16', 'sick');
+
+        app(ApprovalFlowService::class)->approveStep($leave, $this->makeSuperadmin());
+
+        $this->assertSame('approved', $leave->fresh()->status);
+        $row = $rejected->fresh();
+        $this->assertSame(AttendanceStatus::Leave, $row->status);
+        $this->assertNull($row->check_in, 'A leave row holds no check-in, so no report reads it as presence.');
+
+        $this->travelTo(Carbon::parse('2026-11-17 09:00:00'));
+        $day = app(AttendanceLedger::class)->days(LedgerQuery::forWorkers(['employee:'.$employee->id], '2026-11-16', '2026-11-16'))->first();
+        $this->assertSame('leave', $day['status']);
+
+        // Undoing the leave (its period moved away) puts the rejected check-in back.
+        DB::transaction(function () use ($leave): void {
+            $leave = $leave->fresh();
+            $leave->forceFill(['start_date' => '2026-11-18', 'end_date' => '2026-11-18'])->save();
+            $leave->syncAttendanceRows(['2026-11-16']);
+        });
+
+        $row = $rejected->fresh();
+        $this->assertSame(AttendanceStatus::Rejected, $row->status);
+        $this->assertSame('2026-11-16 08:00:00', $row->check_in?->format('Y-m-d H:i:s'));
+    }
+
+    public function test_a_rejected_cover_turned_into_a_leave_row_no_longer_claims_the_colleague_and_gets_the_claim_back_on_undo(): void
+    {
+        $backup = $this->makeEmployee();
+        $colleague = $this->makeEmployee();
+        $otherBackup = $this->makeEmployee();
+        $rejected = $this->attendance($backup, '2026-11-16', 1, AttendanceStatus::Rejected, '08:00');
+        $rejected->forceFill(['is_off_schedule' => true, 'replaced_worker_type' => 'employee', 'replaced_worker_id' => $colleague->id])->save();
+        $leave = $this->pendingLeave($backup, '2026-11-16', '2026-11-16', 'sick');
+
+        app(ApprovalFlowService::class)->approveStep($leave, $this->makeSuperadmin());
+
+        $row = $rejected->fresh();
+        $this->assertSame(AttendanceStatus::Leave, $row->status);
+        $this->assertSame([false, null, null], [(bool) $row->is_off_schedule, $row->replaced_worker_type, $row->replaced_worker_id], 'A leave row replaces nobody.');
+
+        // Another backup may still replace the colleague that day.
+        app(OffScheduleCheckInService::class)->ensureNotReplacedYet($colleague, Carbon::parse('2026-11-16'), $otherBackup);
+
+        // Undoing the leave puts the rejected cover back as it was.
+        DB::transaction(function () use ($leave): void {
+            $leave = $leave->fresh();
+            $leave->forceFill(['start_date' => '2026-11-18', 'end_date' => '2026-11-18'])->save();
+            $leave->syncAttendanceRows(['2026-11-16']);
+        });
+
+        $row = $rejected->fresh();
+        $this->assertSame([AttendanceStatus::Rejected, true, 'employee', $colleague->id], [$row->status, (bool) $row->is_off_schedule, $row->replaced_worker_type, $row->replaced_worker_id]);
+        $this->assertSame('2026-11-16 08:00:00', $row->check_in?->format('Y-m-d H:i:s'));
     }
 
     public function test_approved_leave_marks_every_segment_of_a_split_shift_day(): void

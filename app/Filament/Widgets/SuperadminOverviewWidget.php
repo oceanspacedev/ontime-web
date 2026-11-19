@@ -5,17 +5,21 @@ namespace App\Filament\Widgets;
 use App\Filament\Pages\ApprovalSaya;
 use App\Filament\Pages\LaporanAbsensi;
 use App\Filament\Resources\CompanyResource;
-use App\Models\Attendance;
 use App\Models\AttendanceCorrection;
 use App\Models\Company;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
+use App\Services\Attendance\LedgerQuery;
+use App\Services\AttendanceLedger;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 
 class SuperadminOverviewWidget extends BaseWidget
 {
     protected static ?int $sort = 1;
+
+    /** The attendance figures read every worker of today, so the widget refreshes once a minute. */
+    protected ?string $pollingInterval = '60s';
 
     public static function canView(): bool
     {
@@ -26,18 +30,12 @@ class SuperadminOverviewWidget extends BaseWidget
     {
         $today = today();
 
-        $attendanceCounts = Attendance::query()
-            ->whereDate('date', $today)
-            ->selectRaw("
-                SUM(CASE WHEN status IN ('on_time', 'present') THEN 1 ELSE 0 END) as present_count,
-                SUM(CASE WHEN status = 'late' THEN 1 ELSE 0 END) as late_count,
-                SUM(CASE WHEN status = 'leave' THEN 1 ELSE 0 END) as leave_count
-            ")
-            ->first();
-
-        $presentCount = (int) ($attendanceCounts?->present_count ?? 0);
-        $lateCount = (int) ($attendanceCounts?->late_count ?? 0);
-        $leaveCount = (int) ($attendanceCounts?->leave_count ?? 0);
+        // Today in distinct worker-days from the attendance ledger, the figures every report gives:
+        // present includes the late and the ones waiting for approval.
+        $summary = app(AttendanceLedger::class)->summary(LedgerQuery::between(auth()->user(), $today, $today));
+        $presentCount = $summary['present_days'];
+        $lateCount = $summary['late_days'];
+        $leaveCount = $summary['leave_days'];
 
         $pendingLeaves = LeaveRequest::where('status', 'pending')->count();
         $pendingOvertimes = OvertimeRequest::where('status', 'pending')->count();

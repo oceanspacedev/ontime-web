@@ -78,6 +78,7 @@ class OvertimeRequestApiController extends Controller
         // row is locked first, so two submissions sent at the same time cannot both pass the overlap check.
         $overtimeRequest = DB::transaction(function () use ($employee, $intern, $freelancer, $profile, $request, $durationMinutes, $service): OvertimeRequest {
             $service->lockWorker($profile);
+            $service->assertNotOnLeave($profile, $request->input('date'));
             $service->assertNoOverlap($profile, $request->input('date'), $request->input('start_time'), $request->input('end_time'));
 
             $overtimeRequest = OvertimeRequest::create([
@@ -171,6 +172,10 @@ class OvertimeRequestApiController extends Controller
 
             if (! $locked || ! ApprovalFlowService::isUntouchedByApprovers($locked)) {
                 return false;
+            }
+
+            if ($dateChanged) {
+                $service->assertNotOnLeave($profile, $date);
             }
 
             if ($hoursChanged) {

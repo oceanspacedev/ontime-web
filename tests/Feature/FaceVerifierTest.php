@@ -26,7 +26,14 @@ class FaceVerifierTest extends TestCase
     {
         parent::setUp();
 
+        /*
+         * FaceImageReader looks on the public, the default and the local disk. The default disk comes from
+         * .env (S3 there), so all three are faked: a "missing" path must not reach a real bucket or a file
+         * another test left behind.
+         */
         Storage::fake('public');
+        Storage::fake(config('filesystems.default'));
+        Storage::fake('local');
         Http::preventStrayRequests();
 
         config([

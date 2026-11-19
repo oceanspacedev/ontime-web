@@ -153,6 +153,10 @@ class SplitShiftSchedulingTest extends TestCase
         $this->assertSame(2, (int) $service->checkIn($worker->user, new AttendanceCheckInput)->attendance->segment);
     }
 
+    /**
+     * D1: the first segment holds a new check-in back only until its scheduled end (13:00). Once the second
+     * segment opens, checking in to it is allowed and the open first segment becomes a missing check-out.
+     */
     public function test_second_segment_cannot_start_while_the_first_is_still_open(): void
     {
         $worker = $this->makeEmployee();
@@ -160,11 +164,24 @@ class SplitShiftSchedulingTest extends TestCase
         $service = app(AttendanceCheckService::class);
 
         $this->travelTo(today()->setTime(7, 50));
-        $service->checkIn($worker->user, new AttendanceCheckInput);
+        $first = $service->checkIn($worker->user, new AttendanceCheckInput)->attendance;
+
+        $this->travelTo(today()->setTime(12, 30));
+
+        try {
+            $service->checkIn($worker->user, new AttendanceCheckInput);
+            $this->fail('The first segment is still running.');
+        } catch (AttendanceRuleException $exception) {
+            $this->assertSame(409, $exception->status);
+        }
 
         $this->travelTo(today()->setTime(17, 50));
-        $this->expectException(AttendanceRuleException::class);
-        $service->checkIn($worker->user, new AttendanceCheckInput);
+        $second = $service->checkIn($worker->user, new AttendanceCheckInput)->attendance;
+
+        $this->assertSame(2, (int) $second->segment);
+        $this->assertSame(0, (int) $second->late_minutes);
+        $this->assertFalse($service->isLiveClosable($first->fresh()), 'The open first segment is now a missing check-out.');
+        $this->assertTrue($service->closableAttendance($worker->user)->is($second));
     }
 
     public function test_a_single_segment_shift_still_allows_one_check_in_a_day(): void
@@ -347,6 +364,8 @@ class SplitShiftSchedulingTest extends TestCase
 
     public function test_last_weeks_schedule_is_copied_without_overwriting_or_reviving_inactive_shifts(): void
     {
+        // D4: a copy never plans a day already gone, so the target week lies ahead.
+        $this->travelTo(Carbon::parse('2026-11-05 08:00:00'));
         $worker = $this->makeEmployee(['division_id' => $this->momoyo->id]);
         $other = $this->makeEmployee();
         $oldShift = Shift::create(['company_id' => $this->company->id, 'name' => 'Lama', 'start_time' => '08:00', 'end_time' => '12:00', 'is_active' => false]);
@@ -370,6 +389,8 @@ class SplitShiftSchedulingTest extends TestCase
 
     public function test_panel_action_copies_a_week(): void
     {
+        // D4: a copy never plans a day already gone, so the target week lies ahead.
+        $this->travelTo(Carbon::parse('2026-11-05 08:00:00'));
         $worker = $this->makeEmployee();
         ShiftSchedule::create(['employee_id' => $worker->id, 'date' => '2026-11-02', 'shift_id' => $this->luucaNoon->id]);
         $this->actingAs($this->admin);
@@ -408,6 +429,8 @@ class SplitShiftSchedulingTest extends TestCase
 
     public function test_weekly_grid_page_shows_the_week_and_edits_a_cell(): void
     {
+        // The cell edited below lies ahead; a past day would need "Alasan perubahan" (D4).
+        $this->travelTo(Carbon::parse('2026-11-02 07:00:00'));
         $worker = $this->makeEmployee(['division_id' => $this->momoyo->id]);
         ShiftSchedule::create(['employee_id' => $worker->id, 'date' => '2026-11-02', 'shift_id' => $this->split->id, 'company_location_id' => $this->momoyoOutlet->id]);
         $this->actingAs($this->admin);
@@ -489,6 +512,8 @@ class SplitShiftSchedulingTest extends TestCase
 
     public function test_copy_endpoint_is_for_managers_only(): void
     {
+        // D4: a copy never plans a day already gone, so the target week lies ahead.
+        $this->travelTo(Carbon::parse('2026-11-05 08:00:00'));
         $worker = $this->makeEmployee();
         ShiftSchedule::create(['employee_id' => $worker->id, 'date' => '2026-11-02', 'shift_id' => $this->luucaNoon->id]);
 

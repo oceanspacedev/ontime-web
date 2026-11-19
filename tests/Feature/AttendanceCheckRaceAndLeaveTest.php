@@ -24,6 +24,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
@@ -315,10 +316,10 @@ class AttendanceCheckRaceAndLeaveTest extends TestCase
         $this->assertNull($row->check_in);
     }
 
-    // ── RSK-07, revised: lateness of a pending check-in follows the roster of its date, also when the
-    // roster is edited while it waits (AttendanceLatenessService recalculates on every roster change) ─
+    // ── RSK-07, revised for D4: lateness of a pending check-in is the one of the schedule it was checked
+    // in to; a roster edit of that schedule while it waits is refused ─
 
-    public function test_approved_check_in_follows_the_roster_edited_while_it_waits(): void
+    public function test_approved_check_in_keeps_the_schedule_it_was_checked_in_to(): void
     {
         $this->company->policy()->update(['require_gps' => true, 'geofence_radius_meters' => 50]);
         CompanyLocation::create([
@@ -347,10 +348,16 @@ class AttendanceCheckRaceAndLeaveTest extends TestCase
 
         $this->assertSame(30, $attendance->check_in_late_minutes);
 
-        // The roster is edited while the check-in waits: today now starts at 10:00, so 08:30 is not late.
-        $schedule->update(['shift_id' => $late->id]);
-        $this->assertSame(0, $attendance->fresh()->check_in_late_minutes);
-        $this->assertSame($late->id, $attendance->fresh()->shift_id);
+        // The roster edit while the check-in waits (today starting at 10:00) is refused: the schedule is locked.
+        try {
+            $schedule->update(['shift_id' => $late->id]);
+            $this->fail('The schedule of a checked-in row must not change.');
+        } catch (ValidationException $exception) {
+            $this->assertSame([ShiftSchedule::LOCKED_MESSAGE], $exception->errors()['date']);
+        }
+
+        $this->assertSame(30, $attendance->fresh()->check_in_late_minutes);
+        $this->assertSame($morning->id, $attendance->fresh()->shift_id);
 
         $approver = User::factory()->create();
         $approver->forceFill(['tenant_id' => $this->company->tenant_id])->save();
@@ -359,8 +366,8 @@ class AttendanceCheckRaceAndLeaveTest extends TestCase
         app(ApprovalFlowService::class)->approveStep($attendance, $approver);
 
         $attendance->refresh();
-        $this->assertSame(AttendanceStatus::OnTime, $attendance->status);
-        $this->assertSame(0, $attendance->late_minutes);
+        $this->assertSame(AttendanceStatus::Late, $attendance->status);
+        $this->assertSame(30, $attendance->late_minutes);
     }
 
     public function test_editing_the_check_in_drops_the_lateness_judged_at_check_in(): void

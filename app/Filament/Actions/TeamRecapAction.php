@@ -5,7 +5,6 @@ namespace App\Filament\Actions;
 use App\Services\TeamRecapService;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
-use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
@@ -27,7 +26,7 @@ class TeamRecapAction extends Action
             ->color('gray')
             ->visible(fn (): bool => (bool) auth()->user()?->canManageWorkers())
             ->modalHeading('Rekap Bulanan Tim')
-            ->modalDescription('Per orang per outlet: hari masuk, tidak hadir, libur, terlambat, dan jam kerja.')
+            ->modalDescription('Per orang per outlet: hari terjadwal, masuk, tidak hadir, libur, cuti, terlambat, lupa absen pulang, sesi terlewat, serta jam terjadwal, jam normal, jam kerja, dan lembur (otomatis dan pengajuan).')
             ->modalSubmitActionLabel('Unduh Excel')
             ->modalWidth('md')
             ->schema([
@@ -39,7 +38,7 @@ class TeamRecapAction extends Action
             ])
             ->action(function (array $data): BinaryFileResponse {
                 $service = app(TeamRecapService::class);
-                $month = Carbon::createFromFormat('Y-m', $data['month'])->startOfMonth();
+                $month = TeamRecapService::parseMonth($data['month']);
 
                 return response()->download($service->export(auth()->user(), $month), $service->fileName($month))->deleteFileAfterSend();
             });

@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Services\TeamRecapService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
@@ -19,7 +18,7 @@ class TeamRecapDownloadController extends Controller
         // The link outlives nothing the API would refuse: an inactive account or a switched-off Klien gets no file.
         abort_unless($user->canSignIn() && $user->canManageWorkers(), 403);
 
-        $month = Carbon::createFromFormat('Y-m', (string) $request->query('month'))->startOfMonth();
+        $month = TeamRecapService::parseMonth((string) $request->query('month'));
 
         return response()->download($recaps->export($user, $month), $recaps->fileName($month))->deleteFileAfterSend();
     }

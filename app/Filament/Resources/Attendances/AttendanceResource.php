@@ -4,11 +4,16 @@ namespace App\Filament\Resources\Attendances;
 
 use App\Enums\AttendanceStatus;
 use App\Filament\Concerns\ScopesToManagedCompanies;
+use App\Filament\Resources\AttendanceCorrections\AttendanceCorrectionResource;
 use App\Models\Attendance;
+use App\Models\AttendanceCorrection;
+use App\Services\ApprovalFlowService;
+use App\Services\AttendanceFigures;
 use App\Support\StorageUrl;
 use BackedEnum;
 use Carbon\Carbon;
 use Closure;
+use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -20,6 +25,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
@@ -33,6 +39,9 @@ use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class AttendanceResource extends Resource
@@ -149,7 +158,135 @@ class AttendanceResource extends Resource
                             ->nullable()
                             ->columnSpanFull(),
                     ]),
+
+                // The schedule the row was checked in to, read-only: it changes only through an approved
+                // schedule correction ("Koreksi jadwal"), never by editing the attendance.
+                Section::make('Jadwal Saat Absen')
+                    ->description('Shift dan outlet yang berlaku saat absen. Untuk mengubahnya gunakan Koreksi jadwal.')
+                    ->visible(fn (?Attendance $record): bool => $record !== null)
+                    ->schema([
+                        Grid::make(3)->schema([
+                            TextEntry::make('schedule_shift_snapshot')
+                                ->label('Shift')
+                                ->state(fn (?Attendance $record): string => $record ? (AttendanceFigures::forAttendance($record)['shift']['name'] ?? '—') : '—'),
+                            TextEntry::make('schedule_outlet_snapshot')
+                                ->label('Outlet')
+                                ->state(fn (?Attendance $record): string => $record ? (AttendanceFigures::forAttendance($record)['outlet']['name'] ?? '—') : '—'),
+                            TextEntry::make('schedule_hours_snapshot')
+                                ->label('Jam Jadwal')
+                                ->state(function (?Attendance $record): string {
+                                    $figures = $record ? AttendanceFigures::forAttendance($record) : null;
+
+                                    return $figures && $figures['scheduled_start'] !== null ? "{$figures['scheduled_start']} - {$figures['scheduled_end']}" : '—';
+                                }),
+                        ]),
+                    ]),
             ]);
+    }
+
+    /**
+     * Delete an attendance on the panel and record the deletion as an admin correction holding the values
+     * the row had, in one transaction.
+     */
+    public static function deleteWithAudit(Attendance $record): bool
+    {
+        return DB::transaction(function () use ($record): bool {
+            $before = $record->auditValues();
+            AttendanceCorrection::recordAdminChange($record, $before, auth()->user(), 'Dihapus admin di halaman Data Absensi.', deleted: true);
+
+            return (bool) $record->delete();
+        });
+    }
+
+    /**
+     * "Koreksi jadwal": file a correction of the shift and outlet that really applied to a checked-in row.
+     * It goes through the correction approval flow like a worker's request; once approved it changes the
+     * roster row (the only way to change a locked one), keeps the new schedule on the row and judges it again.
+     */
+    public static function scheduleCorrectionAction(): Action
+    {
+        return Action::make('koreksiJadwal')
+            ->label('Koreksi jadwal')
+            ->icon(Heroicon::OutlinedCalendarDays)
+            ->color('warning')
+            ->visible(fn (Attendance $record): bool => $record->check_in !== null && $record->status !== AttendanceStatus::Rejected)
+            ->modalHeading('Koreksi jadwal absensi')
+            ->modalDescription('Pilih shift dan outlet yang sebenarnya berlaku. Koreksi ini menunggu persetujuan seperti pengajuan koreksi absensi.')
+            ->schema(fn (Attendance $record): array => [
+                Select::make('corrected_shift_id')
+                    ->label('Shift yang berlaku')
+                    ->options(fn (): array => AttendanceCorrectionResource::shiftOptions(static::draftCorrection($record)))
+                    ->default($record->shift_id)
+                    ->searchable(),
+                Select::make('corrected_company_location_id')
+                    ->label('Outlet yang berlaku')
+                    ->options(fn (): array => AttendanceCorrectionResource::outletOptions(static::draftCorrection($record)))
+                    ->default($record->company_location_id)
+                    ->searchable(),
+                Textarea::make('reason')
+                    ->label('Alasan')
+                    ->required(),
+            ])
+            ->action(function (Attendance $record, array $data): void {
+                try {
+                    static::fileScheduleCorrection($record, $data);
+                } catch (ValidationException $exception) {
+                    Notification::make()->danger()->title('Koreksi jadwal tidak bisa diajukan')->body(collect($exception->errors())->flatten()->first())->send();
+
+                    return;
+                }
+
+                Notification::make()->success()->title('Koreksi jadwal diajukan')->body('Koreksi menunggu persetujuan.')->send();
+            });
+    }
+
+    /**
+     * Create the pending schedule correction of the row with its approval steps.
+     *
+     * @param  array{corrected_shift_id?: int|string|null, corrected_company_location_id?: int|string|null, reason?: string|null}  $data
+     *
+     * @throws ValidationException
+     */
+    public static function fileScheduleCorrection(Attendance $record, array $data): AttendanceCorrection
+    {
+        $correction = static::draftCorrection($record);
+        $correction->fill([
+            'corrected_shift_id' => filled($data['corrected_shift_id'] ?? null) ? (int) $data['corrected_shift_id'] : null,
+            'corrected_company_location_id' => filled($data['corrected_company_location_id'] ?? null) ? (int) $data['corrected_company_location_id'] : null,
+            'reason' => (string) ($data['reason'] ?? ''),
+        ]);
+
+        if (! $correction->isScheduleCorrection()) {
+            throw ValidationException::withMessages(['corrected_shift_id' => 'Pilih shift atau outlet yang berlaku.']);
+        }
+
+        $errors = $correction->resolveTarget(attendanceId: (int) $record->getKey()) ?: $correction->submissionErrors();
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+
+        return DB::transaction(function () use ($correction): AttendanceCorrection {
+            $correction->save();
+            app(ApprovalFlowService::class)->generateSteps($correction, 'correction');
+
+            return $correction;
+        });
+    }
+
+    /**
+     * An unsaved correction of the row's worker and date, filed by an admin.
+     */
+    private static function draftCorrection(Attendance $record): AttendanceCorrection
+    {
+        return new AttendanceCorrection([
+            'employee_id' => $record->employee_id,
+            'intern_id' => $record->intern_id,
+            'freelancer_id' => $record->freelancer_id,
+            'date' => $record->date?->toDateString(),
+            'status' => 'pending',
+            'origin' => AttendanceCorrection::ORIGIN_ADMIN,
+        ]);
     }
 
     public static function table(Table $table): Table
@@ -219,6 +356,34 @@ class AttendanceResource extends Resource
                     ->label('Check Out')
                     ->time('H:i')
                     ->placeholder('—'),
+
+                // The schedule the row was checked in to, as kept on the row (not today's roster).
+                TextColumn::make('schedule_shift')
+                    ->label('Shift')
+                    ->state(fn (Attendance $record): ?string => AttendanceFigures::forAttendance($record)['shift']['name'] ?? null)
+                    ->placeholder('—')
+                    ->toggleable(),
+
+                TextColumn::make('schedule_outlet')
+                    ->label('Outlet')
+                    ->state(fn (Attendance $record): ?string => AttendanceFigures::forAttendance($record)['outlet']['name'] ?? null)
+                    ->placeholder('—')
+                    ->toggleable(),
+
+                TextColumn::make('schedule_hours')
+                    ->label('Jadwal')
+                    ->state(function (Attendance $record): ?string {
+                        $figures = AttendanceFigures::forAttendance($record);
+
+                        return $figures['scheduled_start'] !== null ? "{$figures['scheduled_start']} - {$figures['scheduled_end']}" : null;
+                    })
+                    ->placeholder('—')
+                    ->toggleable(),
+
+                TextColumn::make('schedule_session')
+                    ->label('Sesi')
+                    ->state(fn (Attendance $record): string => 'Jadwal '.((int) ($record->schedule_sequence ?: 1)).((int) $record->segment === 2 ? ' · bagian 2' : ''))
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 BadgeColumn::make('status')
                     ->label('Status')
@@ -347,11 +512,12 @@ class AttendanceResource extends Resource
             ->actions([
                 ViewAction::make(),
                 EditAction::make()->label('Override'),
-                DeleteAction::make(),
+                static::scheduleCorrectionAction(),
+                DeleteAction::make()->using(fn (Attendance $record): bool => static::deleteWithAudit($record)),
             ])
             ->bulkActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    DeleteBulkAction::make()->using(fn (Collection $records) => $records->each(fn (Attendance $record): bool => static::deleteWithAudit($record))),
                 ]),
             ])
             ->modifyQueryUsing(fn (Builder $query) => $query->with([

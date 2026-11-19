@@ -124,7 +124,7 @@ class ROLCProbeTest extends TestCase
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-02', 'segment' => 2, 'check_in' => '2026-11-02 17:00:00', 'check_out' => '2026-11-02 21:00:00', 'status' => 'on_time']);
 
         $response = $this->report('2026-11-02', '2026-11-04');
-        $this->assertSame(['total_present' => 1, 'total_late' => 0, 'total_leave' => 0, 'total_absent' => 1], $response['summary']);
+        $this->assertSame(['total_present' => 1, 'total_late' => 0, 'total_leave' => 0, 'total_absent' => 1], array_intersect_key($response['summary'], array_flip(['total_present', 'total_late', 'total_leave', 'total_absent'])));
         $this->assertSame(2, $response['pagination']['total'], 'The list is per row (segment), the summary per worker-day.');
 
         [$row] = app(TeamRecapService::class)->recap($this->adminA, Carbon::parse('2026-11-01'));
@@ -172,6 +172,7 @@ class ROLCProbeTest extends TestCase
     public function test_rol_040_scheduled_sunday_without_attendance_is_absent(): void
     {
         $worker = $this->freelancer('Minggu Kerja', $this->sales);
+        $this->rosteredBefore($worker);
         $this->schedule($worker, '2026-11-08');
 
         $this->assertSame(1, $this->summary('2026-11-08', '2026-11-08')['total_absent']);
@@ -188,6 +189,7 @@ class ROLCProbeTest extends TestCase
     public function test_rol_041_approved_leave_on_a_scheduled_day_is_not_absent_in_team_recap(): void
     {
         $worker = $this->freelancer('Cuti Terjadwal', $this->sales);
+        $this->rosteredBefore($worker);
         $this->schedule($worker, '2026-11-04');
         $this->leave($worker, '2026-11-04', '2026-11-04');
 
@@ -492,6 +494,14 @@ class ROLCProbeTest extends TestCase
             'join_date' => '2024-01-08',
             'status' => 'active',
         ]);
+    }
+
+    /**
+     * On the roster since October (a day off on Monday 26 October), so the November weekdays read the roster only.
+     */
+    private function rosteredBefore(Freelancer $worker): void
+    {
+        ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-10-26', 'is_day_off' => true]);
     }
 
     private function schedule(Freelancer $worker, string $date): void

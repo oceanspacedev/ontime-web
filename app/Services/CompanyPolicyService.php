@@ -32,7 +32,7 @@ final class CompanyPolicyService
     /**
      * The policy as the form shows it, with the defaults of a new company where nothing is stored.
      *
-     * @return array{late_tolerance_minutes: int, require_gps: bool, geofence_radius_meters: int, mock_location_action: string, selfie_mode: string, face_match_threshold: int, face_fail_action: string, annual_leave_quota: int, default_approval_stages: int}
+     * @return array{late_tolerance_minutes: int, require_gps: bool, geofence_radius_meters: int, mock_location_action: string, selfie_mode: string, face_match_threshold: int, face_fail_action: string, annual_leave_quota: int, default_approval_stages: int, overtime_netting_from: string|null, uses_shift_roster: bool}
      */
     public static function formState(Company $company): array
     {
@@ -48,6 +48,8 @@ final class CompanyPolicyService
             'face_fail_action' => $policy?->face_fail_action ?? 'reject',
             'annual_leave_quota' => (int) ($policy?->annual_leave_quota ?? 12),
             'default_approval_stages' => (int) ($policy?->default_approval_stages ?? 1),
+            'overtime_netting_from' => $policy?->overtime_netting_from?->toDateString(),
+            'uses_shift_roster' => (bool) ($policy?->uses_shift_roster ?? false),
         ];
     }
 
@@ -73,6 +75,10 @@ final class CompanyPolicyService
             'default_approval_stages' => ['required', 'integer', 'min:1', 'max:'.self::MAX_APPROVAL_STAGES],
             'work_start_time' => ['sometimes', 'required', 'date_format:H:i'],
             'work_end_time' => ['sometimes', 'required', 'date_format:H:i'],
+            // Left out by older apps: the stored date then stays as it is.
+            'overtime_netting_from' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            // Left out by older apps: the company keeps the mode it is in.
+            'uses_shift_roster' => ['sometimes', 'boolean'],
         ];
     }
 
@@ -107,6 +113,8 @@ final class CompanyPolicyService
             'default_approval_stages.max' => 'Tahap approval maksimal '.self::MAX_APPROVAL_STAGES.'.',
             'work_start_time.date_format' => 'Jam masuk harus berformat JJ:MM.',
             'work_end_time.date_format' => 'Jam pulang harus berformat JJ:MM.',
+            'overtime_netting_from.date_format' => 'Tanggal mulai pemotongan lembur harus berformat TTTT-BB-HH.',
+            'uses_shift_roster.boolean' => 'Pilihan jadwal shift harus ya atau tidak.',
         ];
     }
 

@@ -438,12 +438,20 @@ class KoordinatorDailyJourneyTest extends TestCase
         $recap = $this->getJson('/api/v1/team/recap?month=2026-11')
             ->assertOk()
             ->assertJsonPath('month', '2026-11')
-            ->assertJsonCount(1, 'data')
+            ->assertJsonCount(3, 'data')
             ->json('data.0');
 
         $this->assertSame('Bayu Kopi', $recap['worker']['name']);
         $this->assertSame('Outlet Kopi Ciledug', $recap['outlet']);
-        $this->assertSame([2, 1, 1, 10, 1], [$recap['scheduled_days'], $recap['present_days'], $recap['late_days'], $recap['late_minutes'], $recap['absent_days']]);
+        // Since the attendance ledger the recap counts the no-shows laporan absensi always counted. Bayu: the
+        // rostered 17th plus the ten weekdays (2 - 13 Nov) before the week of his first roster. The two people
+        // of these brands who never had a roster (Citra and the coordinator) are now listed too, with the
+        // twelve weekdays up to yesterday; the other brand and Klien B stay out.
+        $this->assertSame([2, 1, 1, 10, 11], [$recap['scheduled_days'], $recap['present_days'], $recap['late_days'], $recap['late_minutes'], $recap['absent_days']]);
+        $this->getJson('/api/v1/team/recap?month=2026-11')
+            ->assertJsonPath('data.*.worker.name', ['Bayu Kopi', 'Citra Ayam', 'Koordinator Kopi & Ayam'])
+            ->assertJsonPath('data.*.absent_days', [11, 12, 12])
+            ->assertJsonPath('data.*.scheduled_days', [2, 0, 0]);
 
         $this->getJson('/api/v1/team/recap?month=11-2026')->assertUnprocessable()->assertJsonValidationErrors('month');
 

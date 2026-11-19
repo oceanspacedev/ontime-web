@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Services\AttendanceFigures;
 use App\Services\OffScheduleCheckInService;
 use App\Support\StorageUrl;
 use Illuminate\Http\Request;
@@ -9,6 +10,18 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class AttendanceResource extends JsonResource
 {
+    /**
+     * A list reads what its rows share (the other part of a split shift, later check-ins) once, not per row.
+     */
+    public static function collection($resource)
+    {
+        if (is_iterable($resource)) {
+            AttendanceFigures::preload($resource);
+        }
+
+        return parent::collection($resource);
+    }
+
     public function toArray(Request $request): array
     {
         $profile = $this->employee ?? $this->intern ?? $this->freelancer;
@@ -58,6 +71,11 @@ class AttendanceResource extends JsonResource
                 'name' => $profile->full_name ?? 'Pengguna',
                 'department' => $profile->division?->name ?? $profile->department ?? 'Staf',
             ] : null,
+            // The schedule the row was checked in to and its figures, the same numbers the reports add up:
+            // schedule_id, schedule_sequence, shift, outlet, scheduled_start, scheduled_end, worked_minutes,
+            // normal_minutes, overtime_minutes (automatic only), reported_late_minutes, is_missing_check_out,
+            // pending_punch, schedule_label.
+            ...AttendanceFigures::forAttendance($this->resource),
         ];
     }
 

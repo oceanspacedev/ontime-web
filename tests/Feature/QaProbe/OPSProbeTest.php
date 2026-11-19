@@ -350,6 +350,8 @@ class OPSProbeTest extends TestCase
      */
     public function test_ops_006_an_unreadable_date_column_is_reported_not_silently_skipped(): void
     {
+        // D4: an import never changes a day already gone, so the imported week lies ahead.
+        $this->travelTo(Carbon::parse('2026-11-01 07:30:00'));
         $admin = $this->staff('Admin', $this->tenantA, DataScope::All);
         $shift = $this->shift($this->companyA, $this->divisionA, ['code' => 'P']);
         [, $crew] = $this->freelancer($this->companyA, $this->divisionA, 'Crew QA', ['freelancer_number' => 'FL-01']);
@@ -370,6 +372,8 @@ class OPSProbeTest extends TestCase
      */
     public function test_ops_006_mixed_rows_import_partially_with_a_reason_per_row_and_a_retry_does_not_duplicate(): void
     {
+        // D4: an import never changes a day already gone, so the imported week lies ahead.
+        $this->travelTo(Carbon::parse('2026-11-01 07:30:00'));
         $admin = $this->staff('Admin', $this->tenantA, DataScope::All);
         $shiftA = $this->shift($this->companyA, $this->divisionA, ['code' => 'P']);
         $this->shift($this->companyB, $this->divisionB, ['code' => 'QB', 'name' => 'Shift QB']);

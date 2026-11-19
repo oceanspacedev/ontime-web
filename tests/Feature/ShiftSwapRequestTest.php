@@ -18,6 +18,7 @@ use App\Models\JobTitle;
 use App\Models\LeaveRequest;
 use App\Models\Shift;
 use App\Models\ShiftSchedule;
+use App\Models\ShiftScheduleChange;
 use App\Models\ShiftSwapRequest;
 use App\Models\Tenant;
 use App\Models\User;
@@ -969,6 +970,45 @@ class ShiftSwapRequestTest extends TestCase
         $this->assertSame('', (string) $this->scheduleOf($this->andi, self::TUESDAY)->notes);
     }
 
+    public function test_applied_swap_logs_both_roster_writes_with_the_source_swap(): void
+    {
+        $this->sameDaySchedules();
+
+        $this->approvedSwap($this->andi, $this->budi, self::TUESDAY, self::TUESDAY);
+
+        $changes = ShiftScheduleChange::query()->where('action', ShiftScheduleChange::ACTION_UPDATED)->orderBy('id')->get();
+        $this->assertSame(['swap', 'swap'], $changes->pluck('source')->all());
+        $this->assertSame([$this->morning->id, $this->afternoon->id], $changes->map(fn (ShiftScheduleChange $change): int => $change->before['shift_id'])->all());
+        $this->assertSame([$this->afternoon->id, $this->morning->id], $changes->map(fn (ShiftScheduleChange $change): int => $change->after['shift_id'])->all());
+        $this->assertSame([$this->approver->id, $this->approver->id], $changes->pluck('changed_by')->all());
+    }
+
+    public function test_a_schedule_locked_by_a_check_in_while_the_swap_is_written_fails_it_as_stale(): void
+    {
+        $this->sameDaySchedules();
+        $swapId = $this->fileSwap($this->andi, $this->budi, self::TUESDAY, self::TUESDAY)->json('data.id');
+        $this->accept($this->budi, $swapId);
+
+        // Budi checks in on his Tuesday schedule at the moment the swap is being written.
+        $budiSchedule = $this->scheduleOf($this->budi, self::TUESDAY);
+        ShiftSchedule::saving(function (ShiftSchedule $schedule) use ($budiSchedule): void {
+            if ($schedule->is($budiSchedule) && ! Attendance::query()->where('shift_schedule_id', $budiSchedule->id)->exists()) {
+                $attendance = new Attendance(['date' => self::TUESDAY, 'check_in' => self::TUESDAY.' 06:55:00', 'status' => 'on_time']);
+                $attendance->forceFill(['employee_id' => $budiSchedule->employee_id, 'segment' => 1, 'shift_schedule_id' => $budiSchedule->id])->saveQuietly();
+            }
+        });
+
+        Sanctum::actingAs($this->approver);
+        $this->putJson("/api/v1/approvals/shift_swap/{$swapId}/process", ['action' => 'approved'])
+            ->assertUnprocessable()
+            ->assertJsonPath('message', ShiftSwapService::STALE_MESSAGE);
+
+        $this->assertSame(ShiftSwapRequest::STATUS_FAILED, ShiftSwapRequest::findOrFail($swapId)->status);
+        $this->assertWorks($this->andi, self::TUESDAY, $this->morning);
+        $this->assertWorks($this->budi, self::TUESDAY, $this->afternoon);
+        $this->assertSame(0, ShiftScheduleChange::query()->where('source', 'swap')->count());
+    }
+
     public function test_list_reads_snapshot_shifts_once_for_the_whole_page(): void
     {
         foreach (range(1, 5) as $index) {
@@ -1059,6 +1099,60 @@ class ShiftSwapRequestTest extends TestCase
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
+
+    public function test_approval_succeeds_when_the_stored_snapshot_comes_back_reordered_with_string_ids(): void
+    {
+        $andiSchedule = $this->schedule($this->andi, self::TUESDAY, $this->morning, section: 'Kasir');
+        $budiSchedule = $this->schedule($this->budi, self::TUESDAY, $this->afternoon, section: 'Dapur');
+
+        $swapId = $this->fileSwap($this->andi, $this->budi, self::TUESDAY, self::TUESDAY)->assertCreated()->json('data.id');
+        $this->accept($this->budi, $swapId);
+
+        // The same cells as MySQL hands a JSON column back: keys sorted by length then bytes, and (as some
+        // drivers do) ids as strings and the flag as 0/1.
+        $stored = ShiftSwapRequest::findOrFail($swapId)->schedule_snapshot;
+        $reordered = [];
+
+        foreach (array_reverse($stored, preserve_keys: true) as $key => $cell) {
+            $reordered[$key] = [
+                'off' => (int) $cell['off'],
+                'section' => $cell['section'],
+                'shift_id' => $cell['shift_id'] === null ? null : (string) $cell['shift_id'],
+                'schedule_id' => $cell['schedule_id'] === null ? null : (string) $cell['schedule_id'],
+                'company_location_id' => $cell['company_location_id'] === null ? null : (string) $cell['company_location_id'],
+            ];
+        }
+
+        $this->assertNotSame($stored, $reordered);
+        DB::table('shift_swap_requests')->where('id', $swapId)->update(['schedule_snapshot' => json_encode($reordered)]);
+
+        Sanctum::actingAs($this->approver);
+        $this->putJson("/api/v1/approvals/shift_swap/{$swapId}/process", ['action' => 'approved'])->assertOk();
+
+        $swap = ShiftSwapRequest::findOrFail($swapId);
+        $this->assertSame('approved', $swap->status);
+        $this->assertNotNull($swap->applied_at);
+        $this->assertSame([(int) $this->afternoon->id, 'Dapur'], [(int) $andiSchedule->fresh()->shift_id, $andiSchedule->fresh()->section]);
+        $this->assertSame([(int) $this->morning->id, 'Kasir'], [(int) $budiSchedule->fresh()->shift_id, $budiSchedule->fresh()->section]);
+    }
+
+    public function test_approval_still_fails_as_stale_when_a_stored_cell_really_differs(): void
+    {
+        $this->schedule($this->andi, self::TUESDAY, $this->morning, section: 'Kasir');
+        $budiSchedule = $this->schedule($this->budi, self::TUESDAY, $this->afternoon, section: 'Dapur');
+
+        $swapId = $this->fileSwap($this->andi, $this->budi, self::TUESDAY, self::TUESDAY)->assertCreated()->json('data.id');
+        $this->accept($this->budi, $swapId);
+
+        $budiSchedule->update(['section' => 'Bar']);
+
+        Sanctum::actingAs($this->approver);
+        $this->putJson("/api/v1/approvals/shift_swap/{$swapId}/process", ['action' => 'approved'])->assertUnprocessable();
+
+        $this->assertSame(ShiftSwapRequest::STATUS_FAILED, ShiftSwapRequest::findOrFail($swapId)->status);
+        $this->assertSame('Kasir', $this->scheduleOf($this->andi, self::TUESDAY)?->section, 'Nothing was swapped.');
+        $this->assertSame('Bar', $budiSchedule->fresh()->section);
+    }
 
     private function leave(User $worker, string $date, string $status): LeaveRequest
     {

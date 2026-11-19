@@ -39,6 +39,7 @@ class CreateOvertimeRequest extends CreateRecord
 
         // Locked inside the page's transaction, so a double submit cannot store two overlapping requests.
         $service->lockWorker($workerProfile);
+        $service->assertNotOnLeave($workerProfile, $data['date'], 'data.date');
         $service->assertNoOverlap($workerProfile, $data['date'], $data['start_time'], $data['end_time'], timeKey: 'data.start_time');
 
         unset($data['actual_duration_minutes']);

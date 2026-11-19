@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\Shift;
+use App\Models\ShiftSchedule;
 use App\Models\User;
 use App\Services\SchedulingOptions;
 use App\Services\ShiftAssignmentService;
@@ -29,7 +30,10 @@ use UnitEnum;
 
 /**
  * The week as the outlets' spreadsheets show it: a line per person, a column per day.
- * Same data as the weekly tab of the mobile app; a cell opens the day's shift, outlet and section.
+ * Same data as the weekly tab of the mobile app. A day shows one chip per schedule (up to three: a second
+ * outlet, a second shift); a chip opens that schedule's shift, outlet and section, "+" adds another one,
+ * and a schedule that already has attendance is locked. Every change goes through
+ * {@see ShiftAssignmentService::assignDay()}.
  */
 class JadwalMingguan extends Page
 {
@@ -82,6 +86,26 @@ class JadwalMingguan extends Page
     }
 
     /**
+     * Whether the schedule already has attendance (locked): only an attendance correction may change it.
+     */
+    public function isLockedSchedule(int|string|null $scheduleId): bool
+    {
+        return filled($scheduleId) && ShiftSchedule::hasCheckedInAttendance((int) $scheduleId);
+    }
+
+    /**
+     * Whether another schedule may be added to the day: it is not a day off and has fewer than the maximum.
+     *
+     * @param  list<array<string, mixed>>  $schedules  The day's cells ({@see WeeklyScheduleService::week()} day_schedules).
+     */
+    public function canAddSchedule(array $schedules): bool
+    {
+        return $schedules !== []
+            && count($schedules) < ShiftAssignmentService::MAX_SCHEDULES_PER_DAY
+            && ! collect($schedules)->contains(fn (array $cell): bool => (bool) $cell['is_day_off']);
+    }
+
+    /**
      * Text of one cell: the shift code ("SP"), "OFF", or a dash.
      *
      * @param  array<string, mixed>|null  $cell
@@ -124,11 +148,13 @@ class JadwalMingguan extends Page
     public function editCellAction(): Action
     {
         return Action::make('editCell')
-            ->modalHeading(fn (array $arguments): string => ($arguments['name'] ?? 'Jadwal').' · '.Carbon::parse($arguments['date'] ?? today())->translatedFormat('l, d F Y'))
+            ->modalHeading(fn (array $arguments): string => (($arguments['add'] ?? false) ? 'Tambah jadwal · ' : '').($arguments['name'] ?? 'Jadwal').' · '.Carbon::parse($arguments['date'] ?? today())->translatedFormat('l, d F Y'))
+            ->disabled(fn (array $arguments): bool => $this->isLockedSchedule($arguments['schedule_id'] ?? null))
+            ->tooltip(fn (array $arguments): ?string => $this->isLockedSchedule($arguments['schedule_id'] ?? null) ? ShiftSchedule::LOCKED_MESSAGE : null)
             ->modalWidth(Width::Medium)
             ->modalSubmitActionLabel('Simpan')
             ->fillForm(fn (array $arguments): array => [
-                'mode' => $arguments['mode'] ?? ShiftAssignmentService::MODE_SHIFT,
+                'mode' => ($arguments['add'] ?? false) ? ShiftAssignmentService::MODE_SHIFT : ($arguments['mode'] ?? ShiftAssignmentService::MODE_SHIFT),
                 'shift_id' => $arguments['shift_id'] ?? null,
                 'company_location_id' => $arguments['location_id'] ?? null,
                 'section' => $arguments['section'] ?? null,
@@ -136,7 +162,9 @@ class JadwalMingguan extends Page
             ->schema(fn (array $arguments): array => [
                 ToggleButtons::make('mode')
                     ->hiddenLabel()
-                    ->options([ShiftAssignmentService::MODE_SHIFT => 'Masuk', ShiftAssignmentService::MODE_DAY_OFF => 'Libur', ShiftAssignmentService::MODE_CLEAR => 'Kosongkan'])
+                    ->options(($arguments['add'] ?? false)
+                        ? [ShiftAssignmentService::MODE_SHIFT => 'Masuk']
+                        : [ShiftAssignmentService::MODE_SHIFT => 'Masuk', ShiftAssignmentService::MODE_DAY_OFF => 'Libur', ShiftAssignmentService::MODE_CLEAR => 'Kosongkan'])
                     ->colors([ShiftAssignmentService::MODE_SHIFT => 'primary', ShiftAssignmentService::MODE_DAY_OFF => 'gray', ShiftAssignmentService::MODE_CLEAR => 'danger'])
                     ->inline()
                     ->grouped()
@@ -186,6 +214,13 @@ class JadwalMingguan extends Page
                     ->datalist(fn (): array => app(SchedulingOptions::class)->sections(auth()->user(), $arguments['company_id'] ?? null))
                     ->maxLength(50)
                     ->visible(fn (Get $get): bool => $get('mode') === ShiftAssignmentService::MODE_SHIFT),
+
+                TextInput::make('reason')
+                    ->label('Alasan perubahan')
+                    ->helperText('Wajib untuk tanggal yang sudah lewat; tercatat di riwayat jadwal.')
+                    ->maxLength(255)
+                    ->required()
+                    ->visible(Carbon::parse($arguments['date'] ?? today())->lt(today())),
             ])
             ->action(function (array $data, array $arguments): void {
                 $user = auth()->user();
@@ -207,6 +242,11 @@ class JadwalMingguan extends Page
                         isset($data['shift_id']) ? (int) $data['shift_id'] : null,
                         isset($data['company_location_id']) ? (int) $data['company_location_id'] : null,
                         $data['section'] ?? null,
+                        reason: $data['reason'] ?? null,
+                        source: 'panel',
+                        requirePastReason: true,
+                        scheduleId: filled($arguments['schedule_id'] ?? null) ? (int) $arguments['schedule_id'] : null,
+                        add: (bool) ($arguments['add'] ?? false),
                     );
                 } catch (AuthorizationException|ValidationException $exception) {
                     Notification::make()->title('Jadwal tidak disimpan')->body($exception instanceof ValidationException ? collect($exception->errors())->flatten()->implode(' ') : $exception->getMessage())->danger()->send();
@@ -214,7 +254,11 @@ class JadwalMingguan extends Page
                     return;
                 }
 
-                Notification::make()->title($data['mode'] === ShiftAssignmentService::MODE_CLEAR ? 'Jadwal dihapus' : 'Jadwal disimpan')->success()->send();
+                Notification::make()->title(match (true) {
+                    $data['mode'] === ShiftAssignmentService::MODE_CLEAR => 'Jadwal dihapus',
+                    (bool) ($arguments['add'] ?? false) => 'Jadwal tambahan disimpan',
+                    default => 'Jadwal disimpan',
+                })->success()->send();
             });
     }
 }

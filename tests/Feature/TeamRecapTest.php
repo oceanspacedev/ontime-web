@@ -82,17 +82,18 @@ class TeamRecapTest extends TestCase
     {
         $rows = app(TeamRecapService::class)->recap($this->coordinator, Carbon::parse('2026-11-01'));
 
-        $this->assertCount(3, $rows);
+        $this->assertCount(2, $rows);
 
-        [$jchicken, $luuca, $noOutlet] = $rows;
+        [$jchicken, $luuca] = $rows;
         $this->assertSame(['JChicken Ciledug', 'Bayu Adillah'], [$jchicken['outlet'], $jchicken['worker']['name']]);
         $this->assertSame(
-            ['scheduled_days' => 3, 'present_days' => 1, 'late_days' => 1, 'late_minutes' => 20, 'absent_days' => 1, 'off_days' => 0, 'scheduled_hours' => 27.0, 'worked_hours' => 8.75],
+            ['scheduled_days' => 3, 'present_days' => 1, 'late_days' => 1, 'late_minutes' => 20, 'absent_days' => 1, 'off_days' => 1, 'scheduled_hours' => 27.0, 'worked_hours' => 8.75],
             array_intersect_key($jchicken, array_flip(['scheduled_days', 'present_days', 'late_days', 'late_minutes', 'absent_days', 'off_days', 'scheduled_hours', 'worked_hours'])),
-            'The 20th is still to come, so it is scheduled but not absent.',
+            'The 20th is still to come, so it is scheduled but not absent. The day off is on the home outlet: where Bayu is rostered most this month.',
         );
-        $this->assertSame(['Luuca Ciledug', 1, 1, 4.5, 4.5], [$luuca['outlet'], $luuca['scheduled_days'], $luuca['present_days'], $luuca['scheduled_hours'], $luuca['worked_hours']]);
-        $this->assertSame([null, 1, 0], [$noOutlet['outlet'], $noOutlet['off_days'], $noOutlet['scheduled_days']], 'A day off has no outlet.');
+        $this->assertSame(2, $jchicken['scheduled_days_to_date'], 'Scheduled up to yesterday, to read next to present and absent.');
+        $this->assertSame(['Luuca Ciledug', 1, 1, 4.5, 4.5, 0], [$luuca['outlet'], $luuca['scheduled_days'], $luuca['present_days'], $luuca['scheduled_hours'], $luuca['worked_hours'], $luuca['off_days']]);
+        $this->assertNotContains(null, array_column($rows, 'outlet'), 'A day off no longer gets a line of its own without an outlet.');
         $this->assertNotContains('Orang Momoyo', array_column(array_column($rows, 'worker'), 'name'));
     }
 
@@ -102,9 +103,9 @@ class TeamRecapTest extends TestCase
         $rows = $this->readSheet($path);
         @unlink($path);
 
-        $this->assertSame(['Badan Usaha', 'Divisi / Brand', 'Outlet', 'ID Pekerja', 'Nama', 'Jenis', 'Hari Terjadwal', 'Hari Masuk', 'Tidak Hadir', 'Libur', 'Terlambat (kali)', 'Total Telat (menit)', 'Pulang Cepat (kali)', 'Total Pulang Cepat (menit)', 'Jam Terjadwal', 'Jam Kerja', 'Lembur (kali)', 'Total Lembur (jam)', 'Menunggu Persetujuan (hari)'], $rows[0]);
-        $this->assertSame(['PT Franchise', 'JCHICKEN', 'JChicken Ciledug', $this->bayu->freelancer_number, 'Bayu Adillah', 'Freelancer', '3', '1', '1', '0', '1', '20', '0', '0', '27', '8.75', '0', '0', '0'], $rows[1]);
-        $this->assertSame(['Total', '3 baris', '4', '2', '1', '1', '1', '20', '1', '5', '31.5', '13.25', '0', '0', '0'], [$rows[4][0], $rows[4][4], ...array_slice($rows[4], 6)]);
+        $this->assertSame(['Badan Usaha', 'Divisi / Brand', 'Outlet', 'ID Pekerja', 'Nama', 'Jenis', 'Hari Terjadwal', 'Hari Masuk', 'Tidak Hadir', 'Libur', 'Terlambat (kali)', 'Total Telat (menit)', 'Pulang Cepat (kali)', 'Total Pulang Cepat (menit)', 'Jam Terjadwal', 'Jam Kerja', 'Lembur (kali)', 'Total Lembur (jam)', 'Menunggu Persetujuan (hari)', 'Cuti (hari)', 'Lupa Absen Pulang (hari)', 'Sesi Terlewat', 'Jam Normal', 'Lembur Otomatis (jam)', 'Lembur Pengajuan (jam)', 'Hari Terjadwal s.d. kemarin'], $rows[0]);
+        $this->assertSame(['PT Franchise', 'JCHICKEN', 'JChicken Ciledug', $this->bayu->freelancer_number, 'Bayu Adillah', 'Freelancer', '3', '1', '1', '1', '1', '20', '0', '0', '27', '8.75', '0', '0', '0', '0', '0', '0', '27', '0', '0', '2'], $rows[1]);
+        $this->assertSame(['Total', '2 baris', '4', '2', '1', '1', '1', '20', '1', '5', '31.5', '13.25', '0', '0', '0', '0', '0', '0', '31.5', '0', '0', '3'], [$rows[3][0], $rows[3][4], ...array_slice($rows[3], 6)]);
     }
 
     public function test_app_gets_the_recap_and_a_short_lived_download_link(): void
@@ -115,7 +116,8 @@ class TeamRecapTest extends TestCase
             ->assertOk()
             ->assertJsonPath('month', '2026-11')
             ->assertJsonPath('data.0.present_days', 1)
-            ->assertJsonCount(3, 'data');
+            ->assertJsonPath('total.present_days', 2)
+            ->assertJsonCount(2, 'data');
 
         $this->getJson('/api/v1/team/recap?month=11-2026')->assertUnprocessable();
 

@@ -76,7 +76,11 @@ class LeaveRequestApiController extends Controller
 
         $startDate = Carbon::parse($request->input('start_date'));
         $endDate = Carbon::parse($request->input('end_date'));
-        $daysCount = (int) $startDate->diffInDays($endDate) + 1;
+        $daysCount = count(app(AnnualLeaveService::class)->chargedDates($profile, $startDate, $endDate));
+
+        if ($daysCount === 0) {
+            return $this->noWorkdayResponse();
+        }
 
         if ($error = app(AnnualLeaveService::class)->validationError($profile, $request->input('leave_type'), $daysCount, startDate: $startDate, endDate: $endDate)) {
             return response()->json(['message' => $error, 'errors' => ['leave_type' => [$error]]], 422);
@@ -172,7 +176,11 @@ class LeaveRequestApiController extends Controller
                 return response()->json(['message' => 'Tanggal selesai harus sama atau setelah tanggal mulai.', 'errors' => ['end_date' => ['Tanggal selesai harus sama atau setelah tanggal mulai.']]], 422);
             }
 
-            $data['days_count'] = (int) $start->diffInDays($end) + 1;
+            $data['days_count'] = count(app(AnnualLeaveService::class)->chargedDates($leaveRequest->getWorkerProfile() ?? $profile, $start, $end));
+
+            if ($data['days_count'] === 0) {
+                return $this->noWorkdayResponse();
+            }
         }
 
         if ($error = app(AnnualLeaveService::class)->updateError($leaveRequest, $data['leave_type'] ?? null, (int) ($data['days_count'] ?? $leaveRequest->days_count), $start ?? null, $end ?? null)) {
@@ -305,6 +313,16 @@ class LeaveRequestApiController extends Controller
         return response()->json([
             'message' => 'Pengajuan cuti berhasil dibatalkan.',
         ]);
+    }
+
+    /**
+     * Refusal for a period in which the worker would not work a single day (only rostered days off).
+     */
+    private function noWorkdayResponse(): JsonResponse
+    {
+        $message = AnnualLeaveService::NO_WORKDAY_MESSAGE.'.';
+
+        return response()->json(['message' => $message, 'errors' => ['start_date' => [$message]]], 422);
     }
 
     /**

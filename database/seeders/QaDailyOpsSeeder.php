@@ -90,7 +90,8 @@ class QaDailyOpsSeeder extends Seeder
             'code' => 'QAC',
             'name' => 'PT QA Foto Kuliner',
             'mode' => 'gps_foto',
-            'policy' => ['require_gps' => true, 'require_photo' => true, 'geofence_radius_meters' => 150],
+            // Outlets on shift rosters: a day without a schedule is not scheduled (D3).
+            'policy' => ['require_gps' => true, 'require_photo' => true, 'geofence_radius_meters' => 150, 'uses_shift_roster' => true],
             'divisions' => [
                 'KOPI NUSA' => ['OUTLET KOPI CILEDUG', 'OUTLET KOPI BINTARO'],
                 'AYAM GEPREK' => ['OUTLET AYAM CILEDUG'],
@@ -255,6 +256,7 @@ class QaDailyOpsSeeder extends Seeder
                 'annual_leave_quota' => 12,
                 'work_start_time' => '08:00:00',
                 'work_end_time' => '17:00:00',
+                'uses_shift_roster' => false,
             ], $definition['policy']));
             $this->companies[$key] = $company;
 
