@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Alert, Image, View } from 'react-native';
 
-import { Avatar, Button, Group, InfoRow, Row, Screen, Text } from '@/components/ui';
+import { Avatar, Group, InfoRow, Row, Screen, Text } from '@/components/ui';
 import { useAccess } from '@/hooks/useAccess';
 import { useRefreshUser } from '@/hooks/useRefreshUser';
 import { attendanceApi } from '@/lib/api';
@@ -106,12 +106,12 @@ export default function ProfileScreen() {
           <Row icon="exit-outline" title="Pengunduran diri" subtitle="Ajukan atau lihat status resign" onPress={() => router.push('/request/resignation/new')} />
         ) : null}
         {access.canManageCompanies || access.canManageAccounts ? (
-          <Row icon="business-outline" title="Kelola Klien" subtitle="Badan usaha, kebijakan absensi, lokasi dan akun" onPress={() => router.push('/client')} />
+          <Row icon="business-outline" title="PIC" subtitle="Badan usaha, kebijakan absensi, lokasi dan akun" onPress={() => router.push('/client')} />
         ) : null}
         <Row icon="contrast-outline" title="Tampilan" value={APPEARANCE_LABELS[appearance]} onPress={() => router.push('/settings/appearance')} />
+        <Row icon="log-out-outline" title="Keluar" destructive chevron={false} onPress={confirmLogout} disabled={logout.isPending} />
       </Group>
 
-      <Button title="Keluar" variant="danger" size="lg" icon="log-out-outline" onPress={confirmLogout} loading={logout.isPending} />
       <View style={styles.footer}>
         <Image source={BRAND_TILE} style={styles.footerLogo} accessibilityIgnoresInvertColors />
         <Text style={styles.footerText}>OnTime Mobile</Text>

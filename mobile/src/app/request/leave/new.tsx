@@ -61,11 +61,25 @@ export default function NewLeaveScreen() {
     return Object.keys(next).length === 0;
   };
 
+  /** Drops the date messages once a date changes; the server's "no workday" refusal is filed under start_date. */
+  const clearDateErrors = () => {
+    setErrors(({ start_date: _start, end_date: _end, ...rest }) => rest);
+    if (submit.isError) {
+      submit.reset();
+    }
+  };
+
   const changeStartDate = (value: string) => {
     setStartDate(value);
     if (!endDate || endDate < value) {
       setEndDate(value);
     }
+    clearDateErrors();
+  };
+
+  const changeEndDate = (value: string) => {
+    setEndDate(value);
+    clearDateErrors();
   };
 
   const days = startDate && endDate && endDate >= startDate ? Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1 : null;
@@ -89,7 +103,7 @@ export default function NewLeaveScreen() {
           label="Tanggal selesai"
           mode="date"
           value={endDate}
-          onChange={setEndDate}
+          onChange={changeEndDate}
           error={errors.end_date}
           minimumDate={startDate ? new Date(startDate) : undefined}
           hint={days ? `${days} hari kalender` : undefined}
