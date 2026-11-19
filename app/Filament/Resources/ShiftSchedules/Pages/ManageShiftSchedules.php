@@ -9,6 +9,7 @@ use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\ShiftSchedule;
 use App\Services\ScheduleCopyService;
+use App\Services\ShiftAssignmentService;
 use App\Services\ShiftScheduleSpreadsheet;
 use Carbon\CarbonPeriod;
 use Filament\Actions\Action;
@@ -25,10 +26,11 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Support\Enums\Width;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -40,6 +42,12 @@ class ManageShiftSchedules extends ManageRecords
 
     /** Longest range one "Atur Jadwal" run may cover. */
     private const MAX_DAYS = 62;
+
+    /** "Atur Jadwal" changes the day's schedule (the primary one on a day with several). */
+    public const PLACEMENT_REPLACE = 'replace';
+
+    /** "Atur Jadwal" adds the shift as a further schedule of the day. */
+    public const PLACEMENT_ADD = 'add';
 
     /** @var array<string, class-string> */
     private const WORKER_MODELS = ['employee' => Employee::class, 'intern' => Intern::class, 'freelancer' => Freelancer::class];
@@ -149,9 +157,27 @@ class ManageShiftSchedules extends ManageRecords
                                 ->maxLength(255)
                                 ->columnSpanFull(),
 
+                            ToggleButtons::make('placement')
+                                ->label('Hari yang sudah punya jadwal')
+                                ->options([self::PLACEMENT_REPLACE => 'Ganti jadwal hari itu', self::PLACEMENT_ADD => 'Tambah sebagai jadwal tambahan'])
+                                ->helperText('Jadwal tambahan: maksimal 3 jadwal sehari, jamnya tidak boleh bertabrakan.')
+                                ->default(self::PLACEMENT_REPLACE)
+                                ->inline()
+                                ->live()
+                                ->visible(fn (Get $get): bool => $get('mode') === 'shift')
+                                ->columnSpanFull(),
+
                             Toggle::make('overwrite')
                                 ->label('Timpa jadwal yang sudah ada')
                                 ->default(true)
+                                ->visible(fn (Get $get): bool => $get('mode') !== 'shift' || $get('placement') !== self::PLACEMENT_ADD)
+                                ->columnSpanFull(),
+
+                            TextInput::make('reason')
+                                ->label('Alasan perubahan')
+                                ->helperText('Wajib bila rentang memuat tanggal yang sudah lewat; tercatat di riwayat jadwal.')
+                                ->maxLength(255)
+                                ->required(fn (Get $get): bool => filled($get('date_from')) && Carbon::parse($get('date_from'))->lt(today()))
                                 ->columnSpanFull(),
                         ]),
                 ])
@@ -163,7 +189,7 @@ class ManageShiftSchedules extends ManageRecords
                 ->color('gray')
                 ->modalWidth(Width::Medium)
                 ->modalHeading('Salin Jadwal Satu Minggu')
-                ->modalDescription('Hari yang sudah terisi tidak ditimpa, dan shift yang sudah nonaktif dilewati.')
+                ->modalDescription('Hari yang sudah terisi tidak ditimpa. Shift atau outlet yang sudah nonaktif dan hari di luar masa kontrak pekerja dilewati.')
                 ->modalSubmitActionLabel('Salin')
                 ->schema([
                     DatePicker::make('from')
@@ -345,42 +371,105 @@ class ManageShiftSchedules extends ManageRecords
         }
 
         $section = $isDayOff ? null : (trim((string) ($data['section'] ?? '')) ?: null);
+        $add = ! $isDayOff && ($data['placement'] ?? self::PLACEMENT_REPLACE) === self::PLACEMENT_ADD;
 
         $workers = $this->resolveWorkers((array) $data['workers'], $companyId);
         $weekdays = array_map('intval', (array) $data['weekdays']);
         $dates = collect(CarbonPeriod::create($from, $until))->filter(fn ($date): bool => in_array($date->dayOfWeekIso, $weekdays, true));
-        $counts = ['created' => 0, 'updated' => 0, 'skipped' => 0];
+        $counts = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'refused' => 0, 'locked' => 0, 'blocked' => 0, 'multiple' => 0, 'not_added' => 0];
+        $assignments = app(ShiftAssignmentService::class);
+        $user = auth()->user();
+        $reason = $data['reason'] ?? null;
 
-        DB::transaction(function () use ($workers, $dates, $isDayOff, $shiftId, $locationId, $section, $data, &$counts): void {
-            foreach ($workers as [$column, $workerId]) {
-                foreach ($dates as $date) {
-                    $schedule = ShiftSchedule::query()->where($column, $workerId)->whereDate('date', $date->toDateString())->first();
+        foreach ($workers as [$column, $workerId, $worker]) {
+            foreach ($dates as $date) {
+                // Outside the worker's contract (ended, not started yet) or too far ahead: not scheduled.
+                if ($assignments->dateError($worker, $date) !== null) {
+                    $counts['refused']++;
 
-                    if ($schedule && ! ($data['overwrite'] ?? true)) {
-                        $counts['skipped']++;
-
-                        continue;
-                    }
-
-                    $schedule ??= new ShiftSchedule([$column => $workerId, 'date' => $date->toDateString()]);
-                    $counts[$schedule->exists ? 'updated' : 'created']++;
-
-                    $schedule->fill([
-                        'shift_id' => $shiftId,
-                        'company_location_id' => $locationId,
-                        'is_day_off' => $isDayOff,
-                        'section' => $section,
-                        'notes' => $data['notes'] ?? null,
-                        'created_by' => $schedule->created_by ?? auth()->id(),
-                    ])->save();
+                    continue;
                 }
+
+                $existed = ShiftSchedule::query()->where($column, $workerId)->whereDate('date', $date->toDateString())->exists();
+
+                if ($existed && ! $add && ! ($data['overwrite'] ?? true)) {
+                    $counts['skipped']++;
+
+                    continue;
+                }
+
+                try {
+                    $assignments->assignDay(
+                        $user,
+                        $worker,
+                        $date->toDateString(),
+                        $isDayOff ? ShiftAssignmentService::MODE_DAY_OFF : ShiftAssignmentService::MODE_SHIFT,
+                        $shiftId,
+                        $locationId,
+                        $section,
+                        reason: $reason,
+                        source: 'panel',
+                        requirePastReason: true,
+                        notes: (string) ($data['notes'] ?? ''),
+                        add: $add,
+                    );
+                } catch (AuthorizationException) {
+                    $counts['refused']++;
+
+                    continue;
+                } catch (ValidationException $exception) {
+                    $message = collect($exception->errors())->flatten()->first();
+                    $counts[match ($message) {
+                        ShiftSchedule::LOCKED_MESSAGE => 'locked',
+                        ShiftAssignmentService::PAST_REASON_MESSAGE => 'skipped',
+                        ShiftAssignmentService::PANEL_MULTI_SCHEDULE_MESSAGE => 'multiple',
+                        ShiftAssignmentService::MAX_SCHEDULES_MESSAGE,
+                        ShiftAssignmentService::ADD_ON_DAY_OFF_MESSAGE,
+                        ShiftAssignmentService::DUPLICATE_SCHEDULE_MESSAGE,
+                        ShiftAssignmentService::OVERLAP_MESSAGE => 'not_added',
+                        default => 'blocked',
+                    }]++;
+
+                    continue;
+                }
+
+                $counts[$existed && ! $add ? 'updated' : 'created']++;
             }
-        });
+        }
+
+        $saved = $counts['created'] + $counts['updated'];
+        $body = count($workers)." pekerja, {$dates->count()} hari. Baru: {$counts['created']}, diperbarui: {$counts['updated']}, dilewati: {$counts['skipped']}.";
+
+        if ($counts['refused'] > 0) {
+            $body .= " {$counts['refused']} hari tidak dijadwalkan karena di luar masa kontrak pekerja.";
+        }
+
+        if ($counts['locked'] > 0) {
+            $body .= " {$counts['locked']} hari tidak diubah karena sudah ada absensinya (ajukan koreksi absensi).";
+        }
+
+        if ($counts['blocked'] > 0) {
+            $body .= " {$counts['blocked']} hari tidak diubah karena sudah ada absensi pada jam tersebut atau shift tidak bisa dipilih.";
+        }
+
+        if ($counts['multiple'] > 0) {
+            $body .= " {$counts['multiple']} hari tidak diubah karena punya lebih dari satu jadwal; ubah atau hapus per jadwal dari daftar Jadwal Shift.";
+        }
+
+        if ($counts['not_added'] > 0) {
+            $body .= " {$counts['not_added']} hari tidak ditambah karena hari itu libur, sudah punya 3 jadwal, shift yang sama sudah ada, atau jamnya bertabrakan.";
+        }
+
+        $problems = $counts['refused'] + $counts['locked'] + $counts['blocked'] + $counts['multiple'] + $counts['not_added'];
 
         Notification::make()
-            ->title('Jadwal shift disimpan')
-            ->body(count($workers)." pekerja, {$dates->count()} hari. Baru: {$counts['created']}, diperbarui: {$counts['updated']}, dilewati: {$counts['skipped']}.")
-            ->success()
+            ->title($problems > 0 && $saved === 0 ? 'Jadwal tidak disimpan' : 'Jadwal shift disimpan')
+            ->body($body)
+            ->status(match (true) {
+                $problems > 0 && $saved === 0 => 'danger',
+                $problems > 0 => 'warning',
+                default => 'success',
+            })
             ->send();
     }
 
@@ -388,7 +477,7 @@ class ManageShiftSchedules extends ManageRecords
      * Turn "employee:12" style keys into [column, id] pairs, keeping only workers of the company inside the user's data access.
      *
      * @param  list<string>  $keys
-     * @return list<array{0: string, 1: int}>
+     * @return list<array{0: string, 1: int, 2: Employee|Intern|Freelancer}>
      */
     private function resolveWorkers(array $keys, int $companyId): array
     {
@@ -398,8 +487,10 @@ class ManageShiftSchedules extends ManageRecords
             [$type, $id] = array_pad(explode(':', (string) $key, 2), 2, null);
             $model = self::WORKER_MODELS[$type] ?? null;
 
-            if ($model && ShiftScheduleResource::scopeToManagedWorkers($model::query())->whereKey((int) $id)->where('company_id', $companyId)->exists()) {
-                $workers[] = ["{$type}_id", (int) $id];
+            $worker = $model ? ShiftScheduleResource::scopeToManagedWorkers($model::query())->whereKey((int) $id)->where('company_id', $companyId)->first() : null;
+
+            if ($worker) {
+                $workers[] = ["{$type}_id", (int) $id, $worker];
             }
         }
 

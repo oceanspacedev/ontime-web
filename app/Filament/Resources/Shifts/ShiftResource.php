@@ -164,6 +164,32 @@ class ShiftResource extends Resource
                     ->disabled(fn (?Shift $record): bool => static::hoursLockedReason($record) !== null)
                     ->requiredWith('second_start_time'),
 
+                // Not locked with the hours: it only applies to check-ins made from now on (each attendance
+                // keeps the normal hours of the moment it was checked in).
+                TextInput::make('normal_minutes')
+                    ->label('Jam kerja normal (jam)')
+                    ->numeric()
+                    ->step(0.5)
+                    ->suffix('jam')
+                    ->placeholder('Seluruh jam shift')
+                    ->helperText('Kosong = seluruh jam shift normal, tanpa lembur otomatis. Jam kerja di dalam shift di atas angka ini dihitung lembur otomatis, berlaku untuk absen masuk setelah disimpan.')
+                    ->formatStateUsing(fn (mixed $state): int|float|null => is_numeric($state) ? $state / 60 : null)
+                    ->dehydrateStateUsing(fn (mixed $state): ?int => is_numeric($state) ? (int) round($state * 60) : null)
+                    ->rule(fn (Get $get, ?Shift $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get, $record): void {
+                        if (blank($value)) {
+                            return;
+                        }
+
+                        $scheduledMinutes = static::scheduledMinutesOf($get, $record);
+
+                        if (! is_numeric($value) || $value <= 0) {
+                            $fail('Jam kerja normal harus lebih dari 0.');
+                        } elseif ($scheduledMinutes !== null && (int) round($value * 60) > $scheduledMinutes) {
+                            $fail('Jam kerja normal tidak boleh melebihi panjang shift ('.static::hoursLabel($scheduledMinutes).' jam).');
+                        }
+                    })
+                    ->columnSpanFull(),
+
                 TextInput::make('late_tolerance_minutes')
                     ->label('Toleransi Terlambat')
                     ->numeric()
@@ -206,6 +232,12 @@ class ShiftResource extends Resource
                 TextColumn::make('talenta_code')
                     ->label('Kode Talenta')
                     ->placeholder('-')
+                    ->toggleable(),
+
+                TextColumn::make('normal_minutes')
+                    ->label('Jam Normal')
+                    ->formatStateUsing(fn (?int $state): string => static::hoursLabel((int) $state).' jam')
+                    ->placeholder('Seluruh shift')
                     ->toggleable(),
 
                 TextColumn::make('late_tolerance_minutes')
@@ -275,6 +307,33 @@ class ShiftResource extends Resource
                         }),
                 ]),
             ]);
+    }
+
+    /**
+     * Scheduled minutes of the shift as the form holds it now (both parts of a split shift); the stored
+     * hours where the form has none. Null while the hours are not filled in.
+     */
+    public static function scheduledMinutesOf(Get $get, ?Shift $record): ?int
+    {
+        $hours = [];
+
+        foreach (['start_time', 'end_time', 'second_start_time', 'second_end_time'] as $field) {
+            $hours[$field] = filled($get($field)) ? $get($field) : $record?->{$field};
+        }
+
+        if (blank($hours['start_time']) || blank($hours['end_time'])) {
+            return null;
+        }
+
+        return (new Shift($hours))->scheduledMinutes();
+    }
+
+    /**
+     * Minutes as hours without trailing zeros: 480 => "8", 825 => "13,75".
+     */
+    public static function hoursLabel(int $minutes): string
+    {
+        return str_replace('.', ',', (string) round($minutes / 60, 2));
     }
 
     /**

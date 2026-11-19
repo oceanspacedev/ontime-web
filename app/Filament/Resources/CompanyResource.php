@@ -17,6 +17,7 @@ use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Repeater;
@@ -459,6 +460,25 @@ class CompanyResource extends Resource
                                     ->suffix('tahap')
                                     ->required()
                                     ->default(1),
+                            ]),
+
+                        Section::make('Jadwal Shift')
+                            ->icon('heroicon-o-calendar')
+                            ->compact()
+                            ->schema([
+                                Toggle::make('uses_shift_roster')
+                                    ->label('Perusahaan memakai jadwal shift (hari tanpa jadwal = tidak dijadwalkan)')
+                                    ->helperText('Jika aktif, pekerja hanya diharapkan masuk pada hari yang ada jadwalnya: hari kosong tidak dihitung alpa dan absen di hari itu lewat "Masuk di luar jadwal" dengan persetujuan. Pekerja yang punya shift default dan belum pernah dijadwalkan tetap masuk Senin-Jumat pada shift default. Jalankan php artisan attendance:roster-preflight sebelum mengaktifkan.')
+                                    ->default(false),
+                            ]),
+
+                        Section::make('Lembur')
+                            ->icon('heroicon-o-clock')
+                            ->compact()
+                            ->schema([
+                                DatePicker::make('overtime_netting_from')
+                                    ->label('Lembur pengajuan dipotong jam shift mulai tanggal')
+                                    ->helperText('Sejak tanggal ini, bagian lembur pengajuan yang berada di dalam jam shift tidak dihitung dua kali di laporan. Kosong = lembur pengajuan dihitung penuh. Tanggal lampau mengubah laporan sejak tanggal itu.'),
                             ]),
                     ])
                     ->action(function (Company $record, array $data): void {

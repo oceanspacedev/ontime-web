@@ -98,6 +98,34 @@ class ApiConsistencyTest extends TestCase
         $this->getJson('/api/v1/attendances')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $own->id);
     }
 
+    /**
+     * A coordinator who also checks in sees the team in the list, but mine=1 (the correction form's
+     * session picker) keeps only their own rows, even when the team fills the first page.
+     */
+    public function test_mine_filter_keeps_only_the_signed_in_workers_own_rows(): void
+    {
+        $colleague = $this->makeEmployee($this->sales);
+        foreach (range(1, 21) as $index) {
+            Attendance::create(['employee_id' => $colleague->id, 'date' => '2026-11-02', 'segment' => $index, 'check_in' => '08:00:00', 'status' => 'on_time']);
+        }
+        $own = Attendance::create(['employee_id' => $this->salesWorker->id, 'date' => '2026-11-02', 'check_in' => '13:00:00', 'status' => 'on_time']);
+
+        $coordinator = $this->salesWorker->user;
+        $coordinator->assignRole('Approver');
+        $coordinator->grantDataAccess(DataScope::Divisions, divisionIds: [$this->sales->id]);
+        Sanctum::actingAs($coordinator);
+
+        $this->getJson('/api/v1/attendances?start_date=2026-11-02&end_date=2026-11-02')
+            ->assertOk()
+            ->assertJsonPath('pagination.total', 22);
+
+        $this->getJson('/api/v1/attendances?start_date=2026-11-02&end_date=2026-11-02&mine=1')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $own->id)
+            ->assertJsonPath('pagination.total', 1);
+    }
+
     public function test_photo_links_open_on_a_private_local_disk(): void
     {
         config(['filesystems.default' => 'local']);

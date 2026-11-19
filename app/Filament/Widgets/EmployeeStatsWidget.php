@@ -5,9 +5,9 @@ namespace App\Filament\Widgets;
 use App\Filament\Pages\AbsenHariIni;
 use App\Filament\Resources\LeaveRequests\LeaveRequestResource;
 use App\Filament\Resources\OvertimeRequests\OvertimeRequestResource;
-use App\Models\Attendance;
-use App\Models\OvertimeRequest;
 use App\Services\AnnualLeaveService;
+use App\Services\Attendance\LedgerQuery;
+use App\Services\AttendanceLedger;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 
@@ -27,30 +27,20 @@ class EmployeeStatsWidget extends BaseWidget
             return [];
         }
 
-        $currentMonth = now()->month;
-        $currentYear = now()->year;
+        // The employee's own month from the attendance ledger: a day worked counts once, also when it was
+        // late or still waits for approval, and overtime is the automatic one plus approved requests.
+        $month = app(AttendanceLedger::class)->summary(LedgerQuery::forWorkers(
+            ['employee:'.$employee->id],
+            today()->startOfMonth(),
+            today()->endOfMonth(),
+        ));
 
-        $attendanceStats = Attendance::where('employee_id', $employee->id)
-            ->whereMonth('date', $currentMonth)
-            ->whereYear('date', $currentYear)
-            ->selectRaw("
-                SUM(CASE WHEN status IN ('on_time', 'present') THEN 1 ELSE 0 END) as present_days,
-                SUM(CASE WHEN status = 'late' THEN 1 ELSE 0 END) as late_days
-            ")
-            ->first();
-
-        $presentDays = (int) ($attendanceStats?->present_days ?? 0);
-        $lateDays = (int) ($attendanceStats?->late_days ?? 0);
+        $presentDays = $month['present_days'];
+        $lateDays = $month['late_days'];
 
         $annualLeave = app(AnnualLeaveService::class)->summary($employee);
 
-        $overtimeMinutes = (int) OvertimeRequest::where('employee_id', $employee->id)
-            ->where('status', 'approved')
-            ->whereMonth('date', $currentMonth)
-            ->whereYear('date', $currentYear)
-            ->sum('duration_minutes');
-
-        $overtimeHours = round($overtimeMinutes / 60, 1);
+        $overtimeHours = round($month['overtime_minutes'] / 60, 1);
 
         return [
             Stat::make('Kehadiran Bulan Ini', "{$presentDays} Hari")
@@ -72,7 +62,7 @@ class EmployeeStatsWidget extends BaseWidget
                     ->url(LeaveRequestResource::getUrl('index')),
 
             Stat::make('Lembur Bulan Ini', "{$overtimeHours} Jam")
-                ->description('Total durasi lembur disetujui')
+                ->description('Lembur otomatis dan lembur pengajuan disetujui')
                 ->color('info')
                 ->icon('heroicon-o-clock')
                 ->url(OvertimeRequestResource::getUrl('index')),

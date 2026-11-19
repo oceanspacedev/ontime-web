@@ -21,9 +21,10 @@ use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 /**
- * A day shift whose check-out was forgotten: the next day the Today card and the reminder both say
- * "Kemarin belum absen pulang" and point to a correction, while today's check-in stays allowed. An
- * overnight shift still running after midnight is checked out as usual instead.
+ * A day shift whose check-out was forgotten: once its check-out window (scheduled end + 6 h) has passed,
+ * the Today card says "Kemarin belum absen pulang" and points to a correction, while today's check-in
+ * stays allowed. Inside the window (a shift ending 23:00 until 05:00), and for an overnight shift still
+ * running after midnight, the card and the reminder offer the check-out as usual instead.
  */
 class TodayUnclosedCheckOutTest extends TestCase
 {
@@ -68,7 +69,8 @@ class TodayUnclosedCheckOutTest extends TestCase
         $this->schedule('2026-11-17', $this->evening);
         $this->openRow('2026-11-16', '2026-11-16 15:00', $this->evening);
 
-        $this->travelTo(Carbon::parse('2026-11-17 01:00'));
+        // Past the check-out window of the 15:00 - 23:00 shift (23:00 + 6 h = 05:00).
+        $this->travelTo(Carbon::parse('2026-11-17 05:30'));
         $this->getJson('/api/v1/attendance/today')
             ->assertOk()
             ->assertJsonPath('has_checked_in', false)
@@ -180,15 +182,20 @@ class TodayUnclosedCheckOutTest extends TestCase
     {
         $service = app(AttendanceReminderService::class);
 
-        // Day shift ending 23:00: the reminder at 01:00 lands on the next day and asks for a correction.
+        // Day shift ending 23:00: the reminder at 01:00 lands on the next day, still inside the check-out
+        // window (until 05:00), so it offers the check-out, as the card does.
         $this->schedule('2026-11-16', $this->evening);
         $this->openRow('2026-11-16', '2026-11-16 15:00', $this->evening);
         $this->travelTo(Carbon::parse('2026-11-17 01:00'));
         $this->assertSame(1, $service->sendDue(now())[AttendanceReminderService::FORGOT_CHECK_OUT]);
-        Notification::assertSentTo($this->user, AttendanceReminderNotification::class, fn (AttendanceReminderNotification $n): bool => $n->title === 'Kemarin belum absen pulang'
-            && $n->body === 'Shift Sore selesai 23:00. Ajukan koreksi dengan jam pulang yang sebenarnya. Absen masuk hari ini tetap bisa.'
-            && $n->data['action'] === 'correction'
+        Notification::assertSentTo($this->user, AttendanceReminderNotification::class, fn (AttendanceReminderNotification $n): bool => $n->title === 'Anda belum absen pulang'
+            && $n->body === 'Shift Sore selesai 23:00. Absen pulang sekarang, atau ajukan koreksi bila sudah pulang.'
+            && $n->data['action'] === 'check_out'
             && $n->data['date'] === '2026-11-16');
+        $this->getJson('/api/v1/attendance/today')
+            ->assertJsonPath('has_checked_in', true)
+            ->assertJsonPath('attendance.date', '2026-11-16')
+            ->assertJsonPath('unclosed_previous', null);
     }
 
     public function test_forgot_check_out_of_a_night_shift_still_asks_for_check_out(): void

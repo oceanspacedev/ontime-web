@@ -60,6 +60,8 @@ class Review_reportsTest extends TestCase
     public function test_api_does_not_count_a_rejected_check_in_on_a_scheduled_day_off_as_absent(): void
     {
         $worker = $this->freelancer('Ditolak Saat Libur');
+        // On the roster since October, so the November weekdays read the roster only.
+        ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-10-26', 'is_day_off' => true]);
         ShiftSchedule::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'is_day_off' => true]);
         Attendance::create(['freelancer_id' => $worker->id, 'date' => '2026-11-06', 'check_in' => '2026-11-06 08:00:00', 'status' => 'rejected', 'late_minutes' => 0]);
 

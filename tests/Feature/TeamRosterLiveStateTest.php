@@ -13,6 +13,7 @@ use App\Models\ShiftSchedule;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
@@ -130,6 +131,26 @@ class TeamRosterLiveStateTest extends TestCase
         $this->assertArrayNotHasKey('note', $citra);
     }
 
+    public function test_split_shift_worked_only_in_segment_two_is_done_and_checked_in(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-17 22:30'));
+        $split = $this->scheduled('Citra', $this->split);
+        $this->attend($split, '2026-11-17', '2026-11-17 17:40', '2026-11-17 22:05', shift: $this->split, segment: 2);
+
+        $outlet = $this->roster()->json('outlets.0');
+        $citra = $this->entryOf($outlet, 'Citra');
+        $this->assertSame('pulang', $citra['state']);
+        $this->assertArrayNotHasKey('note', $citra);
+        $this->assertSame(1, $outlet['counts']['checked_in']);
+        $this->assertSame(0, $outlet['counts']['belum']);
+
+        $this->travelTo(Carbon::parse('2026-11-18 09:00'));
+        $past = $this->roster('2026-11-17')->json('outlets.0');
+        $this->assertSame('pulang', $this->entryOf($past, 'Citra')['state']);
+        $this->assertArrayNotHasKey('note', $this->entryOf($past, 'Citra'));
+        $this->assertSame(1, $past['counts']['checked_in']);
+    }
+
     public function test_night_shift_checked_in_after_midnight_is_working_on_today_and_yesterday(): void
     {
         $this->travelTo(Carbon::parse('2026-11-17 02:00'));
@@ -164,6 +185,27 @@ class TeamRosterLiveStateTest extends TestCase
             ->assertJsonPath('outlets.0.entries.0.state', 'hadir')
             ->assertJsonPath('outlets.0.entries.0.check_in', '21:55')
             ->assertJsonPath('outlets.0.entries.0.schedule_id', null);
+    }
+
+    public function test_a_closing_shift_still_open_after_midnight_is_listed_under_its_own_shift_until_its_window_closes(): void
+    {
+        $closing = Shift::create(['company_id' => $this->company->id, 'division_id' => $this->jchicken->id, 'name' => 'Closing', 'code' => 'C', 'start_time' => '14:00', 'end_time' => '22:30']);
+        $this->travelTo(Carbon::parse('2026-11-17 00:30'));
+        $sari = $this->scheduled('Sari', $closing, '2026-11-16');
+        $this->attend($sari, '2026-11-16', '2026-11-16 13:55', shift: $closing);
+
+        $this->roster()
+            ->assertOk()
+            ->assertJsonCount(1, 'outlets')
+            ->assertJsonPath('outlets.0.kind', 'overnight')
+            ->assertJsonPath('outlets.0.entries.0.worker.name', 'Sari')
+            ->assertJsonPath('outlets.0.entries.0.shift.name', 'Closing')
+            ->assertJsonPath('outlets.0.entries.0.state', 'hadir')
+            ->assertJsonPath('outlets.0.entries.0.check_in', '13:55');
+
+        // Past 22:30 + 6 h the open row is a missing check-out, no longer someone at work.
+        $this->travelTo(Carbon::parse('2026-11-17 04:31'));
+        $this->roster()->assertOk()->assertJsonCount(0, 'outlets');
     }
 
     public function test_night_worker_with_a_day_off_today_is_listed_with_last_night_while_on_shift(): void
@@ -263,6 +305,9 @@ class TeamRosterLiveStateTest extends TestCase
         $this->assertSame('nanti', $this->entryOf($this->roster()->json('outlets.0'), 'Closed')['state']);
     }
 
+    /**
+     * A fixed-hours company (uses_shift_roster off); a company on shift rosters: RosterCompanyUnscheduledTest.
+     */
     public function test_check_in_without_a_schedule_is_listed_under_tanpa_jadwal(): void
     {
         $this->travelTo(Carbon::parse('2026-11-17 10:00'));
@@ -353,6 +398,38 @@ class TeamRosterLiveStateTest extends TestCase
         $this->travelTo(Carbon::parse('2026-11-17 10:00'));
 
         $this->roster()->assertOk()->assertJsonCount(0, 'outlets');
+    }
+
+    /**
+     * The figures of the "Tanpa jadwal" group (overtime, missing check-out) are read for the whole group at
+     * once: the number of shift, outlet and attendance queries does not grow with the number of walk-ins.
+     */
+    public function test_the_tanpa_jadwal_group_is_read_in_bulk(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-17 18:00'));
+        $this->scheduled('Ani', $this->morning);
+        $walkIns = function (int $count): void {
+            foreach (range(1, $count) as $index) {
+                $this->attend($this->freelancer('Datang '.uniqid()), '2026-11-17', '2026-11-17 08:00', '2026-11-17 17:30', shift: $this->morning);
+            }
+        };
+        $queries = function (): int {
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $entries = collect($this->roster()->assertOk()->json('outlets'))->firstWhere('kind', 'unscheduled')['entries'];
+            // The figures read the rows' shifts, outlets and the day's other attendance.
+            $count = collect(DB::getQueryLog())->pluck('query')->filter(fn (string $sql): bool => str_contains($sql, 'from "shifts"') || str_contains($sql, 'from "company_locations"') || str_contains($sql, 'from "attendances"'))->count();
+            DB::disableQueryLog();
+            $this->assertNotEmpty($entries);
+
+            return $count;
+        };
+
+        $walkIns(2);
+        $few = $queries();
+        $walkIns(5);
+
+        $this->assertSame($few, $queries());
     }
 
     private function roster(?string $date = null): TestResponse

@@ -47,6 +47,8 @@ class Probe_payroll_report_RPTB1Test extends TestCase
 
         $this->bayu = Freelancer::create(['company_id' => $company->id, 'division_id' => $brand->id, 'full_name' => 'Bayu', 'status' => 'active', 'start_date' => '2026-11-01']);
 
+        // On the roster from Sunday 1 November (a day off), the first day of the contract.
+        ShiftSchedule::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-01', 'is_day_off' => true]);
         // Tue 2026-11-03: scheduled, checked in/out outside the geofence, rejected by the approver.
         ShiftSchedule::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-03', 'shift_id' => $morning->id, 'company_location_id' => $outlet->id]);
         $attendance = Attendance::create(['freelancer_id' => $this->bayu->id, 'date' => '2026-11-03', 'segment' => 1, 'check_in' => '2026-11-03 08:00:00', 'check_out' => '2026-11-03 17:00:00', 'status' => 'pending_approval', 'late_minutes' => 0, 'company_location_id' => $outlet->id]);

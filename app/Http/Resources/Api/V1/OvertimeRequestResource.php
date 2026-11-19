@@ -2,11 +2,24 @@
 
 namespace App\Http\Resources\Api\V1;
 
+use App\Services\OvertimeRequestService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class OvertimeRequestResource extends JsonResource
 {
+    /**
+     * A list reads the counted minutes of its rows once, not per row.
+     */
+    public static function collection($resource)
+    {
+        if (is_iterable($resource)) {
+            OvertimeRequestService::preloadNetMinutes($resource);
+        }
+
+        return parent::collection($resource);
+    }
+
     public function toArray(Request $request): array
     {
         $profile = $this->employee ?? $this->intern ?? $this->freelancer;
@@ -21,6 +34,8 @@ class OvertimeRequestResource extends JsonResource
             'end_time' => $this->end_time,
             'duration_minutes' => $this->duration_minutes,
             'actual_duration_minutes' => $this->actual_duration_minutes,
+            // Minutes the reports count once the company nets requests against shift hours; null = counted in full.
+            'counted_minutes' => app(OvertimeRequestService::class)->netMinutes($this->resource),
             'reason' => $this->reason,
             'status' => $this->status,
             'current_step' => $this->current_step,

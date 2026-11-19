@@ -2,7 +2,7 @@
 
 namespace App\Exports;
 
-use App\Enums\AttendanceStatus;
+use App\Services\AttendanceLedger;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -19,22 +19,30 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Drawing;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 /**
- * The report as a list: one row per attendance, with photos, GPS, status and notes.
+ * The report as a list: one row per attendance, with photos, GPS, status and notes, and one row for each
+ * absent or leave day. Times, hours, lateness, schedule and overtime are the attendance ledger's
+ * ({@see AttendanceLedger}, through {@see AttendanceReportData}).
  */
 class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDrawings, WithHeadings, WithMapping, WithStyles, WithTitle
 {
     private const HOURS_FORMAT = '0.00';
 
-    public function __construct(protected Collection $records) {}
+    /** @var Collection<int, array<string, mixed>>|null */
+    private ?Collection $records = null;
+
+    public function __construct(private readonly AttendanceReportData $data) {}
 
     public function title(): string
     {
         return 'Detail';
     }
 
+    /**
+     * @return Collection<int, array<string, mixed>>
+     */
     public function collection(): Collection
     {
-        return $this->records;
+        return $this->records ??= collect($this->data->details());
     }
 
     public function headings(): array
@@ -57,66 +65,54 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
             'Menit Telat',
             'Menit Pulang Cepat',
             'Keterangan / Notes',
+            'Shift',
+            'Outlet',
+            'Jadwal',
+            'Lembur Otomatis (jam)',
         ];
     }
 
+    /**
+     * @param  array<string, mixed>  $row
+     * @return list<mixed>
+     */
     public function map($row): array
     {
-        $company = $row->employee?->company?->name
-            ?? $row->intern?->company?->name
-            ?? $row->freelancer?->company?->name
-            ?? '-';
-
-        $division = $row->employee?->division?->name
-            ?? $row->intern?->division?->name
-            ?? $row->freelancer?->division?->name
-            ?? '-';
-
-        $nip = $row->employee?->nip
-            ?? $row->intern?->nis
-            ?? $row->freelancer?->freelancer_number
-            ?? '-';
-
-        $name = $row->employee?->full_name
-            ?? $row->intern?->full_name
-            ?? $row->freelancer?->full_name
-            ?? '-';
-
-        $tipe = $row->employee ? 'Karyawan'
-            : ($row->intern ? 'Magang'
-            : ($row->freelancer ? 'Freelancer' : '-'));
-
         return [
-            $company,
-            $division,
-            $nip,
-            $name,
-            $tipe,
-            $row->date ? $row->date->format('d/m/Y') : '-',
-            $row->check_in ? $row->check_in->format('H:i:s') : '-',
-            $row->check_out ? $row->check_out->format('H:i:s') : '-',
-            $row->workedMinutes() !== null ? $row->workedMinutes() / 60 : '-',
+            $row['company'],
+            $row['division'],
+            $row['number'],
+            $row['name'],
+            $row['type'],
+            date('d/m/Y', strtotime($row['date'])),
+            AttendanceReportData::time($row['check_in'], 8) ?? '-',
+            AttendanceReportData::time($row['check_out'], 8) ?? '-',
+            $row['worked_minutes'] !== null ? $row['worked_minutes'] / 60 : '-',
             '',
             '',
-            ($row->check_in_lat && $row->check_in_lng)
-                ? '=HYPERLINK("https://www.openstreetmap.org/?mlat='.$row->check_in_lat.'&mlon='.$row->check_in_lng.'#map=17/'.$row->check_in_lat.'/'.$row->check_in_lng.'", "'.$row->check_in_lat.', '.$row->check_in_lng.'")'
-                : '-',
-            ($row->check_out_lat && $row->check_out_lng)
-                ? '=HYPERLINK("https://www.openstreetmap.org/?mlat='.$row->check_out_lat.'&mlon='.$row->check_out_lng.'#map=17/'.$row->check_out_lat.'/'.$row->check_out_lng.'", "'.$row->check_out_lat.', '.$row->check_out_lng.'")'
-                : '-',
-            $row->status instanceof AttendanceStatus
-                ? $row->status->getLabel()
-                : (match ((string) $row->status) {
-                    'on_time', 'present' => 'Tepat Waktu / Hadir',
-                    'late' => 'Terlambat',
-                    'leave' => 'Cuti / Izin',
-                    'absent' => 'Alpa',
-                    default => (string) ($row->status ?? '-'),
-                }),
-            $row->late_minutes ?? 0,
-            $row->early_leave_minutes ?? 0,
-            $row->notes ?? ($row->is_corrected ? 'Koreksi Absensi' : '-'),
+            $this->mapLink($row['check_in_lat'], $row['check_in_lng']),
+            $this->mapLink($row['check_out_lat'], $row['check_out_lng']),
+            $row['status_label'],
+            $row['late_minutes'],
+            $row['early_leave_minutes'],
+            $row['notes'] ?? ($row['is_corrected'] ? 'Koreksi Absensi' : '-'),
+            $row['shift'] ?? '-',
+            $row['outlet'] ?? '-',
+            $row['schedule'] ?? '-',
+            $row['auto_overtime_minutes'] / 60,
         ];
+    }
+
+    /**
+     * A link to the map for a GPS position, or "-" without one.
+     */
+    private function mapLink(mixed $latitude, mixed $longitude): string
+    {
+        if (! $latitude || ! $longitude) {
+            return '-';
+        }
+
+        return '=HYPERLINK("https://www.openstreetmap.org/?mlat='.$latitude.'&mlon='.$longitude.'#map=17/'.$latitude.'/'.$longitude.'", "'.$latitude.', '.$longitude.'")';
     }
 
     public function drawings(): array
@@ -129,12 +125,12 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
             @mkdir($tempDir, 0755, true);
         }
 
-        foreach ($this->records as $row) {
-            if (! empty($row->check_in_photo)) {
-                $fileContent = $this->getPhotoContent($row->check_in_photo);
+        foreach ($this->collection() as $row) {
+            if (! empty($row['check_in_photo'])) {
+                $fileContent = $this->getPhotoContent($row['check_in_photo']);
 
                 if ($fileContent) {
-                    $tempPath = $tempDir.'/att_in_'.md5($row->id.'_'.$row->check_in_photo).'.jpg';
+                    $tempPath = $tempDir.'/att_in_'.md5($row['attendance_id'].'_'.$row['check_in_photo']).'.jpg';
                     file_put_contents($tempPath, $fileContent);
                     if (file_exists($tempPath)) {
                         $drawing = new Drawing;
@@ -150,11 +146,11 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
                 }
             }
 
-            if (! empty($row->check_out_photo)) {
-                $fileContent = $this->getPhotoContent($row->check_out_photo);
+            if (! empty($row['check_out_photo'])) {
+                $fileContent = $this->getPhotoContent($row['check_out_photo']);
 
                 if ($fileContent) {
-                    $tempPath = $tempDir.'/att_out_'.md5($row->id.'_'.$row->check_out_photo).'.jpg';
+                    $tempPath = $tempDir.'/att_out_'.md5($row['attendance_id'].'_'.$row['check_out_photo']).'.jpg';
                     file_put_contents($tempPath, $fileContent);
                     if (file_exists($tempPath)) {
                         $drawing = new Drawing;
@@ -232,12 +228,16 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
             'O' => 14,  // Menit Telat
             'P' => 16,  // Menit Pulang Cepat
             'Q' => 28,  // Keterangan
+            'R' => 22,  // Shift
+            'S' => 24,  // Outlet
+            'T' => 16,  // Jadwal
+            'U' => 14,  // Lembur Otomatis
         ];
     }
 
     public function styles(Worksheet $sheet): array
     {
-        $totalRows = count($this->records) + 1;
+        $totalRows = $this->collection()->count() + 1;
 
         for ($i = 2; $i <= $totalRows; $i++) {
             $sheet->getRowDimension($i)->setRowHeight(42);
@@ -250,6 +250,8 @@ class AttendanceDetailSheet implements FromCollection, WithColumnWidths, WithDra
         $sheet->getStyle("A2:D{$totalRows}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
         $sheet->getStyle("O2:P{$totalRows}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
         $sheet->getStyle("I2:I{$totalRows}")->getNumberFormat()->setFormatCode(self::HOURS_FORMAT);
+        $sheet->getStyle("R2:U{$totalRows}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
+        $sheet->getStyle("U2:U{$totalRows}")->getNumberFormat()->setFormatCode(self::HOURS_FORMAT);
 
         return [
             1 => [

@@ -178,7 +178,11 @@ class AttendanceCorrectionIntegrityTest extends TestCase
         $this->assertSame(AttendanceStatus::PendingApproval, $attendance->fresh()->status);
     }
 
-    public function test_api_refuses_a_correction_of_a_rejected_attendance(): void
+    /**
+     * WP12 (owner sign-off): a rejected attendance accepts a correction that gives the real check-in (it
+     * revives the day once approved); a correction without a check-in is still refused.
+     */
+    public function test_api_refuses_a_check_out_only_correction_of_a_rejected_attendance_and_accepts_one_with_the_check_in(): void
     {
         $worker = $this->makeWorker($this->shift('08:00', '17:00'));
         $this->attendance($worker, '2026-11-15 08:05:00', AttendanceStatus::Rejected, ['rejection_reason' => 'Di luar area']);
@@ -187,6 +191,9 @@ class AttendanceCorrectionIntegrityTest extends TestCase
         $this->postJson('/api/v1/attendance-corrections', ['date' => '2026-11-15', 'corrected_check_out' => '17:00', 'reason' => 'Lupa pulang'])
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['date' => 'sudah ditolak oleh atasan']);
+
+        $this->postJson('/api/v1/attendance-corrections', ['date' => '2026-11-15', 'corrected_check_in' => '08:05', 'corrected_check_out' => '17:00', 'reason' => 'Saya memang bekerja di outlet'])
+            ->assertCreated();
     }
 
     public function test_update_cannot_move_a_correction_onto_a_pending_attendance(): void
@@ -269,7 +276,11 @@ class AttendanceCorrectionIntegrityTest extends TestCase
         $this->assertSame(AttendanceStatus::PendingApproval, $attendance->status);
     }
 
-    public function test_attendance_rejected_after_submission_stays_rejected_with_its_reason(): void
+    /**
+     * WP12 (owner sign-off): a row rejected after the correction was submitted is revived by the approval
+     * of a correction that gives the check-in, judged against its schedule; the rejection stays in the notes.
+     */
+    public function test_attendance_rejected_after_submission_is_revived_by_a_correction_with_the_check_in(): void
     {
         $worker = $this->makeWorker($this->shift('08:00', '17:00'));
         $correction = $this->submit($worker, ['date' => '2026-11-15', 'corrected_check_in' => '08:00', 'corrected_check_out' => '17:00']);
@@ -278,10 +289,35 @@ class AttendanceCorrectionIntegrityTest extends TestCase
         app(ApprovalFlowService::class)->approveStep($correction, $this->approver);
 
         $attendance->refresh();
-        $this->assertSame(AttendanceStatus::Rejected, $attendance->status);
-        $this->assertSame('Di luar area', $attendance->rejection_reason);
+        $this->assertSame(AttendanceStatus::OnTime, $attendance->status);
+        $this->assertSame(0, $attendance->late_minutes);
+        $this->assertNull($attendance->rejection_reason);
+        $this->assertStringContainsString('Di luar area', (string) $attendance->notes);
+        $this->assertTrue($attendance->is_corrected);
         $this->assertSame('2026-11-15 08:00:00', $attendance->check_in->toDateTimeString());
         $this->assertSame('2026-11-15 17:00:00', $attendance->check_out->toDateTimeString());
+        $this->assertSame(AttendanceStatus::Rejected->value, $correction->fresh()->before_values['status']);
+    }
+
+    public function test_a_check_out_only_correction_of_a_row_rejected_after_submission_is_refused_at_approval(): void
+    {
+        $worker = $this->makeWorker($this->shift('08:00', '17:00'));
+        $this->attendance($worker, '2026-11-15 08:05:00', AttendanceStatus::OnTime);
+        $correction = $this->submit($worker, ['date' => '2026-11-15', 'corrected_check_out' => '17:00']);
+        $attendance = Attendance::where('employee_id', $worker->employee->id)->sole();
+        $attendance->forceFill(['status' => AttendanceStatus::Rejected, 'rejection_reason' => 'Di luar area'])->save();
+
+        try {
+            app(ApprovalFlowService::class)->approveStep($correction, $this->approver);
+            $this->fail('A check-out-only correction must not settle a rejected attendance.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('sudah ditolak oleh atasan', $exception->errors()['approve'][0]);
+        }
+
+        $attendance->refresh();
+        $this->assertSame(AttendanceStatus::Rejected, $attendance->status);
+        $this->assertNull($attendance->check_out);
+        $this->assertSame('pending', $correction->fresh()->status);
     }
 
     // ── Night shift lateness on the business date (BUG-COR-1) ────────────────

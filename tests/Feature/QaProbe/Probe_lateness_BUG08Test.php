@@ -16,6 +16,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 /**
@@ -83,13 +84,16 @@ class Probe_lateness_BUG08Test extends TestCase
         return $attendance;
     }
 
-    private function approveCorrection(Freelancer $worker, Attendance $attendance): void
+    /**
+     * @param  array<string, string>  $times
+     */
+    private function approveCorrection(Freelancer $worker, Attendance $attendance, array $times = ['corrected_check_in' => '08:05']): void
     {
         $correction = AttendanceCorrection::create([
             'freelancer_id' => $worker->id,
             'attendance_id' => $attendance->id,
             'date' => '2026-11-16',
-            'corrected_check_in' => '08:05',
+            ...$times,
             'reason' => 'Lupa / GPS bermasalah',
             'status' => 'pending',
             'current_step' => 1,
@@ -98,17 +102,35 @@ class Probe_lateness_BUG08Test extends TestCase
         $correction->applyCorrection();
     }
 
+    /**
+     * WP12 (owner sign-off): an approved correction that gives the real check-in revives a rejected
+     * attendance, with the rejection kept in its notes; one without a check-in is still refused and the
+     * row stays Ditolak.
+     */
     public function test_correction_does_not_erase_a_geofence_rejection(): void
     {
         $worker = $this->freelancer();
         $attendance = $this->attendanceWithStatus($worker, AttendanceStatus::Rejected);
+
+        try {
+            $this->approveCorrection($worker, $attendance, ['corrected_check_out' => '17:00']);
+            $this->fail('A check-out-only correction must not settle a rejected attendance.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('sudah ditolak oleh atasan', $exception->errors()['approve'][0]);
+        }
+
+        $this->assertSame(AttendanceStatus::Rejected, $attendance->fresh()->status, 'Without the real check-in a rejected check-in stays Ditolak');
+        $this->assertNull($attendance->fresh()->check_out);
 
         $this->approveCorrection($worker, $attendance);
         $attendance->refresh();
 
         fwrite(STDERR, "\nBUG08 rejected -> ".json_encode(['status' => $attendance->status?->value, 'late' => $attendance->late_minutes, 'rejection_reason' => $attendance->rejection_reason])."\n");
 
-        $this->assertSame(AttendanceStatus::Rejected, $attendance->status, 'A geofence-rejected check-in must stay Ditolak; the correction only changes the time');
+        $this->assertSame(AttendanceStatus::OnTime, $attendance->status, 'A correction with the real check-in revives the rejected day');
+        $this->assertTrue($attendance->is_corrected);
+        $this->assertNull($attendance->rejection_reason);
+        $this->assertStringContainsString('Di luar area kantor', (string) $attendance->notes);
     }
 
     public function test_correction_does_not_bypass_a_pending_geofence_approval(): void

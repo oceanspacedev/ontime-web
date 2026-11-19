@@ -6,8 +6,11 @@ use App\Models\Employee;
 use App\Models\Freelancer;
 use App\Models\Intern;
 use App\Models\LeaveRequest;
+use App\Models\ShiftSchedule;
 use Carbon\Carbon;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * Who may take annual leave, and how much is left. The panel, the API and the dashboard all ask
@@ -20,10 +23,111 @@ use Carbon\CarbonInterface;
  *   each year with its own days, and used days of a year are the approved annual leave days that
  *   fall inside it.
  * - Annual leave may not overlap another pending or approved leave of the same worker.
+ * - A leave is charged only for the days the worker would have worked ({@see self::chargedDates()}):
+ *   in a company that plans with shift rosters a rostered day off, and a blank day of a week that has
+ *   a roster, cost nothing. The list is frozen at the final approval and never recounted afterwards.
  */
 class AnnualLeaveService
 {
     public const DEFAULT_QUOTA = 12;
+
+    /** Refusal for a period in which the worker would not have worked a single day. */
+    public const NO_WORKDAY_MESSAGE = 'Tidak ada hari kerja pada rentang ini';
+
+    /**
+     * The dates of the period the leave is charged for, as Y-m-d in order.
+     *
+     * In a company that plans with shift rosters (`company_policies.uses_shift_roster`) a date is not
+     * charged when every schedule row of it is a day off, nor when it has no row while the worker is on a
+     * roster on it (from the date of their first roster row on, {@see ShiftSchedule::whereRosterRow()}) and
+     * has at least one roster row in that ISO week (a published week: blank means not scheduled). A blank
+     * date before the first roster row (fixed hours, the weekdays before a first row in mid-week included)
+     * or of a week whose only rows are an approved cover's own rows is charged, as is a blank date of a
+     * week without any row: the attendance ledger expects those days too. In any other company every
+     * calendar date is charged.
+     *
+     * @return list<string>
+     */
+    public function chargedDates(Employee|Intern|Freelancer|null $worker, CarbonInterface $startDate, CarbonInterface $endDate): array
+    {
+        $start = CarbonImmutable::parse($startDate->toDateString());
+        $end = CarbonImmutable::parse($endDate->toDateString());
+        $dates = [];
+
+        for ($date = $start; $date->lte($end); $date = $date->addDay()) {
+            $dates[] = $date->toDateString();
+        }
+
+        if (! $worker || $dates === [] || ! $worker->loadMissing('company.policy')->company?->policy?->uses_shift_roster) {
+            return $dates;
+        }
+
+        $column = match (true) {
+            $worker instanceof Employee => 'employee_id',
+            $worker instanceof Intern => 'intern_id',
+            default => 'freelancer_id',
+        };
+        $weekStart = $start->startOfWeek(CarbonInterface::MONDAY);
+        $weekEnd = $end->endOfWeek(CarbonInterface::SUNDAY);
+
+        /** @var array<string, bool> $working whether a date has at least one row that is not a day off */
+        $working = [];
+        /** @var array<string, true> $publishedWeeks Monday (Y-m-d) of every week with at least one roster row */
+        $publishedWeeks = [];
+        $inRange = fn (): Builder => ShiftSchedule::query()
+            ->where($column, $worker->getKey())
+            // A half-open range: the last day still matches where dates are stored with a time (SQLite).
+            ->where('date', '>=', $weekStart->toDateString())
+            ->where('date', '<', $weekEnd->addDay()->toDateString());
+
+        $inRange()
+            ->get(['date', 'is_day_off'])
+            ->each(function (ShiftSchedule $row) use (&$working): void {
+                $date = $row->date->toDateString();
+                $working[$date] = ($working[$date] ?? false) || ! $row->is_day_off;
+            });
+
+        ShiftSchedule::whereRosterRow($inRange())
+            ->pluck('date')
+            ->each(function (mixed $date) use (&$publishedWeeks): void {
+                $publishedWeeks[CarbonImmutable::parse(substr((string) $date, 0, 10))->startOfWeek(CarbonInterface::MONDAY)->toDateString()] = true;
+            });
+
+        $first = ShiftSchedule::whereRosterRow(ShiftSchedule::query())->where($column, $worker->getKey())->min('date');
+        $rosteredSince = $first === null ? null : substr((string) $first, 0, 10);
+
+        return array_values(array_filter($dates, function (string $date) use ($working, $publishedWeeks, $rosteredSince): bool {
+            if (array_key_exists($date, $working)) {
+                return $working[$date];
+            }
+
+            if ($rosteredSince === null || $date < $rosteredSince) {
+                return true;
+            }
+
+            return ! isset($publishedWeeks[CarbonImmutable::parse($date)->startOfWeek(CarbonInterface::MONDAY)->toDateString()]);
+        }));
+    }
+
+    /**
+     * Charged dates per calendar year, for example [2026 => 3, 2027 => 2].
+     *
+     * @param  list<string>  $dates
+     * @return array<int, int>
+     */
+    public function datesPerYear(array $dates): array
+    {
+        $perYear = [];
+
+        foreach ($dates as $date) {
+            $year = (int) substr($date, 0, 4);
+            $perYear[$year] = ($perYear[$year] ?? 0) + 1;
+        }
+
+        ksort($perYear);
+
+        return $perYear;
+    }
 
     public function isEligible(Employee|Intern|Freelancer|null $profile): bool
     {
@@ -65,7 +169,7 @@ class AnnualLeaveService
             ->whereDate('end_date', '>=', "{$year}-01-01")
             ->when($exceptLeaveRequestId, fn ($query) => $query->whereKeyNot($exceptLeaveRequestId))
             ->when($lockRows, fn ($query) => $query->lockForUpdate())
-            ->get(['id', 'start_date', 'end_date', 'days_count'])
+            ->get(['id', 'start_date', 'end_date', 'days_count', 'charged_dates'])
             ->sum(fn (LeaveRequest $leave): int => $this->daysInYear($leave, $year));
     }
 
@@ -90,11 +194,16 @@ class AnnualLeaveService
     }
 
     /**
-     * Days of an approved request charged to the year. A request inside one year keeps its stored
-     * day count; one crossing the new year is split by calendar days.
+     * Days of an approved request charged to the year. A request with a stored list of charged dates
+     * is split by that list. An older one inside one year keeps its stored day count; one crossing the
+     * new year is split by calendar days.
      */
     private function daysInYear(LeaveRequest $leave, int $year): int
     {
+        if (is_array($leave->charged_dates)) {
+            return $this->datesPerYear($leave->chargedDateStrings())[$year] ?? 0;
+        }
+
         if ($leave->start_date->year === $leave->end_date->year) {
             return $leave->start_date->year === $year ? (int) $leave->days_count : 0;
         }
@@ -106,11 +215,16 @@ class AnnualLeaveService
      * Why the period does not fit the remaining quota of each year it touches, or null. A period
      * inside one year is charged `$daysCount` when given (the stored count of an existing request).
      * Messages speak to the worker, or name the worker for an approver; the year is named only when
-     * it is not the current one.
+     * it is not the current one. A period crossing the new year is split by `$chargedDates` (computed
+     * from the roster when not given).
+     *
+     * @param  list<string>|null  $chargedDates
      */
-    private function periodQuotaError(Employee $profile, CarbonInterface $startDate, CarbonInterface $endDate, ?int $exceptLeaveRequestId, bool $lockRows, bool $forApprover, ?int $daysCount = null): ?string
+    private function periodQuotaError(Employee $profile, CarbonInterface $startDate, CarbonInterface $endDate, ?int $exceptLeaveRequestId, bool $lockRows, bool $forApprover, ?int $daysCount = null, ?array $chargedDates = null): ?string
     {
-        $perYear = $this->daysPerYear($startDate, $endDate);
+        $perYear = $startDate->year === $endDate->year
+            ? $this->daysPerYear($startDate, $endDate)
+            : $this->datesPerYear($chargedDates ?? $this->chargedDates($profile, $startDate, $endDate));
 
         if (count($perYear) === 1 && $daysCount !== null) {
             $perYear = [array_key_first($perYear) => $daysCount];
@@ -282,7 +396,9 @@ class AnnualLeaveService
             return "{$name} tidak memiliki jatah cuti tahunan. Tolak pengajuan ini, atau aktifkan cuti tahunan di data karyawannya terlebih dahulu.";
         }
 
-        if ($error = $this->periodQuotaError($profile, $leave->start_date, $leave->end_date, $leave->getKey(), $lockRows, forApprover: true, daysCount: (int) $leave->days_count)) {
+        $chargedDates = is_array($leave->charged_dates) ? $leave->chargedDateStrings() : null;
+
+        if ($error = $this->periodQuotaError($profile, $leave->start_date, $leave->end_date, $leave->getKey(), $lockRows, forApprover: true, daysCount: (int) $leave->days_count, chargedDates: $chargedDates)) {
             return $error;
         }
 

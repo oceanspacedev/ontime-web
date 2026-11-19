@@ -79,7 +79,10 @@ class AttendanceCorrectionInputTest extends TestCase
 
     public function test_the_hh_mm_time_the_mobile_app_sends_is_accepted(): void
     {
-        Sanctum::actingAs($this->makeWorker());
+        $worker = $this->makeWorker();
+        // A check-out alone needs a check-in to close (WP12).
+        Attendance::create(['employee_id' => $worker->employee->id, 'date' => '2026-11-10', 'segment' => 1, 'check_in' => '2026-11-10 08:00:00', 'status' => 'on_time']);
+        Sanctum::actingAs($worker);
 
         $this->postJson('/api/v1/attendance-corrections', ['date' => '2026-11-10', 'corrected_check_out' => '17:00', 'reason' => 'Lupa absen pulang'])
             ->assertCreated();
@@ -104,7 +107,12 @@ class AttendanceCorrectionInputTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['corrected_check_in']);
 
+        // WP12: a check-out alone on a day without any check-in is refused; the worker must give the check-in too.
         $this->putJson("/api/v1/attendance-corrections/{$id}", ['corrected_check_in' => '', 'corrected_check_out' => '17:00'])
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.corrected_check_in.0', AttendanceCorrection::CHECK_IN_REQUIRED_MESSAGE);
+
+        $this->putJson("/api/v1/attendance-corrections/{$id}", ['corrected_check_in' => '08:00', 'corrected_check_out' => '17:00'])
             ->assertOk();
     }
 
@@ -172,6 +180,9 @@ class AttendanceCorrectionInputTest extends TestCase
 
         $this->assertSame(0, AttendanceCorrection::count());
 
+        // A check-out alone closes the check-in of the day (WP12: never a row without a check-in).
+        Attendance::create(['employee_id' => auth()->user()->employee->id, 'date' => '2026-11-10', 'segment' => 1, 'check_in' => '2026-11-10 08:00:00', 'status' => 'on_time']);
+
         Livewire::test(CreateAttendanceCorrection::class)
             ->fillForm(['date' => '2026-11-10', 'reason' => 'Lupa absen', 'corrected_check_in' => null, 'corrected_check_out' => '17:00'])
             ->call('create')
@@ -233,15 +244,32 @@ class AttendanceCorrectionInputTest extends TestCase
         $this->assertSame(480, $attendance->workedMinutes());
     }
 
-    public function test_check_out_only_correction_of_a_night_shift_without_check_in_lands_on_the_next_day(): void
+    /**
+     * WP12 (owner sign-off): a check-out alone on a day without a check-in is refused at submission and
+     * again at approval (a stale one), and no row without a check-in is ever created.
+     */
+    public function test_check_out_only_correction_of_a_night_shift_without_check_in_is_refused(): void
     {
         $night = Shift::create(['company_id' => $this->company->id, 'name' => 'Malam', 'code' => 'N', 'start_time' => '22:00', 'end_time' => '06:00']);
         $worker = $this->makeWorker();
         $worker->employee->update(['shift_id' => $night->id]);
+        Sanctum::actingAs($worker->fresh());
 
-        AttendanceCorrection::create(['employee_id' => $worker->employee->id, 'date' => '2026-11-10', 'corrected_check_out' => '06:00', 'reason' => 'Lupa absen pulang', 'status' => 'pending'])->applyCorrection();
+        $this->postJson('/api/v1/attendance-corrections', ['date' => '2026-11-10', 'corrected_check_out' => '06:00', 'reason' => 'Lupa absen pulang'])
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.corrected_check_in.0', AttendanceCorrection::CHECK_IN_REQUIRED_MESSAGE);
 
-        $this->assertSame('2026-11-11 06:00:00', Attendance::where('employee_id', $worker->employee->id)->sole()->check_out->toDateTimeString());
+        $correction = AttendanceCorrection::create(['employee_id' => $worker->employee->id, 'date' => '2026-11-10', 'corrected_check_out' => '06:00', 'reason' => 'Lupa absen pulang', 'status' => 'pending']);
+
+        try {
+            $correction->applyCorrection();
+            $this->fail('A check-out without a check-in must not be applied.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('Isi juga jam masuk', $exception->errors()['approve'][0]);
+        }
+
+        $this->assertSame(0, Attendance::count());
+        $this->assertSame('pending', $correction->fresh()->status);
     }
 
     public function test_approving_a_legacy_correction_without_any_time_is_refused_and_changes_nothing(): void

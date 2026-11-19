@@ -1,6 +1,6 @@
 /// <reference types="jest" />
-import { approvalReasonOf, buildCheckForm, isOffScheduleToday, NO_COVER_SHIFT_MESSAGE, offScheduleSelectionError } from '../api/attendance';
-import type { CoverOptions, TodaySchedule } from '../api/types';
+import { approvalReasonOf, buildCheckForm, coverLocationOf, currentScheduleId, freshCurrentScheduleId, isOffScheduleToday, NO_COVER_SHIFT_MESSAGE, offScheduleSelectionError } from '../api/attendance';
+import type { CoverOptions, TodaySchedule, TodayScheduleItem } from '../api/types';
 
 jest.mock('expo-location', () => ({}));
 jest.mock('react-native', () => ({ Platform: { OS: 'android' }, Linking: {} }));
@@ -82,5 +82,90 @@ describe('buildCheckForm', () => {
     const plain = buildCheckForm({ coverShiftId: null, replacesWorker: null });
     expect(plain.get('cover_shift_id')).toBeNull();
     expect(plain.get('replaces_worker')).toBeNull();
+  });
+});
+
+describe('buildCheckForm with sessions and a cover outlet', () => {
+  it('sends the schedule and the cover outlet only when present', () => {
+    const named = buildCheckForm({ scheduleId: 41, coverLocationId: 7 });
+    expect(named.get('schedule_id')).toBe('41');
+    expect(named.get('cover_location_id')).toBe('7');
+
+    for (const plain of [buildCheckForm({}), buildCheckForm({ scheduleId: null, coverLocationId: null })]) {
+      expect(plain.get('schedule_id')).toBeNull();
+      expect(plain.get('cover_location_id')).toBeNull();
+    }
+  });
+});
+
+describe('currentScheduleId', () => {
+  function item(overrides: Partial<TodayScheduleItem>): TodayScheduleItem {
+    return {
+      schedule_id: 1,
+      sequence: 1,
+      segment: 1,
+      is_current: false,
+      is_day_off: false,
+      shift: { id: 1, name: 'Pagi', code: 'P' },
+      outlet: null,
+      section: null,
+      start_time: '08:00',
+      end_time: '12:00',
+      crosses_midnight: false,
+      late_tolerance_minutes: 15,
+      normal_minutes: 240,
+      state: 'nanti',
+      check_out_closes_at: null,
+      attendance: null,
+      ...overrides,
+    };
+  }
+
+  it('names the current session on a day with several schedules', () => {
+    const schedules = [item({ schedule_id: 1, state: 'pulang' }), item({ schedule_id: 2, sequence: 2, is_current: true, start_time: '17:00', end_time: '22:00' })];
+    expect(currentScheduleId({ schedules }, false)).toBe(2);
+  });
+
+  it('lets the server pick on a one-schedule day, on an older server, and off schedule', () => {
+    expect(currentScheduleId({ schedules: [item({ is_current: true })] }, false)).toBeNull();
+    expect(currentScheduleId({}, false)).toBeNull();
+    expect(currentScheduleId(null, false)).toBeNull();
+    const schedules = [item({ schedule_id: 1, is_current: true }), item({ schedule_id: 2, sequence: 2 })];
+    expect(currentScheduleId({ schedules }, true)).toBeNull();
+    // Standing company hours have no roster row to name.
+    expect(currentScheduleId({ schedules: [item({ schedule_id: null, is_current: true }), item({ schedule_id: 2 })] }, false)).toBeNull();
+  });
+
+  it('lets the server pick on a split-shift day, whose segments are one schedule', () => {
+    const split = [
+      item({ schedule_id: 5, segment: 1, start_time: '07:45', end_time: '13:00', state: 'pulang' }),
+      item({ schedule_id: 5, segment: 2, start_time: '17:45', end_time: '22:00', is_current: true }),
+    ];
+    expect(currentScheduleId({ schedules: split }, false)).toBeNull();
+    // With a second schedule the split shift's current segment is named by its schedule.
+    expect(currentScheduleId({ schedules: [...split, item({ schedule_id: 6, sequence: 2, start_time: '22:30', end_time: '23:30' })] }, false)).toBe(5);
+  });
+
+  it('names the session current on a fresh read, not the cached card', async () => {
+    // The cached card (read at 11:59) still had session 1 current; by the submit at 12:00 it is session 2.
+    const fresh = [item({ schedule_id: 1, state: 'belum' }), item({ schedule_id: 2, sequence: 2, is_current: true, start_time: '13:00', end_time: '17:00' })];
+    const read = jest.fn(() => Promise.resolve({ schedules: fresh }));
+    await expect(freshCurrentScheduleId(read)).resolves.toBe(2);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the server pick when the fresh read fails', async () => {
+    await expect(freshCurrentScheduleId(() => Promise.reject(new Error('offline')))).resolves.toBeNull();
+  });
+});
+
+describe('coverLocationOf', () => {
+  it('keeps a picked outlet only while it is on offer', () => {
+    const withOutlets: CoverOptions = { ...options, outlets: [{ id: 7, name: 'JChicken Ciledug' }] };
+    expect(coverLocationOf(withOutlets, 7)).toBe(7);
+    expect(coverLocationOf(withOutlets, 8)).toBeNull();
+    expect(coverLocationOf(withOutlets, null)).toBeNull();
+    // An older server lists no outlets.
+    expect(coverLocationOf(options, 7)).toBeNull();
   });
 });

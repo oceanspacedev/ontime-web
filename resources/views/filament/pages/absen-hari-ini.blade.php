@@ -178,6 +178,19 @@
                                     </x-filament::input.wrapper>
                                 </label>
                             @endif
+                            @if(count($coverOptions['outlets'] ?? []) > 0)
+                                <label class="block space-y-1">
+                                    <span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Outlet tempat bertugas (opsional)</span>
+                                    <x-filament::input.wrapper>
+                                        <x-filament::input.select wire:model="offScheduleLocationId">
+                                            <option value="">Sesuai lokasi saat absen</option>
+                                            @foreach($coverOptions['outlets'] as $outlet)
+                                                <option value="{{ $outlet['id'] }}">{{ $outlet['name'] }}</option>
+                                            @endforeach
+                                        </x-filament::input.select>
+                                    </x-filament::input.wrapper>
+                                </label>
+                            @endif
                             @if(count($coverOptions['colleagues']) > 0)
                                 <label class="block space-y-1">
                                     <span class="text-xs font-semibold text-gray-700 dark:text-gray-300">Menggantikan siapa (opsional)</span>
@@ -185,7 +198,7 @@
                                         <x-filament::input.select wire:model="offScheduleReplaces">
                                             <option value="">Tidak ada</option>
                                             @foreach($coverOptions['colleagues'] as $colleague)
-                                                <option value="{{ $colleague['key'] }}">{{ collect([$colleague['name'], $colleague['shift']['start_time'] ?? null, $colleague['outlet']['name'] ?? null])->filter()->implode(' · ') }}{{ $colleague['has_checked_in'] ? ' (sudah absen)' : '' }}</option>
+                                                <option value="{{ $colleague['schedule_key'] ?? $colleague['key'] }}">{{ collect([$colleague['name'], $colleague['shift']['start_time'] ?? null, $colleague['outlet']['name'] ?? null])->filter()->implode(' · ') }}{{ $colleague['has_checked_in'] ? ' (sudah absen)' : '' }}</option>
                                             @endforeach
                                         </x-filament::input.select>
                                     </x-filament::input.wrapper>

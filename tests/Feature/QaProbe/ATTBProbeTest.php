@@ -405,17 +405,20 @@ class ATTBProbeTest extends TestCase
 
         $this->at(self::D.' 07:45:00');
         $this->checkIn($employee)->assertOk();
-        $this->at(self::D.' 17:45:00');
+        // D1: segment 1 holds the next check-in back only until its scheduled end (13:00).
+        $this->at(self::D.' 12:30:00');
         $this->checkIn($employee)->assertStatus(409);
         $this->assertSame(1, Attendance::where('employee_id', $employee->id)->count());
         $this->assertNull(Attendance::where('employee_id', $employee->id)->value('check_out'));
 
-        $this->checkOut($employee)->assertOk();
-        $this->checkIn($employee)->assertOk();
+        // After it, segment 2 is checked in and the open segment 1 is left as a missing check-out.
+        $this->at(self::D.' 17:45:00');
+        $this->checkIn($employee)->assertOk()->assertJsonPath('attendance.segment', 2);
         $this->at(self::D.' 22:00:00');
-        $this->checkOut($employee)->assertOk();
+        $this->checkOut($employee)->assertOk()->assertJsonPath('attendance.segment', 2);
         $this->checkIn($employee)->assertStatus(409);
         $this->assertSame(2, Attendance::where('employee_id', $employee->id)->count());
+        $this->assertNull(Attendance::where('employee_id', $employee->id)->where('segment', 1)->value('check_out'));
     }
 
     // ── ATT-045: first night-shift check-in after midnight ───────────────────

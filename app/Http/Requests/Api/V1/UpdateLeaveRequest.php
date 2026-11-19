@@ -77,7 +77,6 @@ class UpdateLeaveRequest extends FormRequest
                     return;
                 }
 
-                $daysCount = (int) $startDate->diffInDays($endDate) + 1;
                 $datesChanged = $startDate->toDateString() !== $leave->start_date->toDateString()
                     || $endDate->toDateString() !== $leave->end_date->toDateString();
 
@@ -91,6 +90,13 @@ class UpdateLeaveRequest extends FormRequest
 
                 $leaveService = app(AnnualLeaveService::class);
                 $profile = $leave->getWorkerProfile();
+                $daysCount = $datesChanged ? count($leaveService->chargedDates($profile, $startDate, $endDate)) : (int) $leave->days_count;
+
+                if ($datesChanged && $daysCount === 0) {
+                    $validator->errors()->add('start_date', AnnualLeaveService::NO_WORKDAY_MESSAGE.'.');
+
+                    return;
+                }
 
                 if ($error = $leaveService->updateError($leave, $this->input('leave_type'), $daysCount, $startDate, $endDate)
                     ?? ($datesChanged && $profile ? $leaveService->overlapError($profile, $startDate, $endDate, $leave->getKey()) : null)) {

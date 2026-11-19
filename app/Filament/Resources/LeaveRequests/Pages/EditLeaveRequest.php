@@ -8,6 +8,8 @@ use App\Services\AnnualLeaveService;
 use Carbon\Carbon;
 use Filament\Actions\DeleteAction;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class EditLeaveRequest extends EditRecord
@@ -24,8 +26,9 @@ class EditLeaveRequest extends EditRecord
     /**
      * Applies the same rules as filing a new request, so an edit cannot turn a leave into annual
      * leave for someone without it, stretch it past the remaining quota, move it outside the
-     * allowed period or onto the days of another leave. Changing only the reason
-     * or attachment of an existing annual leave always saves.
+     * allowed period, onto the days of another leave or onto days the worker would not work.
+     * Changing only the reason or attachment of an existing leave always saves and keeps its day
+     * count. New dates are charged by the roster ({@see AnnualLeaveService::chargedDates()}).
      */
     protected function mutateFormDataBeforeSave(array $data): array
     {
@@ -41,7 +44,6 @@ class EditLeaveRequest extends EditRecord
             ]);
         }
 
-        $daysCount = (int) $startDate->diffInDays($endDate) + 1;
         $datesChanged = $startDate->toDateString() !== $record->start_date->toDateString()
             || $endDate->toDateString() !== $record->end_date->toDateString();
 
@@ -51,6 +53,11 @@ class EditLeaveRequest extends EditRecord
 
         $leaveService = app(AnnualLeaveService::class);
         $profile = $record->getWorkerProfile();
+        $daysCount = $datesChanged ? count($leaveService->chargedDates($profile, $startDate, $endDate)) : (int) $record->days_count;
+
+        if ($datesChanged && $daysCount === 0) {
+            throw ValidationException::withMessages(['data.start_date' => AnnualLeaveService::NO_WORKDAY_MESSAGE.'.']);
+        }
 
         $error = $leaveService->updateError($record, $data['leave_type'] ?? null, $daysCount, $startDate, $endDate)
             ?? ($datesChanged && $profile ? $leaveService->overlapError($profile, $startDate, $endDate, $record->getKey()) : null);
@@ -62,5 +69,35 @@ class EditLeaveRequest extends EditRecord
         $data['days_count'] = $daysCount;
 
         return $data;
+    }
+
+    /**
+     * Saves the leave; an approved leave whose dates moved takes its leave rows along
+     * ({@see LeaveRequest::syncAttendanceRows()}), all or nothing.
+     *
+     * @param  LeaveRequest  $record
+     */
+    protected function handleRecordUpdate(Model $record, array $data): Model
+    {
+        $previousStart = $record->start_date->toDateString();
+        $previousEnd = $record->end_date->toDateString();
+        $previousDates = $record->chargedDateStrings();
+
+        try {
+            return DB::transaction(function () use ($record, $data, $previousStart, $previousEnd, $previousDates): Model {
+                $record->update($data);
+
+                if ($record->status === 'approved'
+                    && ($record->start_date->toDateString() !== $previousStart || $record->end_date->toDateString() !== $previousEnd)) {
+                    $record->syncAttendanceRows($previousDates);
+                }
+
+                return $record;
+            });
+        } catch (ValidationException $exception) {
+            $record->refresh();
+
+            throw ValidationException::withMessages(['data.start_date' => collect($exception->errors())->flatten()->first()]);
+        }
     }
 }

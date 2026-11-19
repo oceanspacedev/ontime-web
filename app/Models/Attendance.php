@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\AttendanceStatus;
 use App\Services\AttendanceLatenessService;
 use App\Services\OffScheduleCheckInService;
+use App\Services\SessionResolver;
 use App\Services\WorkScheduleService;
 use App\Traits\ScopesToWorkerVisibility;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,13 +19,21 @@ class Attendance extends Model
 {
     use HasFactory, ScopesToWorkerVisibility;
 
+    /** pending_punch: the check-in waits for approval (a check-out tapped meanwhile waits with it). */
+    public const PUNCH_CHECK_IN = 'check_in';
+
+    /** pending_punch: only the check-out waits; the check-in was settled before. */
+    public const PUNCH_CHECK_OUT = 'check_out';
+
     protected $fillable = [
         'employee_id',
         'intern_id',
         'freelancer_id',
         'shift_id',
+        'shift_schedule_id',
         'company_location_id',
         'date',
+        'schedule_sequence',
         'segment',
         'check_in',
         'check_out',
@@ -41,6 +50,7 @@ class Attendance extends Model
         'is_off_schedule',
         'replaced_worker_type',
         'replaced_worker_id',
+        'replaced_schedule_id',
         'notes',
         'is_corrected',
         'status_overridden',
@@ -54,6 +64,78 @@ class Attendance extends Model
         'liveness_frames',
         'current_step',
         'rejection_reason',
+        'sched_start_at',
+        'sched_end_at',
+        'sched_tolerance_minutes',
+        'sched_scheduled_minutes',
+        'sched_normal_minutes',
+        'sched_shift_name',
+        'sched_shift_code',
+        'sched_outlet_name',
+        'sched_section',
+        'sched_source',
+        'pending_punch',
+        'status_before_check_out',
+        'check_out_rejected_at',
+        'checks_before_check_out',
+        'state_before_leave',
+    ];
+
+    /**
+     * The verification results a check-out may overwrite on a row ({@see self::$checks_before_check_out}).
+     *
+     * @var list<string>
+     */
+    public const CHECK_RESULT_COLUMNS = [
+        'is_out_of_bounds',
+        'is_mock_location',
+        'is_face_verified',
+        'face_match_score',
+        'face_verification_notes',
+        'liveness_verified',
+        'liveness_notes',
+        'liveness_frames',
+    ];
+
+    /**
+     * What an admin edit or a correction may change on a row, kept on the correction as it was before
+     * ({@see AttendanceCorrection::$before_values}).
+     *
+     * @var list<string>
+     */
+    public const AUDITED_COLUMNS = [
+        'check_in',
+        'check_out',
+        'status',
+        'late_minutes',
+        'check_in_late_minutes',
+        'early_leave_minutes',
+        'shift_id',
+        'company_location_id',
+        'is_off_schedule',
+        'rejection_reason',
+        'notes',
+    ];
+
+    /**
+     * The link to the roster row and the schedule that applied at check-in, written together by every
+     * writer of a checked-in row ({@see self::fillSnapshot()}).
+     *
+     * @var list<string>
+     */
+    public const SNAPSHOT_COLUMNS = [
+        'shift_schedule_id',
+        'schedule_sequence',
+        'sched_start_at',
+        'sched_end_at',
+        'sched_tolerance_minutes',
+        'sched_scheduled_minutes',
+        'sched_normal_minutes',
+        'sched_shift_name',
+        'sched_shift_code',
+        'sched_outlet_name',
+        'sched_section',
+        'sched_source',
     ];
 
     protected static function booted(): void
@@ -118,10 +200,21 @@ class Attendance extends Model
             'early_leave_minutes' => 'integer',
             'is_off_schedule' => 'boolean',
             'replaced_worker_id' => 'integer',
+            'replaced_schedule_id' => 'integer',
             'liveness_verified' => 'boolean',
             'liveness_frames' => 'array',
             'current_step' => 'integer',
             'status' => AttendanceStatus::class,
+            'shift_schedule_id' => 'integer',
+            'schedule_sequence' => 'integer',
+            'sched_start_at' => 'datetime',
+            'sched_end_at' => 'datetime',
+            'sched_tolerance_minutes' => 'integer',
+            'sched_scheduled_minutes' => 'integer',
+            'sched_normal_minutes' => 'integer',
+            'check_out_rejected_at' => 'datetime',
+            'checks_before_check_out' => 'array',
+            'state_before_leave' => 'array',
         ];
     }
 
@@ -133,6 +226,33 @@ class Attendance extends Model
     public function shift(): BelongsTo
     {
         return $this->belongsTo(Shift::class);
+    }
+
+    /**
+     * Roster row the attendance belongs to; null when it was judged against a default shift or the company hours.
+     */
+    public function schedule(): BelongsTo
+    {
+        return $this->belongsTo(ShiftSchedule::class, 'shift_schedule_id');
+    }
+
+    /**
+     * Whether the row keeps the schedule that applied at check-in (the sched_* columns).
+     */
+    public function hasSnapshot(): bool
+    {
+        return $this->sched_source !== null;
+    }
+
+    /**
+     * Set the schedule snapshot ({@see SessionResolver::snapshotFor()}) on the row without saving it.
+     * Keys that are not snapshot columns are ignored.
+     *
+     * @param  array<string, mixed>  $snapshot
+     */
+    public function fillSnapshot(array $snapshot): static
+    {
+        return $this->forceFill(array_intersect_key($snapshot, array_flip(self::SNAPSHOT_COLUMNS)));
     }
 
     /**
@@ -199,28 +319,47 @@ class Attendance extends Model
     }
 
     /**
-     * Lateness is the snapshot judged at check-in, which a roster change on that date keeps up to date
-     * ({@see AttendanceLatenessService::recalculate()}); a default shift or policy edited meanwhile does
-     * not change it. Rows without that value (for example a corrected check-in) are judged against the
-     * schedule that applies now, on the row's own business date.
+     * Lateness is the verdict judged at check-in; a roster change, a default shift or a policy edited
+     * meanwhile does not change it (D4). Rows without that value (for example a corrected check-in) are judged against the
+     * schedule kept in the row's snapshot, and only a row without a snapshot against the schedule that
+     * applies now, on the row's own business date.
      *
      * An approved off-schedule check-in ("Masuk di luar jadwal") also updates the rosters of its date.
      */
     public function applyGeofenceApproval(): void
     {
+        // Only the check-out waited: the check-in was settled before, so its verdict comes back as it was.
+        if ($this->isCheckOutRound()) {
+            $this->update([
+                'status' => $this->freshStatusBeforeCheckOut(),
+                'pending_punch' => null,
+                'status_before_check_out' => null,
+                'checks_before_check_out' => null,
+            ]);
+
+            return;
+        }
+
         $lateMinutes = 0;
-        // Read again: a roster change committed since this model was loaded may have judged it anew.
+        // Read again: an admin edit committed since this model was loaded may have judged it anew.
         $snapshot = $this->exists ? static::query()->whereKey($this->getKey())->value('check_in_late_minutes') : $this->check_in_late_minutes;
 
         if ($this->check_in && $snapshot !== null) {
             $lateMinutes = (int) $snapshot;
         } elseif ($this->check_in) {
-            $lateMinutes = app(AttendanceLatenessService::class)->judge($this)['late_minutes'];
+            // Read again for the same reason: the snapshot may have been written meanwhile.
+            $stored = $this->exists ? (static::query()->whereKey($this->getKey())->first() ?? $this) : $this;
+
+            $lateMinutes = $stored->hasSnapshot()
+                ? app(WorkScheduleService::class)->snapshotLateMinutes($stored)
+                : app(AttendanceLatenessService::class)->judge($this)['late_minutes'];
         }
 
         $this->update([
             'status' => $lateMinutes > 0 ? AttendanceStatus::Late : AttendanceStatus::OnTime,
             'late_minutes' => $lateMinutes,
+            'pending_punch' => null,
+            'status_before_check_out' => null,
         ]);
 
         if ($this->is_off_schedule) {
@@ -272,12 +411,116 @@ class Attendance extends Model
         return $this->approvalSteps()->where('status', 'pending')->doesntExist();
     }
 
+    /**
+     * Reject the punch that waits for approval. When only the check-out waited (the check-in was already
+     * settled), only the check-out is voided: its time, photo and coordinates are cleared, the check-in's
+     * verdict comes back, and the row is left without a check-out, to be fixed by a correction. Otherwise
+     * (the check-in waited, or a row pending from before rounds were told apart) the whole row is rejected.
+     */
     public function applyGeofenceRejection(?string $reason = null): void
     {
+        if ($this->isCheckOutRound()) {
+            $this->update([
+                'check_out' => null,
+                'check_out_lat' => null,
+                'check_out_lng' => null,
+                'check_out_photo' => null,
+                // The flags and verification results the voided check-out wrote go with it.
+                ...$this->checkResultsBeforeCheckOut(),
+                'status' => $this->freshStatusBeforeCheckOut(),
+                'check_out_rejected_at' => now(),
+                'rejection_reason' => $reason,
+                'pending_punch' => null,
+                'status_before_check_out' => null,
+                'checks_before_check_out' => null,
+            ]);
+
+            return;
+        }
+
         $this->update([
             'status' => AttendanceStatus::Rejected,
             'rejection_reason' => $reason,
+            'pending_punch' => null,
+            'status_before_check_out' => null,
         ]);
+    }
+
+    /**
+     * The verification results of the check-in as they were before the check-out that waits for approval
+     * ({@see self::CHECK_RESULT_COLUMNS}); empty for a row without them kept (a round from before they were
+     * kept), which then keeps what it has.
+     *
+     * @return array<string, mixed>
+     */
+    private function checkResultsBeforeCheckOut(): array
+    {
+        $stored = $this->exists
+            ? static::query()->whereKey($this->getKey())->first(['checks_before_check_out'])?->checks_before_check_out
+            : $this->checks_before_check_out;
+
+        return is_array($stored) ? array_intersect_key($stored, array_flip(self::CHECK_RESULT_COLUMNS)) : [];
+    }
+
+    /**
+     * The audited columns of the row as they are now ({@see self::AUDITED_COLUMNS} and the schedule
+     * snapshot), as plain values for a correction's before_values.
+     *
+     * @return array<string, mixed>
+     */
+    public function auditValues(): array
+    {
+        $values = [];
+
+        foreach ([...self::AUDITED_COLUMNS, ...self::SNAPSHOT_COLUMNS] as $column) {
+            $value = $this->getAttribute($column);
+            $values[$column] = match (true) {
+                $value instanceof \BackedEnum => $value->value,
+                $value instanceof \DateTimeInterface => $value->format('Y-m-d H:i:s'),
+                default => $value,
+            };
+        }
+
+        return $values;
+    }
+
+    /**
+     * Whether the approval round waiting on this row is about its check-out only.
+     */
+    public function isCheckOutRound(): bool
+    {
+        return $this->pending_punch === self::PUNCH_CHECK_OUT && filled($this->status_before_check_out);
+    }
+
+    /**
+     * The status the row had before its check-out went to approval; on time when it cannot be read.
+     * It is read again: an admin edit or a correction committed since this model was loaded may have
+     * judged the check-in anew ({@see self::rejudgeSettledCheckIn()}).
+     */
+    private function freshStatusBeforeCheckOut(): AttendanceStatus
+    {
+        $stored = $this->exists
+            ? static::query()->whereKey($this->getKey())->value('status_before_check_out')
+            : $this->status_before_check_out;
+
+        return AttendanceStatus::tryFrom((string) ($stored ?? $this->status_before_check_out)) ?? AttendanceStatus::OnTime;
+    }
+
+    /**
+     * Apply a new lateness verdict of the check-in to a row whose check-out alone waits for approval,
+     * without saving it. The check-in was settled, so its late minutes are reported at once and the
+     * status the approval or rejection brings back follows the new verdict. A settled status other than
+     * on time or late (set by hand) is kept.
+     */
+    public function rejudgeSettledCheckIn(int $lateMinutes): void
+    {
+        $this->late_minutes = $lateMinutes;
+
+        $before = AttendanceStatus::tryFrom((string) $this->status_before_check_out);
+
+        if (in_array($before, [AttendanceStatus::OnTime, AttendanceStatus::Late], true)) {
+            $this->status_before_check_out = ($lateMinutes > 0 ? AttendanceStatus::Late : AttendanceStatus::OnTime)->value;
+        }
     }
 
     // ── Scopes ───────────────────────────────────────────────────────────────

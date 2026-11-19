@@ -121,7 +121,8 @@ class CoordinatorDemoSeeder extends Seeder
             ['name' => 'PT Franchise Ciledug (Demo)', 'is_active' => true],
         );
         app(ApprovalFlowService::class)->createDefaultFlows($company);
-        $company->policy()->update(['require_gps' => false, 'require_photo' => false, 'require_face_recognition' => false, 'require_liveness' => false]);
+        // The outlets work on shift rosters: a day without a schedule is not scheduled (D3).
+        $company->policy()->update(['require_gps' => false, 'require_photo' => false, 'require_face_recognition' => false, 'require_liveness' => false, 'uses_shift_roster' => true]);
 
         $brands = [];
         $outlets = [];

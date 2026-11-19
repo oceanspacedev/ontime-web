@@ -75,6 +75,10 @@ class EditOvertimeRequest extends EditRecord
 
         if ($dateChanged) {
             $service->assertDateWithinWindow($date, 'data.date');
+
+            if ($worker !== null) {
+                $service->assertNotOnLeave($worker, $date, 'data.date');
+            }
         }
 
         $data['duration_minutes'] = $service->validatedDuration($startTime, $endTime, 'data.end_time');

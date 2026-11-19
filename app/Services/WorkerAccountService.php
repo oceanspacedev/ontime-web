@@ -11,7 +11,6 @@ use App\Models\Intern;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRequest;
 use App\Models\Resignation;
-use App\Models\ShiftSchedule;
 use App\Models\User;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -133,10 +132,7 @@ final class WorkerAccountService
 
             $worker->update(['status' => $status, 'end_date' => $endDate->toDateString()]);
 
-            ShiftSchedule::query()
-                ->where($worker instanceof Intern ? 'intern_id' : 'freelancer_id', $worker->getKey())
-                ->whereDate('date', '>', $lastDay->toDateString())
-                ->delete();
+            app(ShiftAssignmentService::class)->deleteFutureFor($worker, $lastDay);
 
             if ($worker->user) {
                 $worker->user->update(['is_active' => false]);
@@ -377,7 +373,7 @@ final class WorkerAccountService
         $column = $this->workerColumn($worker);
 
         foreach ($this->historyModels($worker) as $history) {
-            if ($history::query()->where($column, $worker->getKey())->exists()) {
+            if ($this->historyQuery($history)->where($column, $worker->getKey())->exists()) {
                 return true;
             }
         }
@@ -400,7 +396,7 @@ final class WorkerAccountService
         $worker = $query->getModel();
         $column = $this->workerColumn($worker);
         $subqueries = array_map(
-            fn (string $history) => $history::query()->toBase()->selectRaw('1')->whereColumn((new $history)->qualifyColumn($column), $worker->getQualifiedKeyName())->limit(1),
+            fn (string $history) => $this->historyQuery($history)->toBase()->selectRaw('1')->whereColumn((new $history)->qualifyColumn($column), $worker->getQualifiedKeyName())->limit(1),
             $this->historyModels($worker),
         );
 
@@ -412,6 +408,21 @@ final class WorkerAccountService
             'coalesce('.implode(', ', array_map(fn ($subquery): string => "({$subquery->toSql()})", $subqueries)).', 0) as '.self::WORK_HISTORY_FLAG,
             array_merge(...array_map(fn ($subquery): array => $subquery->getBindings(), $subqueries)),
         );
+    }
+
+    /**
+     * The rows of one history table that count as work history. The record of an admin's edit or deletion
+     * of an attendance ({@see AttendanceCorrection::recordAdminChange()}) is not: a worker whose only
+     * (mistaken) attendance an admin deleted still has no history.
+     *
+     * @param  class-string<Attendance|OvertimeRequest|LeaveRequest|AttendanceCorrection|Resignation>  $history
+     * @return Builder<Attendance|OvertimeRequest|LeaveRequest|AttendanceCorrection|Resignation>
+     */
+    private function historyQuery(string $history): Builder
+    {
+        $query = $history::query();
+
+        return $history === AttendanceCorrection::class ? $query->claims() : $query;
     }
 
     /**

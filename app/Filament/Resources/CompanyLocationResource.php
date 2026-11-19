@@ -210,11 +210,17 @@ class CompanyLocationResource extends Resource
     }
 
     /**
-     * Refuse deleting the last active location of a company that requires GPS.
+     * Refuse deleting the last active location of a company that requires GPS, and an outlet that
+     * schedules or attendance still name (it is switched off instead).
      */
     public static function guardLastGpsLocation(DeleteAction $action): DeleteAction
     {
         return $action->before(function (DeleteAction $action, CompanyLocation $record): void {
+            if (($reason = $record->deletionBlockedReason()) !== null) {
+                Notification::make()->danger()->title('Outlet tidak dapat dihapus')->body($reason)->send();
+                $action->cancel();
+            }
+
             if (static::removesLastGpsLocation(collect([$record]))) {
                 Notification::make()->danger()->title(CompanyPolicyService::GPS_WITHOUT_LOCATION_MESSAGE)->send();
                 $action->cancel();

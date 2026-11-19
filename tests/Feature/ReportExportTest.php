@@ -4,15 +4,23 @@ namespace Tests\Feature;
 
 use App\Exports\AttendanceReportExport;
 use App\Filament\Pages\LaporanAbsensi;
+use App\Filament\Resources\Attendances\Pages\ListAttendances;
 use App\Models\Attendance;
 use App\Models\Company;
+use App\Models\CompanyLocation;
 use App\Models\Division;
 use App\Models\Employee;
 use App\Models\JobLevel;
 use App\Models\JobTitle;
+use App\Models\LeaveRequest;
+use App\Models\OvertimeRequest;
+use App\Models\Shift;
+use App\Models\ShiftSchedule;
 use App\Models\User;
+use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Livewire\Livewire;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -120,6 +128,7 @@ class ReportExportTest extends TestCase
         $this->createAttendance($employeeA, '2026-11-02', '08:00', '16:30');
         $this->createAttendance($employeeA, '2026-11-03', '08:20', null, ['status' => 'late', 'late_minutes' => 20]);
         $this->createAttendance($employeeA, '2026-11-04', null, null, ['status' => 'leave']);
+        LeaveRequest::create(['employee_id' => $employeeA->id, 'leave_type' => 'annual', 'start_date' => '2026-11-04', 'end_date' => '2026-11-04', 'days_count' => 1, 'reason' => 'Keperluan keluarga', 'status' => 'approved']);
         $this->createAttendance($employeeB, '2026-11-03', '09:00', '17:00');
 
         $sheet = $this->exportToSpreadsheet('2026-11-01', '2026-11-04')->getSheetByName('Rekap');
@@ -132,8 +141,13 @@ class ReportExportTest extends TestCase
         $this->assertSame('Sen, 02 Nov 2026', $sheet->getCell('O1')->getValue());
         $this->assertSame('Rab, 04 Nov 2026', $sheet->getCell('U1')->getValue());
         $this->assertSame(['Masuk', 'Pulang', 'Jam'], $this->rowValues($sheet, 2, 'O', 'Q'));
-        $this->assertNull($sheet->getCell('X1')->getValue());
         $this->assertArrayHasKey('O1:Q1', $sheet->getMergeCells());
+
+        // The totals added later follow the dates, so every earlier column keeps its place.
+        $this->assertSame('Total Lainnya', $sheet->getCell('X1')->getValue());
+        $this->assertSame(['Cuti (hari)', 'Tidak Hadir (hari)', 'Libur (hari)', 'Lupa Absen Pulang (hari)', 'Jam Normal', 'Lembur Otomatis (jam)', 'Lembur Pengajuan (jam)'], $this->rowValues($sheet, 2, 'X', 'AD'));
+        $this->assertNull($sheet->getCell('AE1')->getValue());
+        $this->assertArrayHasKey('X1:AD1', $sheet->getMergeCells());
 
         // One row per worker, sorted by company.
         $this->assertSame(['Karyawan PT Alpha', 'NIPALPHA', 'Karyawan', 'PT Alpha', 'Divisi ALPHA'], $this->rowValues($sheet, 3, 'A', 'E'));
@@ -161,6 +175,119 @@ class ReportExportTest extends TestCase
         $this->assertSame([1, 0, 0], $this->rowValues($sheet, 4, 'F', 'H'));
         $this->assertEqualsWithDelta(8.0, $sheet->getCell('K4')->getValue(), 0.001);
         $this->assertSame(['09:00', '17:00'], $this->rowValues($sheet, 4, 'R', 'S'));
+
+        // One leave day and one forgotten check-out for the first worker, none for the second.
+        $this->assertSame([1, 0, 0, 1], $this->rowValues($sheet, 3, 'X', 'AA'));
+        $this->assertSame([0, 0, 0, 0], $this->rowValues($sheet, 4, 'X', 'AA'));
+    }
+
+    public function test_export_recap_sheet_lists_a_scheduled_worker_without_any_attendance(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-10 09:00'));
+        [$company, , $present] = $this->createCompanyWithEmployee('PT Alpha', 'ALPHA');
+        [, , $noShow] = $this->createCompanyWithEmployee('PT Beta', 'BETA');
+        Attendance::query()->delete();
+        Employee::query()->update(['join_date' => '2026-01-05']);
+
+        $shift = Shift::create(['company_id' => $company->id, 'name' => 'Pagi', 'start_time' => '08:00', 'end_time' => '17:00']);
+        ShiftSchedule::create(['employee_id' => $present->id, 'date' => '2026-11-02', 'shift_id' => $shift->id]);
+        $this->createAttendance($present, '2026-11-02', '08:00', '17:00');
+        // Scheduled on Monday and never came, a day off on Tuesday, nothing planned on Wednesday.
+        ShiftSchedule::create(['employee_id' => $noShow->id, 'date' => '2026-11-02', 'shift_id' => $shift->id]);
+        ShiftSchedule::create(['employee_id' => $noShow->id, 'date' => '2026-11-03', 'is_day_off' => true]);
+
+        $sheet = $this->exportToSpreadsheet('2026-11-02', '2026-11-04')->getSheetByName('Rekap');
+
+        $this->assertSame('Karyawan PT Beta', $sheet->getCell('A4')->getValue());
+        $this->assertSame([0, 0, 0], $this->rowValues($sheet, 4, 'F', 'H'));
+        $this->assertSame('Tidak Hadir', $sheet->getCell('L4')->getValue());
+        $this->assertSame('Libur', $sheet->getCell('O4')->getValue());
+        $this->assertNull($sheet->getCell('R4')->getValue());
+        // Cuti, Tidak Hadir, Libur after the three dates.
+        $this->assertSame([0, 1, 1], $this->rowValues($sheet, 4, 'U', 'W'));
+
+        // The detail list names the absent day too.
+        $detail = $this->exportToSpreadsheet('2026-11-02', '2026-11-04')->getSheetByName('Detail');
+        $absent = collect($detail->toArray(null, false, false))->first(fn (array $row): bool => $row[3] === 'Karyawan PT Beta');
+
+        $this->assertSame(['02/11/2026', '-', '-', '-'], array_slice($absent, 5, 4));
+        $this->assertSame('Tidak Hadir', $absent[13]);
+        $this->assertSame('Pagi', $absent[17]);
+    }
+
+    public function test_export_reports_a_long_shift_with_normal_hours_as_automatic_overtime(): void
+    {
+        [$company, , $employee] = $this->createCompanyWithEmployee('PT Alpha', 'ALPHA');
+        Attendance::query()->delete();
+
+        $long = Shift::create(['company_id' => $company->id, 'name' => 'Long Shift', 'start_time' => '08:45', 'end_time' => '22:30', 'normal_minutes' => 480]);
+        $schedule = ShiftSchedule::create(['employee_id' => $employee->id, 'date' => '2026-11-03', 'shift_id' => $long->id]);
+        // Checked in through the app: the row keeps the schedule and the normal hours that applied.
+        $this->createAttendance($employee, '2026-11-03', '08:40', '22:35', [
+            'shift_id' => $long->id, 'shift_schedule_id' => $schedule->id, 'sched_start_at' => '2026-11-03 08:45:00', 'sched_end_at' => '2026-11-03 22:30:00',
+            'sched_scheduled_minutes' => 825, 'sched_normal_minutes' => 480, 'sched_shift_name' => 'Long Shift', 'sched_source' => 'schedule',
+        ]);
+        OvertimeRequest::create(['employee_id' => $employee->id, 'date' => '2026-11-03', 'start_time' => '22:30', 'end_time' => '23:30', 'duration_minutes' => 60, 'reason' => 'Tutup kasir', 'status' => 'approved']);
+
+        $workbook = $this->exportToSpreadsheet('2026-11-03', '2026-11-03');
+        $recap = $workbook->getSheetByName('Rekap');
+
+        // Lembur (jam) is the automatic overtime plus the approved request; the parts are listed after the date.
+        $this->assertEqualsWithDelta(6.75, $recap->getCell('J3')->getValue(), 0.001);
+        $this->assertEqualsWithDelta(13.92, $recap->getCell('K3')->getValue(), 0.01);
+        $this->assertEqualsWithDelta(8.0, $recap->getCell('S3')->getValue(), 0.001);
+        $this->assertEqualsWithDelta(5.75, $recap->getCell('T3')->getValue(), 0.001);
+        $this->assertEqualsWithDelta(1.0, $recap->getCell('U3')->getValue(), 0.001);
+
+        $detail = $workbook->getSheetByName('Detail');
+
+        $this->assertSame(['Long Shift', '-', '08:45 - 22:30'], $this->rowValues($detail, 2, 'R', 'T'));
+        $this->assertEqualsWithDelta(5.75, $detail->getCell('U2')->getValue(), 0.001);
+    }
+
+    public function test_web_report_and_attendance_list_show_the_schedule_kept_on_the_row(): void
+    {
+        [$company, , $employee] = $this->createCompanyWithEmployee('PT Alpha', 'ALPHA');
+        Attendance::query()->delete();
+
+        $outlet = CompanyLocation::create(['company_id' => $company->id, 'name' => 'Luuca Ciledug', 'latitude' => -6.2, 'longitude' => 106.7]);
+        $long = Shift::create(['company_id' => $company->id, 'name' => 'Long Shift', 'start_time' => '08:45', 'end_time' => '22:30', 'normal_minutes' => 480]);
+        $schedule = ShiftSchedule::create(['employee_id' => $employee->id, 'date' => '2026-11-03', 'shift_id' => $long->id, 'company_location_id' => $outlet->id]);
+        $snapshot = $this->createAttendance($employee, '2026-11-03', '08:40', '22:35', [
+            'shift_id' => $long->id, 'shift_schedule_id' => $schedule->id, 'company_location_id' => $outlet->id,
+            'sched_start_at' => '2026-11-03 08:45:00', 'sched_end_at' => '2026-11-03 22:30:00', 'sched_scheduled_minutes' => 825, 'sched_normal_minutes' => 480,
+            'sched_shift_name' => 'Long Shift', 'sched_outlet_name' => 'Luuca Ciledug', 'sched_source' => 'schedule',
+        ]);
+        // The roster and the shift master change afterwards: the row keeps what applied.
+        $long->update(['name' => 'Long Shift Baru', 'normal_minutes' => 600]);
+        $outlet->update(['name' => 'Luuca Pindah']);
+        // A row from before the snapshot existed is read against the company hours.
+        $legacy = $this->createAttendance($employee, '2026-11-04', '08:00', null);
+
+        $superadminUser = User::factory()->create();
+        $superadminUser->assignRole('Superadmin');
+        $this->actingAs($superadminUser);
+
+        Livewire::test(LaporanAbsensi::class)
+            ->set('filterData.date_from', '2026-11-01')
+            ->set('filterData.date_to', '2026-11-07')
+            ->assertTableColumnStateSet('shift.name', 'Long Shift', $snapshot)
+            ->assertTableColumnStateSet('outlet', 'Luuca Ciledug', $snapshot)
+            ->assertTableColumnStateSet('jadwal', '08:45 - 22:30', $snapshot)
+            ->assertTableColumnStateSet('jam_kerja', '13j 55m', $snapshot)
+            ->assertTableColumnStateSet('lembur', '5j 45m', $snapshot)
+            ->assertTableColumnStateSet('jadwal', '08:00 - 17:00', $legacy)
+            ->assertTableColumnStateSet('jam_kerja', null, $legacy)
+            ->assertTableColumnStateSet('lembur', null, $legacy)
+            // The figures above the table come from the same ledger as the export.
+            ->assertSeeInOrder(['Hadir', '2 hari', 'Lupa Absen Pulang', '1 hari', 'Jam Kerja', '13,92 jam', 'Lembur', '5,75 jam']);
+
+        Filament::setCurrentPanel(Filament::getPanel('admin'));
+        Livewire::test(ListAttendances::class)
+            ->assertTableColumnStateSet('schedule_shift', 'Long Shift', $snapshot)
+            ->assertTableColumnStateSet('schedule_outlet', 'Luuca Ciledug', $snapshot)
+            ->assertTableColumnStateSet('schedule_hours', '08:45 - 22:30', $snapshot)
+            ->assertTableColumnStateSet('schedule_session', 'Jadwal 1', $snapshot);
     }
 
     public function test_export_recap_sheet_adds_up_the_segments_of_a_split_shift(): void
@@ -203,12 +330,18 @@ class ReportExportTest extends TestCase
         $this->assertSame(['Tanggal', 'Jam Check In', 'Jam Check Out', 'Jumlah Jam', 'Foto Check-In'], $this->rowValues($sheet, 1, 'F', 'J'));
         $this->assertSame('Menit Pulang Cepat', $sheet->getCell('P1')->getValue());
         $this->assertSame('Keterangan / Notes', $sheet->getCell('Q1')->getValue());
+        // Added after the existing columns: the schedule of the row and its automatic overtime.
+        $this->assertSame(['Shift', 'Outlet', 'Jadwal', 'Lembur Otomatis (jam)'], $this->rowValues($sheet, 1, 'R', 'U'));
+        $this->assertNull($sheet->getCell('V1')->getValue());
 
         // Newest first, as on the page.
         $this->assertSame(['03/11/2026', '08:20:00', '-', '-'], $this->rowValues($sheet, 2, 'F', 'I'));
         $this->assertSame(['02/11/2026', '08:00:00', '16:30:00'], $this->rowValues($sheet, 3, 'F', 'H'));
         $this->assertEqualsWithDelta(8.5, $sheet->getCell('I3')->getValue(), 0.001);
         $this->assertSame('Terlambat', $sheet->getCell('N2')->getValue());
+        $this->assertSame(20, $sheet->getCell('O2')->getValue());
+        // No shift on the row: it is read against the company hours.
+        $this->assertSame(['-', '-', '08:00 - 17:00'], $this->rowValues($sheet, 3, 'R', 'T'));
     }
 
     public function test_export_button_downloads_the_filtered_range(): void
@@ -232,8 +365,9 @@ class ReportExportTest extends TestCase
             [$recap] = $export->sheets();
             $rows = $recap->array();
 
-            // Seven days of three columns after the eleven worker and total columns, and only November's attendance.
-            return count($rows[0]) === 11 + 7 * 3
+            // Seven days of three columns after the eleven worker and total columns, then the seven totals
+            // added later, and only November's attendance.
+            return count($rows[0]) === 11 + 7 * 3 + 7
                 && $rows[0][11] === 'Min, 01 Nov 2026'
                 && $rows[2][0] === 'Karyawan PT Alpha'
                 && $rows[2][5] === 1;
@@ -268,10 +402,7 @@ class ReportExportTest extends TestCase
         $page->filterData = ['date_from' => $from, 'date_to' => $to];
 
         $path = tempnam(sys_get_temp_dir(), 'laporan').'.xlsx';
-        file_put_contents($path, Excel::raw(
-            new AttendanceReportExport($page->getReportDataProperty(), Carbon::parse($from), Carbon::parse($to)),
-            ExcelWriter::XLSX,
-        ));
+        file_put_contents($path, Excel::raw(new AttendanceReportExport($page->ledgerQuery()), ExcelWriter::XLSX));
 
         try {
             return IOFactory::load($path);

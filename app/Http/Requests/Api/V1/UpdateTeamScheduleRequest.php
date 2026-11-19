@@ -37,6 +37,11 @@ class UpdateTeamScheduleRequest extends FormRequest
             'shift_id' => ['required_if:mode,'.ShiftAssignmentService::MODE_SHIFT, 'nullable', 'integer'],
             'company_location_id' => ['nullable', 'integer'],
             'section' => ['nullable', 'string', 'max:50'],
+            // Why a past day is changed; optional so the released app keeps working, logged when given.
+            'reason' => ['nullable', 'string', 'max:255'],
+            // Newer apps: the exact schedule to change or clear, or a further schedule of the day.
+            'schedule_id' => ['nullable', 'integer', 'exists:shift_schedules,id'],
+            'add' => ['sometimes', 'boolean'],
         ];
     }
 
@@ -47,6 +52,7 @@ class UpdateTeamScheduleRequest extends FormRequest
     {
         return [
             'shift_id.required_if' => 'Pilih shift.',
+            'schedule_id.exists' => 'Jadwal ini sudah tidak ada. Muat ulang jadwalnya.',
         ];
     }
 }

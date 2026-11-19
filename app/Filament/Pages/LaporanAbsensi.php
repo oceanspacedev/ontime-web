@@ -3,15 +3,21 @@
 namespace App\Filament\Pages;
 
 use App\Enums\AttendanceStatus;
+use App\Exports\AttendanceReportData;
 use App\Exports\AttendanceReportExport;
 use App\Filament\Actions\TeamRecapAction;
+use App\Filament\Resources\Attendances\AttendanceResource;
 use App\Models\Attendance;
 use App\Models\Company;
 use App\Models\CompanyPolicy;
 use App\Models\Division;
+use App\Services\Attendance\LedgerQuery;
+use App\Services\AttendanceFigures;
+use App\Services\AttendanceLedger;
 use App\Services\DataAccessService;
 use App\Support\StorageUrl;
 use BackedEnum;
+use Carbon\CarbonImmutable;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -30,8 +36,9 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Illuminate\Contracts\Pagination\CursorPaginator;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -40,7 +47,9 @@ use UnitEnum;
 class LaporanAbsensi extends Page implements HasForms, HasTable
 {
     use InteractsWithForms;
-    use InteractsWithTable;
+    use InteractsWithTable {
+        getTableRecords as private filamentTableRecords;
+    }
 
     protected static ?string $title = 'Laporan Absensi';
 
@@ -143,9 +152,10 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
             'shift',
         ]);
 
-        // Scope Enforcement: same visibility rules as the request resources.
+        // The rows follow the summary and the export: workers in the user's data access, and whoever worked
+        // at an outlet in it (the scope of the attendance ledger and of the app's report).
         if ($user) {
-            $query->visibleTo($user);
+            DataAccessService::scopeWorkerOrOutletRecords($query, $user, Attendance::workerRelations());
         } else {
             $query->whereRaw('1 = 0');
         }
@@ -177,6 +187,89 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
         }
 
         return $query->orderBy('date', 'desc');
+    }
+
+    /**
+     * What the summary and the export ask the attendance ledger: the filtered dates, company and division
+     * for the signed-in user. Null without a user or a usable range. A range longer than a year is narrowed
+     * to the dates that have attendance, so a mistyped year does not read thousands of empty days.
+     */
+    public function ledgerQuery(): ?LedgerQuery
+    {
+        $user = auth()->user();
+        $data = $this->filterData ?? [];
+
+        if (! $user || blank($data['date_from'] ?? null) || blank($data['date_to'] ?? null)) {
+            return null;
+        }
+
+        try {
+            $from = CarbonImmutable::parse($data['date_from'])->startOfDay();
+            $to = CarbonImmutable::parse($data['date_to'])->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($from->diffInDays($to) > AttendanceReportData::MAX_RANGE_DAYS) {
+            $dates = $this->getReportQuery()->reorder()->toBase()->selectRaw('MIN(date) AS first_date, MAX(date) AS last_date')->first();
+
+            if (blank($dates?->first_date)) {
+                return null;
+            }
+
+            $from = $from->max(CarbonImmutable::parse(substr((string) $dates->first_date, 0, 10)));
+            $to = $to->min(CarbonImmutable::parse(substr((string) $dates->last_date, 0, 10)));
+        }
+
+        if ($from->greaterThan($to)) {
+            return null;
+        }
+
+        return (new LedgerQuery($from, $to, $user))->with(
+            companyId: filled($data['company_id'] ?? null) ? (int) $data['company_id'] : null,
+            divisionId: filled($data['division_id'] ?? null) ? (int) $data['division_id'] : null,
+        );
+    }
+
+    /**
+     * The figures above the table, from the attendance ledger: distinct worker-days and hours of the
+     * filtered range, the same numbers as the app's laporan absensi and the team recap.
+     *
+     * @return list<array{label: string, value: string}>
+     */
+    public function getSummaryProperty(): array
+    {
+        $query = $this->ledgerQuery();
+
+        if ($query === null || $query->from->diffInDays($query->to) > AttendanceReportData::MAX_RANGE_DAYS) {
+            return [];
+        }
+
+        $summary = app(AttendanceLedger::class)->summary($query);
+        $hours = fn (int $minutes): string => str_replace('.', ',', (string) round($minutes / 60, 2)).' jam';
+
+        return [
+            ['label' => 'Hadir', 'value' => $summary['present_days'].' hari'],
+            ['label' => 'Terlambat', 'value' => $summary['late_days'].' hari'],
+            ['label' => 'Cuti / Izin', 'value' => $summary['leave_days'].' hari'],
+            ['label' => 'Tidak Hadir', 'value' => $summary['absent_days'].' hari'],
+            ['label' => 'Menunggu Persetujuan', 'value' => $summary['pending_days'].' hari'],
+            ['label' => 'Lupa Absen Pulang', 'value' => $summary['missing_check_out_days'].' hari'],
+            ['label' => 'Jam Kerja', 'value' => $hours($summary['worked_minutes'])],
+            ['label' => 'Lembur', 'value' => $hours($summary['overtime_minutes'])],
+        ];
+    }
+
+    /**
+     * The rows of the page with what their schedule columns need read once, not per row.
+     */
+    public function getTableRecords(): Collection|Paginator|CursorPaginator
+    {
+        $records = $this->filamentTableRecords();
+
+        AttendanceFigures::preload($records);
+
+        return $records;
     }
 
     public function table(Table $table): Table
@@ -227,9 +320,27 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                     ->date('d M Y')
                     ->sortable(),
 
+                // Shift, outlet and hours as they applied at check-in (the schedule kept on the row).
                 TextColumn::make('shift.name')
                     ->label('Shift')
+                    ->state(fn (Attendance $record): ?string => AttendanceFigures::forAttendance($record)['shift']['name'] ?? null)
                     ->placeholder('Jam kerja BU')
+                    ->toggleable(),
+
+                TextColumn::make('outlet')
+                    ->label('Outlet')
+                    ->state(fn (Attendance $record): ?string => AttendanceFigures::forAttendance($record)['outlet']['name'] ?? null)
+                    ->placeholder('-')
+                    ->toggleable(),
+
+                TextColumn::make('jadwal')
+                    ->label('Jadwal')
+                    ->state(function (Attendance $record): ?string {
+                        $figures = AttendanceFigures::forAttendance($record);
+
+                        return $figures['scheduled_start'] !== null ? "{$figures['scheduled_start']} - {$figures['scheduled_end']}" : null;
+                    })
+                    ->placeholder('-')
                     ->toggleable(),
 
                 TextColumn::make('check_in')
@@ -243,6 +354,25 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                     ->dateTime('H:i:s')
                     ->suffix(' WIB')
                     ->placeholder('-'),
+
+                TextColumn::make('jam_kerja')
+                    ->label('Jam Kerja')
+                    ->state(fn (Attendance $record): ?string => $record->check_in && $record->check_out
+                        ? static::durationLabel(AttendanceFigures::forAttendance($record)['worked_minutes'])
+                        : null)
+                    ->placeholder('-')
+                    ->toggleable(),
+
+                TextColumn::make('lembur')
+                    ->label('Lembur')
+                    ->state(function (Attendance $record): ?string {
+                        $minutes = AttendanceFigures::forAttendance($record)['overtime_minutes'];
+
+                        return $minutes > 0 ? static::durationLabel($minutes) : null;
+                    })
+                    ->placeholder('-')
+                    ->tooltip('Lembur otomatis: jam kerja di dalam shift di atas jam normal shift.')
+                    ->toggleable(),
 
                 ImageColumn::make('check_in_photo')
                     ->label('Foto Check-In')
@@ -323,6 +453,8 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                     ->requiresConfirmation()
                     ->modalHeading('Hapus Data Absensi User')
                     ->modalDescription('Apakah Anda yakin ingin menghapus data absensi ini? Setelah dihapus, status absensi user pada tanggal ini akan di-reset.')
+                    // Recorded as an admin correction holding the deleted values.
+                    ->using(fn (Attendance $record): bool => AttendanceResource::deleteWithAudit($record))
                     ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
             ])
             ->bulkActions([
@@ -332,6 +464,7 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
                         ->requiresConfirmation()
                         ->modalHeading('Hapus Absensi User Terpilih')
                         ->modalDescription('Apakah Anda yakin ingin menghapus semua data absensi terpilih?')
+                        ->using(fn (Collection $records) => $records->each(fn (Attendance $record): bool => AttendanceResource::deleteWithAudit($record)))
                         ->visible(fn (): bool => (bool) auth()->user()?->hasAnyRole(['Superadmin', 'Admin'])),
                 ]),
             ]);
@@ -375,12 +508,20 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
         return $this->getReportQuery()->get();
     }
 
+    /**
+     * Download the report workbook. It is built from the attendance ledger for the filtered range, not
+     * from the rows of this page.
+     */
     public function exportExcel(): BinaryFileResponse
     {
-        $records = $this->getReportDataProperty();
-        $from = filled($this->filterData['date_from'] ?? null) ? Carbon::parse($this->filterData['date_from']) : null;
-        $to = filled($this->filterData['date_to'] ?? null) ? Carbon::parse($this->filterData['date_to']) : null;
+        return Excel::download(new AttendanceReportExport($this->ledgerQuery()), 'laporan-rekap-absensi.xlsx');
+    }
 
-        return Excel::download(new AttendanceReportExport($records, $from, $to), 'laporan-rekap-absensi.xlsx');
+    /**
+     * Minutes as "8j 30m".
+     */
+    public static function durationLabel(int $minutes): string
+    {
+        return intdiv($minutes, 60).'j '.str_pad((string) ($minutes % 60), 2, '0', STR_PAD_LEFT).'m';
     }
 }

@@ -26,6 +26,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Testing\TestResponse;
+use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -309,7 +310,7 @@ class Chaos_timeTest extends TestCase
         $this->assertSame(60, (int) $row->late_minutes);
     }
 
-    public function test_roster_changed_exactly_at_shift_start_rejudges_the_check_in(): void
+    public function test_roster_change_exactly_at_shift_start_is_refused_and_the_check_in_stands(): void
     {
         $andi = $this->employee('Andi');
         $schedule = ShiftSchedule::create(['employee_id' => $andi->id, 'date' => self::MONDAY, 'shift_id' => $this->morning->id, 'is_day_off' => false]);
@@ -318,13 +319,20 @@ class Chaos_timeTest extends TestCase
         $this->checkIn($andi->user)->assertOk();
         $this->assertSame(AttendanceStatus::OnTime, Attendance::query()->where('employee_id', $andi->id)->sole()->status);
 
+        // D4: the schedule the check-in is locked to cannot be moved to 07:30 afterwards.
         $early = $this->shift('Subuh', '07:30', '15:30');
-        $schedule->update(['shift_id' => $early->id]);
+
+        try {
+            $schedule->update(['shift_id' => $early->id]);
+            $this->fail('The schedule of a checked-in row must not change.');
+        } catch (ValidationException $exception) {
+            $this->assertSame([ShiftSchedule::LOCKED_MESSAGE], $exception->errors()['date']);
+        }
 
         $row = Attendance::query()->where('employee_id', $andi->id)->sole();
-        $this->assertSame($early->id, $row->shift_id);
-        $this->assertSame(30, (int) $row->late_minutes);
-        $this->assertSame(AttendanceStatus::Late, $row->status);
+        $this->assertSame($this->morning->id, $row->shift_id);
+        $this->assertSame(0, (int) $row->late_minutes);
+        $this->assertSame(AttendanceStatus::OnTime, $row->status);
     }
 
     public function test_backup_cover_of_a_night_shift_after_midnight_books_to_the_evening_and_frees_the_colleague(): void

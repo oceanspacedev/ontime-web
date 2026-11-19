@@ -39,6 +39,8 @@ class Probe_payroll_report_RPTB9Test extends TestCase
         $coordinator->grantDataAccess(DataScope::Divisions, divisionIds: [$brand->id]);
 
         $bayu = Freelancer::create(['company_id' => $company->id, 'division_id' => $brand->id, 'full_name' => 'Bayu', 'status' => 'active']);
+        // On the roster since October, so the November weekdays read the roster only.
+        ShiftSchedule::create(['freelancer_id' => $bayu->id, 'date' => '2026-10-26', 'is_day_off' => true]);
         ShiftSchedule::create(['freelancer_id' => $bayu->id, 'date' => '2026-11-05', 'shift_id' => $morning->id, 'company_location_id' => $outlet->id]);
         Attendance::create(['freelancer_id' => $bayu->id, 'date' => '2026-11-05', 'check_in' => '2026-11-05 08:00:00', 'check_out' => null, 'status' => 'on_time', 'late_minutes' => 0, 'company_location_id' => $outlet->id]);
 
@@ -47,15 +49,15 @@ class Probe_payroll_report_RPTB9Test extends TestCase
         $this->assertCount(1, $rows);
         $row = $rows[0];
 
-        // Observed behaviour: the day counts as present, with 0 worked hours.
+        // The day counts as present, with 0 worked hours.
         $this->assertSame(1, $row['scheduled_days']);
         $this->assertSame(1, $row['present_days']);
         $this->assertSame(0, $row['absent_days']);
         $this->assertEquals(9.0, $row['scheduled_hours']);
         $this->assertEquals(0.0, $row['worked_hours']);
 
-        // No field in the recap row marks a day as missing its check-out.
-        $flagKeys = array_filter(array_keys($row), fn (string $key): bool => (bool) preg_match('/check_?out|incomplete|missing/i', $key));
-        $this->assertSame([], array_values($flagKeys));
+        // Since the attendance ledger the recap says so: the day is flagged as missing its check-out (REP-04).
+        $this->assertSame(1, $row['missing_check_out_days']);
+        $this->assertSame(1, $row['incomplete_days']);
     }
 }

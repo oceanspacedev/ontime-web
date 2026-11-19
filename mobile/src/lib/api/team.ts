@@ -4,6 +4,7 @@ import type {
   NewFreelancerResponse,
   Paginated,
   ScheduleChange,
+  ScheduleSaveResponse,
   TeamFreelancer,
   TeamOptions,
   TeamRecap,
@@ -29,8 +30,20 @@ export function workers(search: string): Promise<{ data: TeamWorker[] }> {
   return request<{ data: TeamWorker[] }>('/team/workers', { query: { search: search || undefined } });
 }
 
-export function saveSchedule(change: ScheduleChange): Promise<{ message: string }> {
-  return request<{ message: string }>('/team/schedules', { method: 'PUT', json: change });
+/** Fields an older server does not know are only sent when set, so a plain change looks exactly as before. */
+export function saveSchedule(change: ScheduleChange): Promise<ScheduleSaveResponse> {
+  const { schedule_id, add, reason, ...base } = change;
+  const json: ScheduleChange = { ...base };
+  if (schedule_id !== undefined && schedule_id !== null) {
+    json.schedule_id = schedule_id;
+  }
+  if (add) {
+    json.add = true;
+  }
+  if (reason && reason.trim() !== '') {
+    json.reason = reason.trim();
+  }
+  return request<ScheduleSaveResponse>('/team/schedules', { method: 'PUT', json });
 }
 
 /** One page (30 people) of the coordinator's freelancers. */

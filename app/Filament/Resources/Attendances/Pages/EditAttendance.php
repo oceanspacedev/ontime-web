@@ -4,6 +4,8 @@ namespace App\Filament\Resources\Attendances\Pages;
 
 use App\Enums\AttendanceStatus;
 use App\Filament\Resources\Attendances\AttendanceResource;
+use App\Models\Attendance;
+use App\Models\AttendanceCorrection;
 use App\Services\AttendanceLatenessService;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
@@ -21,6 +23,14 @@ class EditAttendance extends EditRecord
     private bool $timesMoved = false;
 
     /**
+     * The audited values of the row before this save, when it changes times, status or lateness
+     * ({@see Attendance::auditValues()}); null when the save changes none of them.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $auditBefore = null;
+
+    /**
      * The columns a check-in, check-out, approval or another admin can change while this form is open.
      *
      * @var list<string>
@@ -28,6 +38,7 @@ class EditAttendance extends EditRecord
     private const WATCHED_COLUMNS = [
         'shift_id', 'check_in', 'check_out', 'status', 'late_minutes', 'early_leave_minutes',
         'notes', 'is_corrected', 'status_overridden',
+        ...Attendance::SNAPSHOT_COLUMNS,
     ];
 
     /**
@@ -41,7 +52,7 @@ class EditAttendance extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
-            DeleteAction::make(),
+            DeleteAction::make()->using(fn (Attendance $record): bool => AttendanceResource::deleteWithAudit($record)),
         ];
     }
 
@@ -108,25 +119,48 @@ class EditAttendance extends EditRecord
             }
         }
 
+        $verdictChanged = $this->verdictChanged($data);
+
         // Only the verdict was edited (for example a late arrival excused): it is the admin's call, which a
         // later roster change on that date must not overwrite.
-        if (! $this->timesMoved && $this->verdictChanged($data)) {
+        if (! $this->timesMoved && $verdictChanged) {
             $data['status_overridden'] = true;
         }
+
+        // Every change of times, status or lateness is recorded as an admin correction (with the values
+        // it replaced), in the same transaction as the save.
+        $this->auditBefore = $this->timesMoved || $verdictChanged ? $this->getRecord()->auditValues() : null;
 
         return $data;
     }
 
     /**
-     * Moved times are judged again like a roster change: shift, lateness and status (or the snapshot of a
-     * row waiting for approval) and early leave follow the new times instead of keeping the old verdict,
-     * even one an admin set by hand before.
+     * Moved times are judged again against the row's own schedule (its snapshot): lateness and status (or
+     * the verdict of a row waiting for approval) and early leave follow the new times instead of keeping the
+     * old verdict, even one an admin set by hand before. A row without a snapshot yet gets one.
      */
     protected function afterSave(): void
     {
         if ($this->timesMoved) {
             $this->timesMoved = false;
-            app(AttendanceLatenessService::class)->recalculate($this->getRecord(), force: true);
+            $lateness = app(AttendanceLatenessService::class);
+            $lateness->recalculate($this->getRecord(), force: true);
+            $lateness->writeMissingSnapshot($this->getRecord());
+        }
+
+        // A row whose check-in the admin cleared no longer keeps the schedule it was checked in to.
+        /** @var Attendance $edited */
+        $edited = $this->getRecord();
+
+        if ($edited->check_in === null && $edited->hasSnapshot()) {
+            $edited->forceFill(array_fill_keys(array_diff(Attendance::SNAPSHOT_COLUMNS, ['schedule_sequence']), null))->saveQuietly();
+        }
+
+        if ($this->auditBefore !== null) {
+            /** @var Attendance $record */
+            $record = $this->getRecord();
+            AttendanceCorrection::recordAdminChange($record->fresh() ?? $record, $this->auditBefore, auth()->user(), 'Diubah admin di halaman Data Absensi.');
+            $this->auditBefore = null;
         }
     }
 

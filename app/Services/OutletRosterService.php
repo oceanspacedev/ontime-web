@@ -16,7 +16,8 @@ use Illuminate\Support\Collection;
 
 /**
  * Who works where on a day: the schedules of the workers a manager oversees, grouped by outlet,
- * each with the attendance state of that day.
+ * each with the attendance state of that day. A worker with several schedules that day has one entry per
+ * schedule, each with only its own attendance; the counts stay per entry.
  */
 final class OutletRosterService
 {
@@ -65,6 +66,11 @@ final class OutletRosterService
      *         late_minutes: int,
      *         segments: list<array{start: string, end: string}>,
      *         attendances: list<array{segment: int, check_in: string|null, check_out: string|null, late_minutes: int}>,
+     *         outlet_name: string|null,
+     *         overtime_minutes: int,
+     *         locked: bool,
+     *         schedule_count: int,
+     *         is_missing_check_out: bool,
      *     }>,
      * }>
      */
@@ -76,15 +82,17 @@ final class OutletRosterService
             ->get()
             ->filter(fn (ShiftSchedule $schedule): bool => $schedule->getWorkerProfile() !== null);
 
-        $attendances = $this->attendancesFor($schedules, $date);
+        $rowCounts = self::rowCounts($schedules, $date);
+        $attendances = $this->attendancesFor($schedules, $date, $rowCounts);
+        AttendanceFigures::preload(collect($attendances)->flatten(1));
 
         return $schedules
             ->groupBy(fn (ShiftSchedule $schedule): string => (string) ($schedule->company_location_id ?? ''))
-            ->map(function (Collection $group) use ($attendances): array {
+            ->map(function (Collection $group) use ($attendances, $rowCounts): array {
                 /** @var CompanyLocation|null $location */
                 $location = $group->first()->location;
                 $entries = $group
-                    ->map(fn (ShiftSchedule $schedule): array => $this->entry($schedule, $attendances))
+                    ->map(fn (ShiftSchedule $schedule): array => $this->entry($schedule, $attendances, $rowCounts))
                     ->sortBy(fn (array $entry): string => ($entry['shift']['start_time'] ?? '99').'|'.$entry['worker']['name'])
                     ->values()
                     ->all();
@@ -134,10 +142,16 @@ final class OutletRosterService
     }
 
     /**
+     * The day's attendance rows of each listed schedule, keyed by schedule id: the rows linked to it, and for
+     * rows without a link (written before the link existed) the worker's rows when the worker has exactly
+     * one schedule row that date. A row linked to nothing and of a worker with several schedules that day
+     * belongs to no entry (the live view lists it under "Tanpa jadwal").
+     *
      * @param  Collection<int, ShiftSchedule>  $schedules
-     * @return array<string, Collection<int, Attendance>> The day's rows (one per segment), keyed "employee:ID".
+     * @param  array<string, int>  $rowCounts
+     * @return array<int, Collection<int, Attendance>>
      */
-    private function attendancesFor(Collection $schedules, CarbonInterface $date): array
+    private function attendancesFor(Collection $schedules, CarbonInterface $date, array $rowCounts): array
     {
         $attendances = [];
 
@@ -148,25 +162,69 @@ final class OutletRosterService
                 continue;
             }
 
-            Attendance::query()
+            $byWorker = Attendance::query()
                 ->whereIn("{$type}_id", $ids)
                 ->whereDate('date', $date->toDateString())
+                ->orderBy('schedule_sequence')
                 ->orderBy('segment')
                 ->get()
-                ->groupBy("{$type}_id")
-                ->each(function (Collection $rows, int|string $workerId) use ($type, &$attendances): void {
-                    $attendances["{$type}:{$workerId}"] = $rows->values();
-                });
+                ->groupBy("{$type}_id");
+
+            foreach ($schedules->filter(fn (ShiftSchedule $schedule): bool => $schedule->{"{$type}_id"} !== null) as $schedule) {
+                $workerId = (int) $schedule->{"{$type}_id"};
+                $rows = $byWorker->get($workerId) ?? collect();
+                $soleRow = ($rowCounts["{$type}:{$workerId}"] ?? 0) === 1;
+
+                $attendances[(int) $schedule->id] = $rows
+                    ->filter(fn (Attendance $row): bool => $row->shift_schedule_id !== null
+                        ? (int) $row->shift_schedule_id === (int) $schedule->id
+                        : $soleRow)
+                    ->values();
+            }
         }
 
         return $attendances;
     }
 
     /**
-     * @param  array<string, Collection<int, Attendance>>  $attendances
+     * How many schedule rows each worker of the list has on the date (all rows, also the ones the user does
+     * not see), keyed "type:id".
+     *
+     * @param  Collection<int, ShiftSchedule>  $schedules
+     * @return array<string, int>
+     */
+    public static function rowCounts(Collection $schedules, CarbonInterface $date): array
+    {
+        $counts = [];
+
+        foreach (['employee', 'intern', 'freelancer'] as $type) {
+            $ids = $schedules->pluck("{$type}_id")->filter()->unique()->values();
+
+            if ($ids->isEmpty()) {
+                continue;
+            }
+
+            ShiftSchedule::query()
+                ->whereIn("{$type}_id", $ids)
+                ->whereDate('date', $date->toDateString())
+                ->selectRaw("{$type}_id as worker_id, count(*) as total")
+                ->groupBy("{$type}_id")
+                ->toBase()
+                ->get()
+                ->each(function (object $row) use ($type, &$counts): void {
+                    $counts["{$type}:{$row->worker_id}"] = (int) $row->total;
+                });
+        }
+
+        return $counts;
+    }
+
+    /**
+     * @param  array<int, Collection<int, Attendance>>  $attendances
+     * @param  array<string, int>  $rowCounts
      * @return array<string, mixed>
      */
-    private function entry(ShiftSchedule $schedule, array $attendances): array
+    private function entry(ShiftSchedule $schedule, array $attendances, array $rowCounts): array
     {
         $worker = $schedule->getWorkerProfile();
         [$type, $number] = match (true) {
@@ -174,11 +232,13 @@ final class OutletRosterService
             $worker instanceof Intern => ['intern', $worker->nis],
             $worker instanceof Freelancer => ['freelancer', $worker->freelancer_number],
         };
-        $rows = $attendances["{$type}:{$worker->getKey()}"] ?? collect();
+        $rows = $attendances[(int) $schedule->id] ?? collect();
         $shift = $schedule->shift;
         // The segment in progress; a finished first segment of a split shift leaves the second still to come.
         $attendance = $rows->last();
-        $secondPending = $shift?->hasSecondSegment() && $attendance?->check_out !== null && $rows->count() < 2;
+        $secondPending = $shift?->hasSecondSegment() && $rows->count() === 1 && (int) ($attendance->segment ?: 1) === 1 && $attendance->check_out !== null;
+        $worked = $rows->reject(fn (Attendance $row): bool => $row->status === AttendanceStatus::Rejected);
+        $figures = $worked->map(fn (Attendance $row): array => AttendanceFigures::forAttendance($row));
 
         return [
             'schedule_id' => (int) $schedule->id,
@@ -199,7 +259,7 @@ final class OutletRosterService
             'state' => $this->state($schedule, $attendance, $secondPending),
             'check_in' => $rows->first()?->check_in?->format('H:i'),
             'check_out' => $attendance?->check_out?->format('H:i'),
-            'late_minutes' => (int) $rows->sum('late_minutes'),
+            'late_minutes' => (int) $worked->sum(fn (Attendance $row): int => $row->reportedLateMinutes()),
             'segments' => $shift?->segments() ?? [],
             'attendances' => $rows->map(fn (Attendance $row): array => [
                 'segment' => (int) $row->segment,
@@ -207,6 +267,11 @@ final class OutletRosterService
                 'check_out' => $row->check_out?->format('H:i'),
                 'late_minutes' => (int) $row->late_minutes,
             ])->all(),
+            'outlet_name' => $schedule->location?->name,
+            'overtime_minutes' => (int) $figures->sum('overtime_minutes'),
+            'locked' => $rows->contains(fn (Attendance $row): bool => (int) $row->shift_schedule_id === (int) $schedule->id && $row->check_in !== null && $row->status !== AttendanceStatus::Rejected),
+            'schedule_count' => $rowCounts["{$type}:{$worker->getKey()}"] ?? 1,
+            'is_missing_check_out' => $figures->contains(fn (array $row): bool => $row['is_missing_check_out']),
         ];
     }
 
@@ -217,8 +282,8 @@ final class OutletRosterService
             $secondPending => $this->hasStarted($schedule, 2) ? self::STATE_MISSING : self::STATE_UPCOMING,
             $attendance?->check_in === null => $this->hasStarted($schedule) ? self::STATE_MISSING : self::STATE_UPCOMING,
             $attendance->status === AttendanceStatus::Rejected => self::STATE_REJECTED,
-            $attendance->check_out !== null => self::STATE_DONE,
             $attendance->status === AttendanceStatus::PendingApproval => self::STATE_WAITING,
+            $attendance->check_out !== null => self::STATE_DONE,
             $attendance->status === AttendanceStatus::Late => self::STATE_LATE,
             default => self::STATE_PRESENT,
         };

@@ -107,7 +107,8 @@ class GeofenceService
 
     /**
      * Validate user GPS against all active branch/office locations of a Company, or only against
-     * the outlet the worker is scheduled at when one is given.
+     * the outlet the worker is scheduled at when one is given. matched_location_id names the outlet
+     * whose geofence the position is in (null outside every geofence, or at the head office).
      */
     public static function validateCompanyGeofence(Company $company, float $userLat, float $userLng, ?CompanyLocation $outlet = null): array
     {
@@ -123,6 +124,7 @@ class GeofenceService
         // 1. Sertakan Kantor Utama (HQ) jika koordinatnya diisi, kecuali absen dibatasi ke outlet jadwal
         if (! $outlet && $company->latitude && $company->longitude) {
             $validLocations[] = [
+                'id' => null,
                 'name' => $company->name.' (Kantor Utama)',
                 'lat' => (float) $company->latitude,
                 'lng' => (float) $company->longitude,
@@ -134,6 +136,7 @@ class GeofenceService
         if ($locations->isNotEmpty()) {
             foreach ($locations as $loc) {
                 $validLocations[] = [
+                    'id' => $loc->getKey() !== null ? (int) $loc->getKey() : null,
                     'name' => $loc->name,
                     'lat' => (float) $loc->latitude,
                     'lng' => (float) $loc->longitude,
@@ -148,6 +151,7 @@ class GeofenceService
 
             return [
                 'is_valid' => ! $gpsRequired,
+                'matched_location_id' => null,
                 'matched_location_name' => null,
                 'nearest_location_name' => null,
                 'nearest_distance' => 0,
@@ -168,6 +172,8 @@ class GeofenceService
             if ($distance <= $loc['radius']) {
                 return [
                     'is_valid' => true,
+                    // The outlet whose geofence matched (null for the head office, which is no outlet).
+                    'matched_location_id' => $loc['id'],
                     'matched_location_name' => $loc['name'],
                     'nearest_location_name' => $loc['name'],
                     'nearest_distance' => $distance,
@@ -189,6 +195,7 @@ class GeofenceService
 
         return [
             'is_valid' => false,
+            'matched_location_id' => null,
             'matched_location_name' => null,
             'nearest_location_name' => $nearestLocationName,
             'nearest_distance' => $nearestDistance,
