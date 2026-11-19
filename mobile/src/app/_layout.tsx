@@ -134,7 +134,7 @@ function RootLayout() {
               <Stack.Screen name="team/assign" options={{ title: 'Jadwalkan Pekerja' }} />
               <Stack.Screen name="team/freelancer/new" options={{ title: 'Tambah Freelancer' }} />
               <Stack.Screen name="settings/appearance" options={{ title: 'Tampilan' }} />
-              <Stack.Screen name="client/index" options={{ title: 'Kelola Klien' }} />
+              <Stack.Screen name="client/index" options={{ title: 'PIC' }} />
               <Stack.Screen name="client/company/new" options={{ title: 'Tambah Badan Usaha' }} />
               <Stack.Screen name="client/company/[id]" options={{ title: 'Badan Usaha' }} />
               <Stack.Screen name="client/company/[id]/edit" options={{ title: 'Ubah Data Badan Usaha' }} />
