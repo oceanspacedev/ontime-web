@@ -60,7 +60,7 @@ class PanduanPageTest extends TestCase
         $page = Livewire::test(Panduan::class);
         $guides = $page->instance()->guides();
 
-        $this->assertCount(21, $guides);
+        $this->assertCount(29, $guides);
         $this->assertSame(array_unique(array_column($guides, 'id')), array_column($guides, 'id'));
         $this->assertSame(
             ['Mulai di sini', 'Panel web · PIC', 'Panel web · Koordinator', 'Aplikasi HP'],
