@@ -82,3 +82,7 @@
         @endif
     </div>
 @endif
+
+<p class="mt-6 text-center text-xs text-gray-500 dark:text-gray-400">
+    <a href="{{ route('privacy-policy') }}" target="_blank" class="hover:underline">Kebijakan Privasi</a>
+</p>
