@@ -1,0 +1,41 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "copyright": "2026 Ocean Space",
+    "categories": [
+      "BUSINESS",
+      "PRODUCTIVITY"
+    ],
+    "info": {
+      "id": {
+        "title": "OnTime by Ocean Space",
+        "subtitle": "Absensi, Shift & Cuti Karyawan",
+        "promoText": "Absen masuk dan pulang, cek jadwal shift, ajukan cuti atau lembur, dan setujui pengajuan tim langsung dari HP. Untuk karyawan perusahaan yang memakai OnTime.",
+        "description": "OnTime membantu karyawan dan tim di perusahaan Anda mencatat kehadiran, melihat jadwal shift, dan mengurus pengajuan langsung dari iPhone. Cocok untuk perusahaan dengan banyak outlet atau cabang, seperti bisnis F&B dan waralaba.\n\nCara absen mengikuti kebijakan perusahaan Anda: cukup sekali tekan, wajib berada di area outlet, sampai selfie dengan verifikasi wajah.\n\nKARYAWAN, MAGANG, DAN FREELANCE\n• Absen masuk dan pulang dari Beranda, lengkap dengan shift dan outlet hari ini\n• Riwayat absensi beserta jam masuk, jam pulang, dan statusnya\n• Ajukan cuti, izin, atau sakit, dengan lampiran bila diperlukan\n• Ajukan lembur; durasinya dihitung otomatis\n• Koreksi absensi bila jam masuk atau pulang salah atau terlewat\n• Tukar shift dengan rekan, atau serahkan shift ke rekan yang libur\n• Lihat sisa cuti tahunan dan Kalender Cuti tim\n• Ajukan pengunduran diri dan pantau statusnya\n• Notifikasi pengingat absen dan kabar keputusan pengajuan\n\nKOORDINATOR\n• Pantau siapa yang sudah masuk, terlambat, atau belum absen di tiap outlet\n• Lihat jadwal mingguan dan rekap kehadiran bulanan tim\n• Jadwalkan pekerja dan salin jadwal minggu lalu dari HP\n• Tambah freelancer baru dan kirim info akunnya lewat WhatsApp\n• Setujui atau tolak cuti, lembur, koreksi absensi, dan tukar shift\n\nPIC / HR\n• Pantau kehadiran tim di semua outlet\n• Atur badan usaha, kebijakan absensi, serta lokasi outlet dan radiusnya\n• Buat akun dan atur peran serta cakupan data tiap pengguna\n\nABSEN YANG JUJUR DAN AMAN\n• Geofence GPS: absen hanya diterima di dalam radius outlet\n• Deteksi lokasi palsu\n• Selfie dengan cek liveness dan pencocokan wajah terhadap foto profil\n• Presensi yang tidak memenuhi syarat bisa diteruskan ke atasan untuk diputuskan\n• Lokasi hanya dibaca saat Anda membuka layar absen, tidak di latar belakang\n• Data dikirim melalui koneksi terenkripsi\n\nOnTime untuk karyawan perusahaan yang memakai OnTime; akun dibuat oleh perusahaan Anda. Tidak ada pendaftaran mandiri, iklan, atau pembelian di dalam aplikasi. Belum punya akun atau lupa kata sandi? Hubungi PIC atau HR di perusahaan Anda.",
+        "keywords": [
+          "absensi",
+          "presensi",
+          "absen",
+          "kehadiran",
+          "selfie",
+          "gps",
+          "jadwal",
+          "izin",
+          "lembur",
+          "karyawan",
+          "hr",
+          "outlet",
+          "magang",
+          "freelance"
+        ],
+        "supportUrl": "https://ontime.oceanspace.co.id/kebijakan-privasi",
+        "privacyPolicyUrl": "https://ontime.oceanspace.co.id/kebijakan-privasi"
+      }
+    },
+    "release": {
+      "automaticRelease": false,
+      "phasedRelease": false
+    },
+    "version": "1.0"
+  }
+}

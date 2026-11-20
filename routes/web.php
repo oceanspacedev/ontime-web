@@ -13,6 +13,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::redirect('/', '/admin');
 
+// Public privacy policy: the URL given in the Google Play and App Store listings.
+Route::view('kebijakan-privasi', 'privacy-policy')->name('privacy-policy');
+
 // Passwordless login, the same pages as gais-web, dnd-web and helpdesk-web.
 Route::get('phone-login', PhoneLogin::class)
     ->middleware([
