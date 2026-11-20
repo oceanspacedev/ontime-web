@@ -75,6 +75,7 @@
       ],
       "expo-document-picker",
       "expo-font",
+      "./plugins/withOptionalHardwareFeatures",
       [
         "@sentry/react-native/expo",
         {
