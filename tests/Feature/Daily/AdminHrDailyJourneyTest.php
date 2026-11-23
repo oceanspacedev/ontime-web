@@ -7,6 +7,7 @@ use App\Filament\Pages\ApprovalSaya;
 use App\Filament\Pages\LaporanAbsensi;
 use App\Filament\Resources\Attendances\AttendanceResource;
 use App\Filament\Resources\Attendances\Pages\EditAttendance;
+use App\Filament\Resources\Attendances\Pages\ListAttendances;
 use App\Filament\Resources\CompanyResource;
 use App\Filament\Resources\DivisionResource;
 use App\Filament\Resources\EmployeeResource;
@@ -725,7 +726,7 @@ class AdminHrDailyJourneyTest extends TestCase
         $this->assertNotContains('Dodi Driver Logistik', $recapNames);
 
         $this->actingAs($this->hrAdmin);
-        Livewire::test(LaporanAbsensi::class)
+        Livewire::test(ListAttendances::class)
             ->callAction('teamRecap', data: ['month' => today()->format('Y-m')])
             ->assertHasNoActionErrors()
             ->assertFileDownloaded();

@@ -34,7 +34,7 @@ use Tests\TestCase;
 
 /**
  * One seeded month read through every report: the team recap total, the total row of its Excel file, the
- * laporan absensi summary, the attendance list, the web report (its figures, its rows and the workbook it
+ * laporan absensi summary, the attendance list, the web report (its rows and the workbook it
  * downloads) and the dashboard widgets must give the same figures, for an admin, for the
  * coordinator of the outlet a worker was lent to (host) and for the coordinator of that worker's own
  * brand (home).
@@ -138,24 +138,10 @@ class ReportsReconcileTest extends TestCase
         $this->assertEquals($total['worked_hours'], round(array_sum(array_column($recap['data'], 'worked_hours')), 2));
         $this->assertSame($total['overtime_count'], array_sum(array_column($recap['data'], 'overtime_count')));
 
-        // 5. The web report of the same month: the figures above its table, and the workbook it downloads
-        //    (the worker rows of the recap sheet add up to the totals, the detail rows to the hours).
+        // 5. The web report of the same month: the workbook it downloads (the worker rows of the
+        //    recap sheet add up to the totals, the detail rows to the hours).
         $page = new LaporanAbsensi;
         $page->filterData = ['date_from' => '2026-11-01', 'date_to' => '2026-11-30'];
-
-        $this->assertSame(
-            [
-                'Hadir' => $total['present_days'].' hari',
-                'Terlambat' => $total['late_days'].' hari',
-                'Cuti / Izin' => $total['leave_days'].' hari',
-                'Tidak Hadir' => $total['absent_days'].' hari',
-                'Menunggu Persetujuan' => $total['pending_days'].' hari',
-                'Lupa Absen Pulang' => $total['missing_check_out_days'].' hari',
-                'Jam Kerja' => str_replace('.', ',', (string) $total['worked_hours']).' jam',
-                'Lembur' => str_replace('.', ',', (string) $total['overtime_hours']).' jam',
-            ],
-            array_column($page->getSummaryProperty(), 'value', 'label'),
-        );
 
         [$recapSheet, $detailSheet] = (new AttendanceReportExport($page->ledgerQuery()))->sheets();
         $grid = $recapSheet->array();

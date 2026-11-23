@@ -181,38 +181,42 @@ class ReportExportTest extends TestCase
         $this->assertSame([0, 0, 0, 0], $this->rowValues($sheet, 4, 'X', 'AA'));
     }
 
-    public function test_export_recap_sheet_lists_a_scheduled_worker_without_any_attendance(): void
+    public function test_export_leaves_out_a_worker_without_any_attendance_or_leave_in_the_range(): void
     {
         $this->travelTo(Carbon::parse('2026-11-10 09:00'));
         [$company, , $present] = $this->createCompanyWithEmployee('PT Alpha', 'ALPHA');
         [, , $noShow] = $this->createCompanyWithEmployee('PT Beta', 'BETA');
+        [, , $onLeave] = $this->createCompanyWithEmployee('PT Gamma', 'GAMMA');
         Attendance::query()->delete();
         Employee::query()->update(['join_date' => '2026-01-05']);
 
         $shift = Shift::create(['company_id' => $company->id, 'name' => 'Pagi', 'start_time' => '08:00', 'end_time' => '17:00']);
         ShiftSchedule::create(['employee_id' => $present->id, 'date' => '2026-11-02', 'shift_id' => $shift->id]);
+        ShiftSchedule::create(['employee_id' => $present->id, 'date' => '2026-11-03', 'shift_id' => $shift->id]);
         $this->createAttendance($present, '2026-11-02', '08:00', '17:00');
         // Scheduled on Monday and never came, a day off on Tuesday, nothing planned on Wednesday.
         ShiftSchedule::create(['employee_id' => $noShow->id, 'date' => '2026-11-02', 'shift_id' => $shift->id]);
         ShiftSchedule::create(['employee_id' => $noShow->id, 'date' => '2026-11-03', 'is_day_off' => true]);
+        // On approved leave on Monday, without any check-in.
+        ShiftSchedule::create(['employee_id' => $onLeave->id, 'date' => '2026-11-02', 'shift_id' => $shift->id]);
+        LeaveRequest::create(['employee_id' => $onLeave->id, 'leave_type' => 'annual', 'start_date' => '2026-11-02', 'end_date' => '2026-11-02', 'days_count' => 1, 'reason' => 'Keperluan keluarga', 'status' => 'approved']);
 
-        $sheet = $this->exportToSpreadsheet('2026-11-02', '2026-11-04')->getSheetByName('Rekap');
+        $workbook = $this->exportToSpreadsheet('2026-11-02', '2026-11-04');
+        $recap = $workbook->getSheetByName('Rekap');
 
-        $this->assertSame('Karyawan PT Beta', $sheet->getCell('A4')->getValue());
-        $this->assertSame([0, 0, 0], $this->rowValues($sheet, 4, 'F', 'H'));
-        $this->assertSame('Tidak Hadir', $sheet->getCell('L4')->getValue());
-        $this->assertSame('Libur', $sheet->getCell('O4')->getValue());
-        $this->assertNull($sheet->getCell('R4')->getValue());
-        // Cuti, Tidak Hadir, Libur after the three dates.
-        $this->assertSame([0, 1, 1], $this->rowValues($sheet, 4, 'U', 'W'));
+        // The no-show is left out; the worker on leave stays, their leave counted.
+        $this->assertSame('Karyawan PT Alpha', $recap->getCell('A3')->getValue());
+        $this->assertSame('Karyawan PT Gamma', $recap->getCell('A4')->getValue());
+        $this->assertNull($recap->getCell('A5')->getValue());
+        $this->assertSame('Cuti', $recap->getCell('L4')->getValue());
+        $this->assertSame([1, 0, 0], $this->rowValues($recap, 4, 'U', 'W'));
 
-        // The detail list names the absent day too.
-        $detail = $this->exportToSpreadsheet('2026-11-02', '2026-11-04')->getSheetByName('Detail');
-        $absent = collect($detail->toArray(null, false, false))->first(fn (array $row): bool => $row[3] === 'Karyawan PT Beta');
-
-        $this->assertSame(['02/11/2026', '-', '-', '-'], array_slice($absent, 5, 4));
-        $this->assertSame('Tidak Hadir', $absent[13]);
-        $this->assertSame('Pagi', $absent[17]);
+        // A reported worker keeps their absent day; the no-show has no detail row either.
+        $this->assertSame('Tidak Hadir', $recap->getCell('O3')->getValue());
+        $names = array_column($workbook->getSheetByName('Detail')->toArray(null, false, false), 3);
+        $this->assertContains('Karyawan PT Alpha', $names);
+        $this->assertContains('Karyawan PT Gamma', $names);
+        $this->assertNotContains('Karyawan PT Beta', $names);
     }
 
     public function test_export_reports_a_long_shift_with_normal_hours_as_automatic_overtime(): void

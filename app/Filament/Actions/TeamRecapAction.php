@@ -21,11 +21,11 @@ class TeamRecapAction extends Action
     {
         parent::setUp();
 
-        $this->label('Rekap Bulanan')
+        $this->label('Export ke Excel')
             ->icon('heroicon-o-arrow-down-tray')
             ->color('gray')
             ->visible(fn (): bool => (bool) auth()->user()?->canManageWorkers())
-            ->modalHeading('Rekap Bulanan Tim')
+            ->modalHeading('Export ke Excel')
             ->modalDescription('Per orang per outlet: hari terjadwal, masuk, tidak hadir, libur, cuti, terlambat, lupa absen pulang, sesi terlewat, serta jam terjadwal, jam normal, jam kerja, dan lembur (otomatis dan pengajuan).')
             ->modalSubmitActionLabel('Unduh Excel')
             ->modalWidth('md')

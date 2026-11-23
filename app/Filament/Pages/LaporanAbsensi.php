@@ -5,7 +5,6 @@ namespace App\Filament\Pages;
 use App\Enums\AttendanceStatus;
 use App\Exports\AttendanceReportData;
 use App\Exports\AttendanceReportExport;
-use App\Filament\Actions\TeamRecapAction;
 use App\Filament\Resources\Attendances\AttendanceResource;
 use App\Models\Attendance;
 use App\Models\Company;
@@ -13,7 +12,6 @@ use App\Models\CompanyPolicy;
 use App\Models\Division;
 use App\Services\Attendance\LedgerQuery;
 use App\Services\AttendanceFigures;
-use App\Services\AttendanceLedger;
 use App\Services\DataAccessService;
 use App\Support\StorageUrl;
 use BackedEnum;
@@ -69,13 +67,6 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
     protected string $view = 'filament.pages.laporan-absensi';
 
     public ?array $filterData = [];
-
-    protected function getHeaderActions(): array
-    {
-        return [
-            TeamRecapAction::make(),
-        ];
-    }
 
     public function mount(): void
     {
@@ -229,35 +220,6 @@ class LaporanAbsensi extends Page implements HasForms, HasTable
             companyId: filled($data['company_id'] ?? null) ? (int) $data['company_id'] : null,
             divisionId: filled($data['division_id'] ?? null) ? (int) $data['division_id'] : null,
         );
-    }
-
-    /**
-     * The figures above the table, from the attendance ledger: distinct worker-days and hours of the
-     * filtered range, the same numbers as the app's laporan absensi and the team recap.
-     *
-     * @return list<array{label: string, value: string}>
-     */
-    public function getSummaryProperty(): array
-    {
-        $query = $this->ledgerQuery();
-
-        if ($query === null || $query->from->diffInDays($query->to) > AttendanceReportData::MAX_RANGE_DAYS) {
-            return [];
-        }
-
-        $summary = app(AttendanceLedger::class)->summary($query);
-        $hours = fn (int $minutes): string => str_replace('.', ',', (string) round($minutes / 60, 2)).' jam';
-
-        return [
-            ['label' => 'Hadir', 'value' => $summary['present_days'].' hari'],
-            ['label' => 'Terlambat', 'value' => $summary['late_days'].' hari'],
-            ['label' => 'Cuti / Izin', 'value' => $summary['leave_days'].' hari'],
-            ['label' => 'Tidak Hadir', 'value' => $summary['absent_days'].' hari'],
-            ['label' => 'Menunggu Persetujuan', 'value' => $summary['pending_days'].' hari'],
-            ['label' => 'Lupa Absen Pulang', 'value' => $summary['missing_check_out_days'].' hari'],
-            ['label' => 'Jam Kerja', 'value' => $hours($summary['worked_minutes'])],
-            ['label' => 'Lembur', 'value' => $hours($summary['overtime_minutes'])],
-        ];
     }
 
     /**
