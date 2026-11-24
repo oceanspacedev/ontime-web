@@ -269,7 +269,7 @@ class Panduan extends Page
                     ['Buka Presensi & Pengajuan → Data Absensi', 0],
                     ['Jam masuk, jam pulang, shift, dan outlet tiap pekerja', 3.4],
                     ['Cari nama pekerja', 6.3],
-                    ['Rekap Bulanan: unduh rekap tim per bulan ke Excel', 12.4],
+                    ['Export ke Excel: unduh rekap tim per bulan', 12.4],
                     ['Klik Unduh Excel', 16.3],
                 ],
                 action: $this->resourceAction(AttendanceResource::class),

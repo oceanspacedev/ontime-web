@@ -59,7 +59,7 @@ return [
         'deep_link' => env('MOBILE_APP_DEEP_LINK', 'ontime://'),
         // Store pages sent with a new account's login details. A link left empty is not sent.
         'play_store_url' => env('MOBILE_APP_PLAY_STORE_URL', 'https://play.google.com/store/apps/details?id=co.id.oceanspace.ontime'),
-        'app_store_url' => env('MOBILE_APP_APP_STORE_URL'),
+        'app_store_url' => env('MOBILE_APP_APP_STORE_URL', 'https://apps.apple.com/id/app/ontime-by-ocean-space/id6837040264'),
     ],
 
     // OneSignal push for the mobile app. The App ID is public (also in mobile/app.json); the REST API

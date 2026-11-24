@@ -70,7 +70,10 @@ trait OpensWorkerAccounts
         $status = match (true) {
             $whatsapp['api_sent'] => 'Data masuk dan link aplikasi sudah dikirim ke WhatsApp.',
             filled($whatsapp['wa_url']) => 'WhatsApp belum terkirim otomatis. Kirim lewat tombol di bawah.',
-            default => 'Nomor HP kosong. Berikan data ini beserta link aplikasi: '.e((string) config('services.mobile_app.play_store_url')),
+            default => 'Nomor HP kosong. Berikan data ini beserta link aplikasi:<br>'.collect([
+                'Android' => config('services.mobile_app.play_store_url'),
+                'iPhone' => config('services.mobile_app.app_store_url'),
+            ])->filter()->map(fn (string $url, string $platform): string => e("{$platform}: {$url}"))->implode('<br>'),
         };
 
         $notification = Notification::make()
