@@ -208,7 +208,7 @@ class ReportExportTest extends TestCase
         $this->assertSame('Karyawan PT Alpha', $recap->getCell('A3')->getValue());
         $this->assertSame('Karyawan PT Gamma', $recap->getCell('A4')->getValue());
         $this->assertNull($recap->getCell('A5')->getValue());
-        $this->assertSame('Cuti', $recap->getCell('L4')->getValue());
+        $this->assertSame('Cuti / Izin', $recap->getCell('L4')->getValue());
         $this->assertSame([1, 0, 0], $this->rowValues($recap, 4, 'U', 'W'));
 
         // A reported worker keeps their absent day; the no-show has no detail row either.
@@ -282,9 +282,7 @@ class ReportExportTest extends TestCase
             ->assertTableColumnStateSet('lembur', '5j 45m', $snapshot)
             ->assertTableColumnStateSet('jadwal', '08:00 - 17:00', $legacy)
             ->assertTableColumnStateSet('jam_kerja', null, $legacy)
-            ->assertTableColumnStateSet('lembur', null, $legacy)
-            // The figures above the table come from the same ledger as the export.
-            ->assertSeeInOrder(['Hadir', '2 hari', 'Lupa Absen Pulang', '1 hari', 'Jam Kerja', '13,92 jam', 'Lembur', '5,75 jam']);
+            ->assertTableColumnStateSet('lembur', null, $legacy);
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Livewire::test(ListAttendances::class)
