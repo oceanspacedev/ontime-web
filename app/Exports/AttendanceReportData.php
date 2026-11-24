@@ -16,7 +16,8 @@ use Illuminate\Support\Facades\DB;
  * the recap grid, and one row per attendance (or per absent or leave day) for the detail list.
  *
  * Nothing is computed here: presence, lateness, hours and overtime are the ledger's figures, the ones the
- * team recap and laporan absensi give.
+ * team recap and laporan absensi give. Only workers with an attendance or a leave day in the range are
+ * reported: one who was only absent, off or unscheduled has nothing to pay or check.
  */
 final class AttendanceReportData
 {
@@ -106,7 +107,7 @@ final class AttendanceReportData
     }
 
     /**
-     * One entry per worker with a planned or recorded day, sorted by company, division and name.
+     * One entry per worker with an attendance or a leave day in the range, sorted by company, division and name.
      *
      * @return list<array{
      *     name: string,
@@ -138,7 +139,7 @@ final class AttendanceReportData
     }
 
     /**
-     * One row per attendance, and one per absent or leave day, newest first.
+     * One row per attendance, and one per absent or leave day, of the reported workers, newest first.
      *
      * @return list<array<string, mixed>>
      */
@@ -165,6 +166,7 @@ final class AttendanceReportData
 
         $workers = [];
         $details = [];
+        $reported = [];
         $firstDate = null;
         $lastDate = null;
 
@@ -184,6 +186,10 @@ final class AttendanceReportData
                 $workers[$key][$total] += $day['totals'][$total];
             }
 
+            if ($day['status'] === 'leave' || array_filter($day['lines'], fn (array $line): bool => $line['attendance_id'] !== null) !== []) {
+                $reported[$key] = true;
+            }
+
             if ($cell = $this->cell($day)) {
                 $workers[$key]['days'][$day['date']] = $cell;
             }
@@ -191,10 +197,12 @@ final class AttendanceReportData
             $firstDate = min($firstDate ?? $day['date'], $day['date']);
             $lastDate = max($lastDate ?? $day['date'], $day['date']);
 
-            array_push($details, ...$this->detailRows($day, $identity));
+            $details[$key] ??= [];
+            array_push($details[$key], ...$this->detailRows($day, $identity));
         }
 
-        $workers = array_values($workers);
+        $workers = array_values(array_intersect_key($workers, $reported));
+        $details = array_merge([], ...array_values(array_intersect_key($details, $reported)));
         usort($workers, fn (array $a, array $b): int => [$a['company'], $a['division'], $a['name']] <=> [$b['company'], $b['division'], $b['name']]);
         usort($details, fn (array $a, array $b): int => [$b['date'], $a['name'], $a['check_in']] <=> [$a['date'], $b['name'], $b['check_in']]);
 
